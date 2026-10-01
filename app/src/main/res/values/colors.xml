@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#000000</color>
+    <color name="toolbar">#15171A</color>
+    <color name="accent">#52D273</color>
+    <color name="icon_background">#101214</color>
+</resources>
