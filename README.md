@@ -58,6 +58,8 @@
 
 - `docs/DEVELOPMENT.md`：架构、核心实现、状态模型、异常恢复与安全约束
 - `docs/RELEASE_GUIDE.md`：版本升级、构建、签名、验证和发布流程
+- `docs/REMOTE_ACCESS_PLAN.md`：iPhone/网页远程连接架构与安全方案
+- `docs/POWER_MONITORING_PLAN.md`：耗电、温度采样和告警设计
 - `docs/CIVI4_PRO_TEST_PLAN.md`：小米 Civi 4 Pro 回归测试方案
 - `CHANGELOG.md`：版本变更记录
 
