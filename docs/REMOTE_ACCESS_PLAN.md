@@ -1,6 +1,6 @@
 # 远程连接方案
 
-状态：v0.5.1 已实现状态、白名单命令、三档 WebView 预览、受控单击和 HTML 选择项桥接；等待 Civi 4 Pro 真机验证。
+状态：v1.0.0 已实现状态、白名单命令、三档 WebView 预览、横竖屏等比适配、受控单击、HTML 选择项桥接以及两类账号级脚本；等待 Civi 4 Pro 真机全流程验证。
 
 目标是通过 iPhone Safari 或桌面网页远程查看并控制 Play Keeper，而不是接管整台 Android 手机。
 
@@ -75,6 +75,10 @@ preview_start(accountIndex, maxWidth, fps)
 preview_stop()
 pointer_tap(accountIndex, x, y, frameSequence)
 select_option(accountIndex, elementToken, optionIndex)
+configure_auto_sell(accountIndex, enabled, items, buyer, intervalHours)
+run_auto_sell(accountIndex)
+configure_temple_guard(accountIndex, enabled)
+run_temple_guard(accountIndex)
 ```
 
 每条命令包含：
@@ -101,7 +105,7 @@ Android 执行后返回 `accepted / completed / failed / expired`，网页不能
 第一阶段稳定后，原型验证本 APP 自有 WebView 捕获：
 
 1. 在 Android 内将目标 WebView 绘制到 RGB_565 Bitmap。
-2. 最大宽度可选 720、1280 或 2560px，保持原始宽高比。
+2. 最大宽度可选 720、1280 或 2560px，保持原始宽高比。控制台根据帧宽高动态切换 portrait/landscape 容器，并用 `object-fit: contain` 展示完整画面。
 3. 编码为 JPEG，对应最高 1、0.33 或 0.1 帧/秒，单帧最大 2.5 MiB。
 4. 仅在远程页面打开预览时传输。
 5. 浏览器隐藏、断开、用户停止或最后一个预览控制者离线时自动停止。
@@ -129,6 +133,13 @@ Android 执行后返回 `accepted / completed / failed / expired`，网页不能
 键盘输入、拖动、多点触控和文件上传后置处理。第一版远程点击不得包含通用文字注入，避免密码和聊天内容泄漏。
 
 HTML `<select>` 是特殊情况：WebView 会把它渲染为 Android 原生弹窗，无法出现在 WebView 截图中。v0.5.1 在点击命中 `select` 时读取其选项，在控制台显示远程选择面板，并用短时 DOM token 把选定索引回写到同一元素。选项最多 200 个、单项文字最多 120 字符。
+
+## 5.1 远程脚本配置（v1.0）
+
+- 控制台从当前活动账号的 telemetry 读取脚本状态，不在 VPS 持久化脚本配置。
+- `configure_auto_sell` 只接受 1–10 个长度不超过 30 的道具名、1–168 小时和安全字符组成的买家名。
+- `run_auto_sell` 和 `run_temple_guard` 只是要求 Android 开始一次检查；最终执行结果以 Android 脚本状态和操作日志为准。
+- Relay 不会生成或转发任意 JavaScript；自动化脚本固定编译在 APK 中。
 
 ## 6. 服务器建议
 
@@ -190,7 +201,7 @@ Android 首次连接：
   "type": "device.hello",
   "deviceId": "PK-ABCDEF123456",
   "token": "DEVICE_TOKEN",
-  "appVersion": "0.5.1"
+  "appVersion": "1.0.0"
 }
 ```
 
@@ -203,7 +214,7 @@ Android 上报：
   "timestamp": 0,
   "payload": {
     "app": {
-      "versionCode": 4,
+      "versionCode": 7,
       "activeAccount": 0,
       "blackScreen": true
     },

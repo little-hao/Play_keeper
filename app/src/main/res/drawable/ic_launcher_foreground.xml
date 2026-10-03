@@ -1,13 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillColor="#52D273"
-        android:pathData="M54,18A36,36 0,1 0,54 90A36,36 0,1 0,54 18" />
-    <path
-        android:fillColor="#101214"
-        android:pathData="M51,31h6v25h-6zM54,64m-7,0a7,7 0,1 0,14 0a7,7 0,1 0,-14 0" />
-</vector>
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/play_keeper_icon_b"
+    android:inset="17dp" />

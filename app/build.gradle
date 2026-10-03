@@ -11,8 +11,8 @@ android {
         applicationId 'com.local.sgplaykeeper'
         minSdk 26
         targetSdk 35
-        versionCode 6
-        versionName '0.5.1-select-test'
+        versionCode 7
+        versionName '1.0.0'
     }
 
     buildTypes {
@@ -21,6 +21,8 @@ android {
             versionNameSuffix '-debug'
         }
         release {
+            applicationIdSuffix '.test'
+            signingConfig signingConfigs.debug
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css?v=0.5.1">
+  <link rel="stylesheet" href="/styles.css?v=1.0.0">
 </head>
 <body>
   <main class="shell">
@@ -76,6 +76,24 @@
         </div>
         <p class="preview-help">画面最高每秒更新一次。点击画面会在当前 WebView 的对应位置执行一次单击。</p>
       </section>
+      <section class="automation-panel">
+        <div class="section-title">
+          <div><strong>一键脚本</strong><small class="automation-status">尚未运行</small></div>
+        </div>
+        <div class="automation-grid">
+          <label class="toggle-row"><input class="sell-enabled" type="checkbox"> 定时卖出（保留1个）</label>
+          <label>间隔（小时）<input class="sell-hours" type="number" min="1" max="168" value="12"></label>
+          <label class="span-2">道具（逗号分隔）<input class="sell-items" type="text" value="进化宝石,曙光印记"></label>
+          <label>指定买家<input class="sell-buyer" type="text" maxlength="30" value="hao"></label>
+          <label class="toggle-row"><input class="temple-enabled" type="checkbox"> 圣兽云殿守护（1h）</label>
+        </div>
+        <div class="automation-actions">
+          <button class="save-automation primary">保存设置</button>
+          <button class="run-sell secondary">立即检查卖出</button>
+          <button class="run-temple secondary">立即检查圣殿</button>
+        </div>
+        <p class="automation-help">脚本按当前账号独立保存；仅在 APP 前台或常亮黑屏模式中定时执行。</p>
+      </section>
       <div class="button-grid">
         <button data-command="reload_account">刷新账号</button>
         <button data-command="open_home">返回首页</button>
@@ -97,6 +115,6 @@
       <div id="selectOptions" class="select-options" role="radiogroup"></div>
     </section>
   </div>
-  <script type="module" src="/app.js?v=0.5.1"></script>
+  <script type="module" src="/app.js?v=1.0.0"></script>
 </body>
 </html>

@@ -1,8 +1,19 @@
-# Play Keeper / SG多账号挂机 Android 测试版
+# Play Keeper Android 正式版
 
 这是针对小米 Civi 4 Pro / HyperOS 优化的多账号网页挂机 APP，固定打开：
 
 `http://sgplay.cc/home.html#/`
+
+## v1.0.0 主要能力
+
+- 竖屏/横屏远程画面按实际宽高比完整铺入预览框，支持 720/1280/2560 三档按需画质
+- 远程点击 HTML 地图/副本下拉框时，控制台加载真实选项并回写手机页面
+- 每个账号可独立开启定时卖出：默认 12h，道具“进化宝石/曙光印记”，指定买家 `hao`，保留1个
+- 卖出道具、买家和执行周期可在 Android 或远程网页修改，支持立即手动检查
+- 每个账号可独立开启圣兽云殿守护，每 1h 检查挂机状态并在显示“开始挂机”时自动恢复
+- 账号 1–4 优先显示网页右上角登录用户名，仍可长按 Android 账号按钮手动修正
+- 黑屏仍是前台常亮黑色遮罩，底层 WebView、脚本调度和远程链路继续工作
+- 应用名为 Play Keeper，使用已确认的候选 B “多网页卡片 + 锁”自适应图标
 
 ## v0.5.1 修复与增强
 
@@ -60,9 +71,9 @@
 
 ## 当前安装包
 
-`dist/PlayKeeper-Civi4Pro-v0.5.1-select-test.apk`
+`dist/PlayKeeper-Civi4Pro-v1.0.0.apk`
 
-测试版包名仍为 `com.local.sgplaykeeper.test`，版本号为 `6`，可覆盖安装 v0.1～v0.5 测试版，并保留原有 WebView 登录数据。
+为保留 v0.1～v0.5 已有登录数据，v1.0.0 仍使用包名 `com.local.sgplaykeeper.test` 和已有升级签名，版本号为 `7`。这是个人分发兼容方案；如未来转入应用商店，需要另行制定稳定私有签名迁移方案。
 
 ## 远程连接
 
@@ -80,7 +91,7 @@ APP 会尝试从网页 DOM 自动识别登录用户名。若网站结构变化�
 
 ## 小米建议设置
 
-1. 设置 → 应用设置 → 应用管理 → SG多账号挂机。
+1. 设置 → 应用设置 → 应用管理 → Play Keeper。
 2. 省电策略设为“无限制”。
 3. 允许后台活动并开启自启动。
 4. 在最近任务界面锁定 APP。
@@ -93,6 +104,8 @@ APP 会尝试从网页 DOM 自动识别登录用户名。若网站结构变化�
 - 同时打开 4 个账号会明显增加内存占用，建议先测试 2 个账号，再逐步增加。
 - `sgplay.cc` 使用明文 HTTP，账号通信存在被监听或篡改的风险，请勿复用重要密码。
 - APP 不保存明文账号密码；登录状态由各账号 WebView Profile 的 Cookie 和站点存储保存。
+- 定时卖出和圣殿守护仅在 Activity 前台（包括常亮黑色遮罩）执行；熟睡、锁屏或被 HyperOS 清理时不保证准时。
+- 站点改版后若交易所 DOM 结构不再匹配，脚本会中止并显示错误，不会在未通过复核时继续点击。
 
 详细步骤见 `docs/CIVI4_PRO_TEST_PLAN.md`。
 
@@ -104,6 +117,7 @@ APP 会尝试从网页 DOM 自动识别登录用户名。若网站结构变化�
 - `docs/POWER_MONITORING_PLAN.md`：已实现的实时耗电、温度监控及后续历史计划
 - `remote-server/README.md`：中继服务部署与密钥配置
 - `docs/VPS_UPDATE_V0.5.md`：现有 Debian VPS 从 v0.4 同步升级命令
+- `docs/VPS_UPDATE_V1.0.md`：v1.0.0 远程脚本和新控制台的 Debian VPS 更新命令
 - `docs/CIVI4_PRO_TEST_PLAN.md`：小米 Civi 4 Pro 回归测试方案
 - `CHANGELOG.md`：版本变更记录
 

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">SG多账号挂机</string>
+    <string name="app_name">Play Keeper</string>
     <string name="remote_device_id">设备 ID：%1$s</string>
     <string name="remote_security_notice">启用后，已鉴权的控制台可以按需查看本 APP 网页快照并发送单击。图片只经 WSS 内存转发。连接密钥使用 Android Keystore 加密保存，只允许 WSS 地址。</string>
 </resources>

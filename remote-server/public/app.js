@@ -168,6 +168,9 @@ function renderDevices() {
     const app = telemetry.app ?? {};
     const accounts = Array.isArray(telemetry.accounts) ? telemetry.accounts : [];
     const deviceInfo = telemetry.device ?? {};
+    const activeAccountIndex = Number.isInteger(app.activeAccount) ? app.activeAccount : 0;
+    const activeAccountTelemetry = accounts.find((account) => account?.index === activeAccountIndex) ?? {};
+    const automation = activeAccountTelemetry.automation ?? {};
     card.dataset.deviceId = device.deviceId;
     card.querySelector(".device-id").textContent = device.deviceId;
     card.querySelector(".device-model").textContent = [deviceInfo.manufacturer, deviceInfo.model].filter(Boolean).join(" ") || "等待设备状态";
@@ -240,6 +243,54 @@ function renderDevices() {
         frameSequence: frame.sequence
       });
     });
+
+    const sellEnabled = card.querySelector(".sell-enabled");
+    const sellHours = card.querySelector(".sell-hours");
+    const sellItems = card.querySelector(".sell-items");
+    const sellBuyer = card.querySelector(".sell-buyer");
+    const templeEnabled = card.querySelector(".temple-enabled");
+    sellEnabled.checked = automation.sellEnabled === true;
+    sellHours.value = String(Number.isInteger(automation.sellIntervalHours)
+      ? automation.sellIntervalHours : 12);
+    sellItems.value = Array.isArray(automation.sellItems) && automation.sellItems.length
+      ? automation.sellItems.join(",") : "进化宝石,曙光印记";
+    sellBuyer.value = typeof automation.sellBuyer === "string" && automation.sellBuyer
+      ? automation.sellBuyer : "hao";
+    templeEnabled.checked = automation.templeEnabled === true;
+    card.querySelector(".automation-status").textContent = automation.busy
+      ? `运行中 · ${automation.lastMessage || "正在执行"}`
+      : (automation.lastMessage || "尚未运行");
+
+    const saveAutomation = () => {
+      const items = sellItems.value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
+      const intervalHours = Number.parseInt(sellHours.value, 10);
+      const buyer = sellBuyer.value.trim();
+      if (!items.length || items.length > 10) return addLog("卖出道具需填写1–10种");
+      if (!Number.isInteger(intervalHours) || intervalHours < 1 || intervalHours > 168) {
+        return addLog("卖出间隔需为1–168小时");
+      }
+      if (!/^[A-Za-z0-9_.-]{1,30}$/.test(buyer)) return addLog("指定买家格式无效");
+      sendCommand(device.deviceId, "configure_auto_sell", {
+        accountIndex: activeAccountIndex,
+        enabled: sellEnabled.checked,
+        items,
+        buyer,
+        intervalHours
+      });
+      sendCommand(device.deviceId, "configure_temple_guard", {
+        accountIndex: activeAccountIndex,
+        enabled: templeEnabled.checked
+      });
+      addLog(`${accountLabel(accounts, activeAccountIndex)} 脚本设置已发送`);
+      return true;
+    };
+    card.querySelector(".save-automation").addEventListener("click", saveAutomation);
+    card.querySelector(".run-sell").addEventListener("click", () => {
+      if (saveAutomation()) sendCommand(device.deviceId, "run_auto_sell", { accountIndex: activeAccountIndex });
+    });
+    card.querySelector(".run-temple").addEventListener("click", () => {
+      if (saveAutomation()) sendCommand(device.deviceId, "run_temple_guard", { accountIndex: activeAccountIndex });
+    });
     elements.deviceList.append(card);
     if (!app.previewEnabled) {
       previewFrames.delete(device.deviceId);
@@ -310,6 +361,11 @@ function updatePreviewFrame(deviceId, frame) {
   const card = elements.deviceList.querySelector(`[data-device-id="${deviceId}"]`);
   if (!card || frame?.mime !== "image/jpeg" || typeof frame.imageBase64 !== "string") return;
   const image = card.querySelector(".preview-image");
+  const stage = card.querySelector(".preview-stage");
+  const portrait = frame.height >= frame.width;
+  stage.classList.toggle("portrait", portrait);
+  stage.classList.toggle("landscape", !portrait);
+  stage.style.setProperty("--frame-ratio", `${frame.width} / ${frame.height}`);
   image.src = `data:image/jpeg;base64,${frame.imageBase64}`;
   image.classList.remove("hidden");
   card.querySelector(".preview-placeholder").classList.add("hidden");

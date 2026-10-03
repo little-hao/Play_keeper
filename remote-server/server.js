@@ -51,7 +51,26 @@ const commandValidators = {
       && Number.isInteger(parameters.optionIndex)
       && parameters.optionIndex >= 0
       && parameters.optionIndex < 200;
-  }
+  },
+  configure_auto_sell(parameters) {
+    return accountParameters(parameters)
+      && typeof parameters.enabled === "boolean"
+      && Array.isArray(parameters.items)
+      && parameters.items.length >= 1
+      && parameters.items.length <= 10
+      && parameters.items.every((item) => typeof item === "string"
+        && item.trim().length >= 1 && item.trim().length <= 30)
+      && typeof parameters.buyer === "string"
+      && /^[A-Za-z0-9_.-]{1,30}$/.test(parameters.buyer)
+      && Number.isInteger(parameters.intervalHours)
+      && parameters.intervalHours >= 1
+      && parameters.intervalHours <= 168;
+  },
+  run_auto_sell: accountParameters,
+  configure_temple_guard(parameters) {
+    return accountParameters(parameters) && typeof parameters.enabled === "boolean";
+  },
+  run_temple_guard: accountParameters
 };
 
 function finiteRange(value, minimum, maximum) {
@@ -107,7 +126,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "0.5.1" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.0.0" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {

@@ -46,6 +46,7 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -82,15 +83,27 @@ public final class MainActivity extends Activity {
     private static final int PREVIEW_MAX_ENCODED_BYTES = 2_500 * 1024;
     private static final long PREVIEW_MIN_INTERVAL_MS = 1_000L;
     private static final String USERNAME_DETECTION_SCRIPT =
-            "(function(){"
+            "(function(){const clean=v=>(v||'').replace(/\\s+/g,' ').trim();"
+                    + "const valid=v=>v&&v.length<=32&&!/^(用户名|账号|昵称|登录|未登录|user|username)$/i.test(v);"
+                    + "for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i)||'';"
+                    + "if(!/user.?info|vuex_userInfo/i.test(k))continue;try{let o=JSON.parse(localStorage.getItem(k));"
+                    + "if(typeof o==='string')o=JSON.parse(o);const v=clean(o&&"
+                    + "(o.username||o.userName||o.account||o.nickname));if(valid(v))return v;}catch(e){}}"
                     + "const s=['[data-username]','[data-user-name]','#username','#userName',"
                     + "'.username','.user-name','.user_name','.nickname','.nick-name',"
-                    + "'#nickname','#nickName'];"
+                    + "'#nickname','#nickName','[class*=user-name]','[class*=username]',"
+                    + "'[class*=userInfo]','[class*=user-info]'];"
                     + "for(const q of s){const e=document.querySelector(q);if(!e)continue;"
-                    + "let v=e.getAttribute('data-username')||e.getAttribute('data-user-name')"
-                    + "||e.value||e.textContent||'';v=v.replace(/\\s+/g,' ').trim();"
-                    + "if(v&&v.length<=32&&!/^(用户名|账号|昵称|登录|未登录|user|username)$/i.test(v))return v;}"
-                    + "return null;})()";
+                    + "const v=clean(e.getAttribute('data-username')||e.getAttribute('data-user-name')"
+                    + "||e.value||e.textContent);if(valid(v))return v;}"
+                    + "const w=innerWidth,h=innerHeight,scored=[];"
+                    + "for(const e of document.querySelectorAll('body *')){const r=e.getBoundingClientRect();"
+                    + "if(!r.width||!r.height||r.top<0||r.top>h*.3||r.left<w*.48)continue;"
+                    + "const v=clean(e.textContent);if(!valid(v)||v.includes(' '))continue;"
+                    + "const hint=(e.id+' '+e.className).toLowerCase();let score=r.left/w*2-r.top/h;"
+                    + "if(/user|name|nick|account|profile/.test(hint))score+=5;"
+                    + "if(/^[A-Za-z0-9_.-]{2,24}$/.test(v))score+=2;scored.push({v,score});}"
+                    + "scored.sort((a,b)=>b.score-a.score);return scored[0]?.v||null;})()";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Session[] sessions = new Session[MAX_ACCOUNTS];
@@ -109,6 +122,7 @@ public final class MainActivity extends Activity {
     private Button orientationButton;
     private Button batteryButton;
     private Button remoteButton;
+    private Button automationButton;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private SharedPreferences preferences;
@@ -116,6 +130,7 @@ public final class MainActivity extends Activity {
     private BatteryMonitor.Snapshot latestBatterySnapshot;
     private RemoteConfigStore remoteConfigStore;
     private RemoteConnectionManager remoteConnectionManager;
+    private AutomationCoordinator automationCoordinator;
     private RemoteConnectionManager.State remoteState = RemoteConnectionManager.State.DISABLED;
 
     private int activeAccount;
@@ -212,6 +227,7 @@ public final class MainActivity extends Activity {
         orientationButton = makeButton("横屏", view -> toggleOrientation());
         batteryButton = makeButton("电量 --", view -> showBatteryDetails());
         remoteButton = makeButton("远程", view -> showRemoteSettings());
+        automationButton = makeButton("脚本", view -> showAutomationSettings(activeAccount));
         rebuildToolbar();
 
         progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -288,6 +304,7 @@ public final class MainActivity extends Activity {
         detachFromParent(orientationButton);
         detachFromParent(batteryButton);
         detachFromParent(remoteButton);
+        detachFromParent(automationButton);
         toolbarHost.removeAllViews();
 
         boolean landscape = getResources().getConfiguration().orientation
@@ -300,10 +317,10 @@ public final class MainActivity extends Activity {
             row.addView(blackButton, weightedButtonParams(0.78f));
             row.addView(homeButton, weightedButtonParams(0.72f));
             row.addView(refreshButton, weightedButtonParams(0.72f));
-            row.addView(desktopButton, weightedButtonParams(0.82f));
             row.addView(orientationButton, weightedButtonParams(0.82f));
             row.addView(batteryButton, weightedButtonParams(1.05f));
             row.addView(remoteButton, weightedButtonParams(0.82f));
+            row.addView(automationButton, weightedButtonParams(0.82f));
             toolbarHost.addView(row, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
             toolbarHost.getLayoutParams().height = dp(44);
@@ -316,10 +333,10 @@ public final class MainActivity extends Activity {
             actionRow.addView(blackButton, weightedButtonParams(1f));
             actionRow.addView(homeButton, weightedButtonParams(1f));
             actionRow.addView(refreshButton, weightedButtonParams(1f));
-            actionRow.addView(desktopButton, weightedButtonParams(1f));
             actionRow.addView(orientationButton, weightedButtonParams(1f));
             actionRow.addView(batteryButton, weightedButtonParams(1.15f));
             actionRow.addView(remoteButton, weightedButtonParams(1f));
+            actionRow.addView(automationButton, weightedButtonParams(1f));
             toolbarHost.addView(accountRow, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, dp(38)));
             toolbarHost.addView(actionRow, new LinearLayout.LayoutParams(
@@ -374,6 +391,30 @@ public final class MainActivity extends Activity {
     }
 
     private void startMonitoringAndRemoteConnection() {
+        automationCoordinator = new AutomationCoordinator(preferences,
+                new AutomationCoordinator.Host() {
+                    @Override
+                    public WebView requireWebView(int accountIndex) {
+                        return getOrCreateSession(accountIndex).webView;
+                    }
+
+                    @Override
+                    public void openHome(int accountIndex) {
+                        getOrCreateSession(accountIndex).webView.loadUrl(START_URL);
+                    }
+
+                    @Override
+                    public void onAutomationChanged() {
+                        pushTelemetry();
+                    }
+
+                    @Override
+                    public void showMessage(String message) {
+                        showToast(message);
+                    }
+                }, MAX_ACCOUNTS);
+        automationCoordinator.start();
+
         batteryMonitor = new BatteryMonitor(this, snapshot -> {
             latestBatterySnapshot = snapshot;
             batteryButton.setText(snapshot.compactLabel());
@@ -445,6 +486,119 @@ public final class MainActivity extends Activity {
                 .setMessage(details)
                 .setPositiveButton("关闭", null)
                 .show();
+    }
+
+    private void showAutomationSettings(int accountIndex) {
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(20), dp(8), dp(20), dp(8));
+        scroll.addView(form, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        CheckBox sellEnabled = new CheckBox(this);
+        sellEnabled.setText("每隔固定时间自动卖出（保留1个）");
+        sellEnabled.setChecked(automationCoordinator.isSellEnabled(accountIndex));
+        form.addView(sellEnabled);
+
+        TextView itemLabel = formLabel("卖出道具（逗号或换行分隔）");
+        form.addView(itemLabel);
+        EditText items = new EditText(this);
+        items.setText(automationCoordinator.sellItemsText(accountIndex));
+        items.setHint("进化宝石,曙光印记");
+        items.setMinLines(2);
+        form.addView(items, formFieldParams());
+
+        form.addView(formLabel("指定买家"));
+        EditText buyer = new EditText(this);
+        buyer.setSingleLine(true);
+        buyer.setText(automationCoordinator.sellBuyer(accountIndex));
+        buyer.setHint("hao");
+        form.addView(buyer, formFieldParams());
+
+        form.addView(formLabel("检查间隔（小时，1–168）"));
+        EditText hours = new EditText(this);
+        hours.setSingleLine(true);
+        hours.setInputType(InputType.TYPE_CLASS_NUMBER);
+        hours.setText(String.valueOf(automationCoordinator.sellIntervalHours(accountIndex)));
+        form.addView(hours, formFieldParams());
+
+        CheckBox templeEnabled = new CheckBox(this);
+        templeEnabled.setText("圣兽云殿守护（每1小时检查）");
+        templeEnabled.setChecked(automationCoordinator.isTempleEnabled(accountIndex));
+        form.addView(templeEnabled);
+
+        TextView notice = formLabel("脚本仅在 Play Keeper 前台或常亮黑屏模式运行；"
+                + "关屏或被 HyperOS 清理后无法保证定时执行。");
+        notice.setTextColor(Color.rgb(160, 166, 178));
+        form.addView(notice);
+
+        Button sellNow = makeButton("保存并立即检查卖出", view -> {
+            if (saveAutomationForm(accountIndex, sellEnabled, items, buyer, hours,
+                    templeEnabled)) {
+                automationCoordinator.runSellNow(accountIndex);
+            }
+        });
+        form.addView(sellNow, automationActionParams());
+        Button templeNow = makeButton("保存并立即检查圣殿挂机", view -> {
+            if (saveAutomationForm(accountIndex, sellEnabled, items, buyer, hours,
+                    templeEnabled)) {
+                automationCoordinator.runTempleNow(accountIndex);
+            }
+        });
+        form.addView(templeNow, automationActionParams());
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(accountDisplayName(accountIndex) + " · 一键脚本")
+                .setView(scroll)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("保存", null)
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(view -> {
+                    if (saveAutomationForm(accountIndex, sellEnabled, items, buyer, hours,
+                            templeEnabled)) {
+                        dialog.dismiss();
+                        showToast("脚本设置已保存");
+                    }
+                }));
+        dialog.show();
+    }
+
+    private boolean saveAutomationForm(int accountIndex, CheckBox sellEnabled,
+                                       EditText items, EditText buyer, EditText hours,
+                                       CheckBox templeEnabled) {
+        try {
+            int intervalHours = Integer.parseInt(hours.getText().toString().trim());
+            automationCoordinator.configureSell(accountIndex, sellEnabled.isChecked(),
+                    items.getText().toString(), buyer.getText().toString(), intervalHours);
+            automationCoordinator.configureTemple(accountIndex, templeEnabled.isChecked());
+            return true;
+        } catch (RuntimeException error) {
+            showToast(error.getMessage() == null ? "脚本设置无效" : error.getMessage());
+            return false;
+        }
+    }
+
+    private TextView formLabel(String text) {
+        TextView label = new TextView(this);
+        label.setText(text);
+        label.setTextColor(Color.rgb(45, 48, 54));
+        label.setTextSize(14);
+        label.setPadding(0, dp(10), 0, dp(3));
+        return label;
+    }
+
+    private LinearLayout.LayoutParams formFieldParams() {
+        return new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+    }
+
+    private LinearLayout.LayoutParams automationActionParams() {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(46));
+        params.setMargins(0, dp(8), 0, 0);
+        return params;
     }
 
     private void showAccountNameDialog(int accountIndex) {
@@ -656,6 +810,47 @@ public final class MainActivity extends Activity {
                 case "select_option":
                     handleSelectOption(commandId, parameters);
                     return;
+                case "configure_auto_sell": {
+                    int index = requiredAccountIndex(parameters);
+                    JSONArray itemArray = parameters.optJSONArray("items");
+                    if (itemArray == null) {
+                        throw new IllegalArgumentException("卖出道具列表无效");
+                    }
+                    StringBuilder itemText = new StringBuilder();
+                    for (int i = 0; i < itemArray.length(); i++) {
+                        if (i > 0) itemText.append(',');
+                        itemText.append(itemArray.optString(i));
+                    }
+                    automationCoordinator.configureSell(index,
+                            parameters.optBoolean("enabled", false), itemText.toString(),
+                            parameters.optString("buyer", "hao"),
+                            parameters.optInt("intervalHours", 12));
+                    success = true;
+                    resultMessage = "定时卖出设置已更新";
+                    break;
+                }
+                case "run_auto_sell": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.runSellNow(index);
+                    success = true;
+                    resultMessage = "已启动卖出检查";
+                    break;
+                }
+                case "configure_temple_guard": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.configureTemple(index,
+                            parameters.optBoolean("enabled", false));
+                    success = true;
+                    resultMessage = "圣殿挂机守护设置已更新";
+                    break;
+                }
+                case "run_temple_guard": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.runTempleNow(index);
+                    success = true;
+                    resultMessage = "已启动圣殿挂机检查";
+                    break;
+                }
                 default:
                     resultMessage = "不支持的远程命令";
                     break;
@@ -918,8 +1113,8 @@ public final class MainActivity extends Activity {
             telemetry.put("device", device);
 
             JSONObject app = new JSONObject();
-            app.put("versionCode", 6);
-            app.put("versionName", "0.5.1-select-test");
+            app.put("versionCode", 7);
+            app.put("versionName", "1.0.0");
             app.put("activeAccount", activeAccount);
             app.put("blackScreen", blackMode);
             app.put("executionMode", blackMode
@@ -955,6 +1150,9 @@ public final class MainActivity extends Activity {
                     account.put("retryAttempt", session.retryAttempt);
                     String url = session.webView.getUrl();
                     account.put("url", isAllowedUrl(url) ? url : JSONObject.NULL);
+                }
+                if (automationCoordinator != null) {
+                    automationCoordinator.appendAccountTelemetry(account, i);
                 }
                 accounts.put(account);
             }
@@ -1517,6 +1715,9 @@ public final class MainActivity extends Activity {
         stopPreview();
         if (batteryMonitor != null) {
             batteryMonitor.stop();
+        }
+        if (automationCoordinator != null) {
+            automationCoordinator.stop();
         }
         if (remoteConnectionManager != null) {
             remoteConnectionManager.destroy();
