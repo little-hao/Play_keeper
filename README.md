@@ -4,7 +4,17 @@
 
 `http://sgplay.cc/home.html#/`
 
-## v0.4.0 更新
+## v0.5.0 更新
+
+- 远程控制台新增按需手机网页预览，最高 720px、每秒 1 帧
+- 可直接点击远程画面，在 Android 自有 WebView 对应位置执行单击
+- 账号按钮优先显示网页识别到的登录用户名，长按按钮可以手动修正
+- 远程端移除桌面/手机模式按钮，保留刷新、首页、横竖屏和黑屏操作
+- 远程状态明确区分“前台页面可见”与“前台常亮黑色遮罩”
+- 预览只在浏览器请求时启动；浏览器隐藏、断开或点击停止后自动关闭
+- 页面图片仅通过内存转发，不在 VPS 落盘
+
+## v0.4.0 基础能力
 
 - 新增电量、温度、电压、电流、估算功率、热状态和省电模式监控
 - 新增仅使用 WSS 的远程连接，可通过 iPhone Safari 或电脑网页操作
@@ -42,9 +52,9 @@
 
 ## 当前安装包
 
-`dist/PlayKeeper-Civi4Pro-v0.4.0-remote-test.apk`
+`dist/PlayKeeper-Civi4Pro-v0.5.0-preview-test.apk`
 
-测试版包名仍为 `com.local.sgplaykeeper.test`，版本号为 `4`，可覆盖安装 v0.1～v0.3 测试版，并保留原有 WebView 登录数据。
+测试版包名仍为 `com.local.sgplaykeeper.test`，版本号为 `5`，可覆盖安装 v0.1～v0.4 测试版，并保留原有 WebView 登录数据。
 
 ## 远程连接
 
@@ -56,7 +66,9 @@
 4. iPhone Safari 打开 `https://你的域名`，输入 `ADMIN_TOKEN`。
 5. 网页显示设备在线后即可查看耗电状态并执行 APP 内白名单操作。
 
-测试阶段不提供整机画面或任意点击，网页只能控制 Play Keeper 自身。完整部署说明见 `remote-server/README.md` 和 `docs/REMOTE_ACCESS_PLAN.md`。
+v0.5 提供 Play Keeper 自有 WebView 的低帧率预览和单击，不是整机录屏；不支持滑动、键盘输入或控制其他 APP。完整部署说明见 `remote-server/README.md` 和 `docs/REMOTE_ACCESS_PLAN.md`。
+
+APP 会尝试从网页 DOM 自动识别登录用户名。若网站结构变化或用户名位于不可访问的跨域内容中，可在 Android 工具栏长按对应账号按钮手动设置显示名称。
 
 ## 小米建议设置
 
@@ -83,6 +95,7 @@
 - `docs/REMOTE_ACCESS_PLAN.md`：已实现的 iPhone/网页远程连接架构、协议和安全边界
 - `docs/POWER_MONITORING_PLAN.md`：已实现的实时耗电、温度监控及后续历史计划
 - `remote-server/README.md`：中继服务部署与密钥配置
+- `docs/VPS_UPDATE_V0.5.md`：现有 Debian VPS 从 v0.4 同步升级命令
 - `docs/CIVI4_PRO_TEST_PLAN.md`：小米 Civi 4 Pro 回归测试方案
 - `CHANGELOG.md`：版本变更记录
 

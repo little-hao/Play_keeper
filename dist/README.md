@@ -6,4 +6,6 @@ APK 属于构建产物，不提交到 Git。运行 `./gradlew assembleDebug` 后
 
 本项目交付时使用的本地文件名：
 
-`PlayKeeper-Civi4Pro-v0.3.0-test.apk`
+`PlayKeeper-Civi4Pro-v0.5.0-preview-test.apk`
+
+APK 通过 GitHub Release 分发；`dist/*.apk` 已由 `.gitignore` 排除，不提交到源码仓库。

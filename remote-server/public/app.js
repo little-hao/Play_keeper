@@ -15,6 +15,8 @@ const elements = {
 };
 
 const devices = new Map();
+const previewFrames = new Map();
+const activePreviews = new Set();
 let socket;
 let manuallyClosed = false;
 let reconnectTimer;
@@ -28,6 +30,9 @@ elements.refreshStatus.addEventListener("click", () => {
   for (const deviceId of devices.keys()) sendCommand(deviceId, "request_status", {});
 });
 elements.clearLog.addEventListener("click", () => elements.eventLog.replaceChildren());
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") stopAllPreviews();
+});
 
 function connect() {
   const token = elements.adminToken.value.trim();
@@ -57,11 +62,14 @@ function connect() {
 }
 
 function disconnect() {
+  stopAllPreviews();
   manuallyClosed = true;
   connectionGeneration += 1;
   clearTimeout(reconnectTimer);
   sessionStorage.removeItem("playKeeperAdminToken");
   devices.clear();
+  previewFrames.clear();
+  activePreviews.clear();
   renderDevices();
   socket?.close();
   elements.loginPanel.classList.remove("hidden");
@@ -94,6 +102,8 @@ function handleMessage(message) {
       break;
     case "device.offline":
       devices.delete(message.deviceId);
+      previewFrames.delete(message.deviceId);
+      activePreviews.delete(message.deviceId);
       renderDevices();
       addLog(`${message.deviceId} 已离线`);
       break;
@@ -105,6 +115,10 @@ function handleMessage(message) {
       renderDevices();
       break;
     }
+    case "preview.frame":
+      previewFrames.set(message.deviceId, message.payload);
+      updatePreviewFrame(message.deviceId, message.payload);
+      break;
     case "command.queued":
       addLog(`命令已发送至 ${message.deviceId}`);
       break;
@@ -131,20 +145,26 @@ function renderDevices() {
     const telemetry = device.telemetry ?? {};
     const battery = telemetry.battery ?? {};
     const app = telemetry.app ?? {};
+    const accounts = Array.isArray(telemetry.accounts) ? telemetry.accounts : [];
     const deviceInfo = telemetry.device ?? {};
+    card.dataset.deviceId = device.deviceId;
     card.querySelector(".device-id").textContent = device.deviceId;
     card.querySelector(".device-model").textContent = [deviceInfo.manufacturer, deviceInfo.model].filter(Boolean).join(" ") || "等待设备状态";
     card.querySelector(".last-update").textContent = formatTime(device.lastUpdate ?? device.connectedAt);
     card.querySelector(".battery-level").textContent = value(battery.levelPercent, "%");
     card.querySelector(".battery-temp").textContent = value(battery.temperatureC, "°C", 1);
     card.querySelector(".battery-power").textContent = value(battery.estimatedPowerW, "W", 2);
-    card.querySelector(".active-account").textContent = Number.isInteger(app.activeAccount) ? `账号${app.activeAccount + 1}` : "--";
-    card.querySelector(".device-note").textContent = app.blackScreen ? "黑屏保护已开启" : `Android ${deviceInfo.androidVersion ?? "--"} · WebView ${deviceInfo.webViewVersion ?? "--"}`;
+    card.querySelector(".active-account").textContent = Number.isInteger(app.activeAccount)
+      ? accountLabel(accounts, app.activeAccount) : "--";
+    const runState = app.blackScreen
+      ? "前台常亮 · 黑色遮罩已开启"
+      : "前台常亮 · 页面可见";
+    card.querySelector(".device-note").textContent = `${runState} · Android ${deviceInfo.androidVersion ?? "--"} · WebView ${deviceInfo.webViewVersion ?? "--"}`;
 
     const tabs = card.querySelector(".account-tabs");
     for (let index = 0; index < 4; index += 1) {
       const button = document.createElement("button");
-      button.textContent = `账号${index + 1}`;
+      button.textContent = accountLabel(accounts, index);
       if (app.activeAccount === index) button.classList.add("active");
       button.addEventListener("click", () => sendCommand(device.deviceId, "switch_account", { accountIndex: index }));
       tabs.append(button);
@@ -153,16 +173,78 @@ function renderDevices() {
       button.addEventListener("click", () => {
         const parameters = {};
         const accountIndex = Number.isInteger(app.activeAccount) ? app.activeAccount : 0;
-        if (["reload_account", "open_home", "set_browser_mode", "set_orientation"].includes(button.dataset.command)) {
+        if (["reload_account", "open_home", "set_orientation"].includes(button.dataset.command)) {
           parameters.accountIndex = accountIndex;
         }
-        if (button.dataset.mode) parameters.mode = button.dataset.mode;
         if (button.dataset.orientation) parameters.orientation = button.dataset.orientation;
         sendCommand(device.deviceId, button.dataset.command, parameters);
       });
     });
+    card.querySelector(".preview-start").addEventListener("click", () => {
+      const accountIndex = Number.isInteger(app.activeAccount) ? app.activeAccount : 0;
+      activePreviews.add(device.deviceId);
+      sendCommand(device.deviceId, "preview_start", { accountIndex, maxWidth: 720, fps: 1 });
+      card.querySelector(".preview-status").textContent = "正在等待手机画面…";
+    });
+    card.querySelector(".preview-stop").addEventListener("click", () => {
+      sendCommand(device.deviceId, "preview_stop", {});
+      activePreviews.delete(device.deviceId);
+      previewFrames.delete(device.deviceId);
+      showPreviewPlaceholder(card, "预览已停止");
+    });
+    card.querySelector(".preview-image").addEventListener("click", (event) => {
+      const frame = previewFrames.get(device.deviceId);
+      if (!frame) return addLog("尚未收到可点击的手机画面");
+      const rectangle = event.currentTarget.getBoundingClientRect();
+      const x = (event.clientX - rectangle.left) / rectangle.width;
+      const y = (event.clientY - rectangle.top) / rectangle.height;
+      sendCommand(device.deviceId, "pointer_tap", {
+        accountIndex: frame.accountIndex,
+        x: Math.max(0, Math.min(1, x)),
+        y: Math.max(0, Math.min(1, y)),
+        frameSequence: frame.sequence
+      });
+    });
     elements.deviceList.append(card);
+    if (!app.previewEnabled) previewFrames.delete(device.deviceId);
+    const frame = previewFrames.get(device.deviceId);
+    if (frame) updatePreviewFrame(device.deviceId, frame);
   }
+}
+
+function stopAllPreviews() {
+  if (socket?.readyState === WebSocket.OPEN) {
+    for (const deviceId of activePreviews) {
+      sendCommand(deviceId, "preview_stop", {});
+    }
+  }
+  activePreviews.clear();
+  previewFrames.clear();
+}
+
+function accountLabel(accounts, index) {
+  const label = accounts.find((account) => account?.index === index)?.label;
+  return typeof label === "string" && label.trim() ? label.trim().slice(0, 24) : `账号${index + 1}`;
+}
+
+function updatePreviewFrame(deviceId, frame) {
+  const card = elements.deviceList.querySelector(`[data-device-id="${deviceId}"]`);
+  if (!card || frame?.mime !== "image/jpeg" || typeof frame.imageBase64 !== "string") return;
+  const image = card.querySelector(".preview-image");
+  image.src = `data:image/jpeg;base64,${frame.imageBase64}`;
+  image.classList.remove("hidden");
+  card.querySelector(".preview-placeholder").classList.add("hidden");
+  card.querySelector(".preview-status").textContent = `${frame.accountLabel || `账号${frame.accountIndex + 1}`} · ${frame.width}×${frame.height} · ${formatTime(Date.now())}`;
+}
+
+function showPreviewPlaceholder(card, text) {
+  const image = card.querySelector(".preview-image");
+  image.removeAttribute("src");
+  image.classList.add("hidden");
+  const placeholder = card.querySelector(".preview-placeholder");
+  placeholder.textContent = text;
+  placeholder.classList.remove("hidden");
+  card.querySelector(".preview-status").textContent = "按需加载，不在服务器保存";
 }
 
 function sendCommand(deviceId, command, parameters) {

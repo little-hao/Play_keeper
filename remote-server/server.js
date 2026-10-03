@@ -7,9 +7,10 @@ import { WebSocket, WebSocketServer } from "ws";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const publicDirectory = path.join(currentDirectory, "public");
-const MAX_MESSAGE_BYTES = 256 * 1024;
+const MAX_MESSAGE_BYTES = 2 * 1024 * 1024;
+const MAX_PREVIEW_BYTES = 700 * 1024;
 const COMMAND_WINDOW_MS = 60_000;
-const COMMAND_LIMIT = 30;
+const COMMAND_LIMIT = 180;
 
 const commandValidators = {
   switch_account: accountParameters,
@@ -25,8 +26,30 @@ const commandValidators = {
   },
   enter_black_screen: emptyParameters,
   exit_black_screen: emptyParameters,
-  request_status: emptyParameters
+  request_status: emptyParameters,
+  preview_start(parameters) {
+    return accountParameters(parameters)
+      && Number.isInteger(parameters.maxWidth)
+      && parameters.maxWidth >= 360
+      && parameters.maxWidth <= 720
+      && typeof parameters.fps === "number"
+      && parameters.fps >= 0.2
+      && parameters.fps <= 1;
+  },
+  preview_stop: emptyParameters,
+  pointer_tap(parameters) {
+    return accountParameters(parameters)
+      && finiteRange(parameters.x, 0, 1)
+      && finiteRange(parameters.y, 0, 1)
+      && Number.isSafeInteger(parameters.frameSequence)
+      && parameters.frameSequence >= 0;
+  }
 };
+
+function finiteRange(value, minimum, maximum) {
+  return typeof value === "number" && Number.isFinite(value)
+    && value >= minimum && value <= maximum;
+}
 
 function accountParameters(parameters) {
   return Number.isInteger(parameters?.accountIndex)
@@ -76,7 +99,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "0.5.0" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -200,6 +223,17 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
           message: String(message.message ?? "").slice(0, 200),
           timestamp: Number(message.timestamp) || Date.now()
         });
+      } else if (message.type === "preview.frame" && validPreviewFrame(message.payload)) {
+        for (const controller of controllers) {
+          if (controller.previewDevices?.has(entry.deviceId)) {
+            sendJson(controller, {
+              type: "preview.frame",
+              deviceId: entry.deviceId,
+              timestamp: Number(message.timestamp) || Date.now(),
+              payload: message.payload
+            });
+          }
+        }
       }
     });
 
@@ -217,6 +251,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
     socket.isAlive = true;
     socket.authenticated = false;
     socket.commandTimes = [];
+    socket.previewDevices = new Set();
     socket.on("pong", () => { socket.isAlive = true; });
     const authTimer = setTimeout(() => socket.close(1008, "authentication timeout"), 10_000);
 
@@ -251,6 +286,8 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
       socket.commandTimes.push(now);
       const target = devices.get(message.deviceId);
       if (!target) return sendJson(socket, { type: "command.error", message: "设备当前不在线" });
+      if (message.command === "preview_start") socket.previewDevices.add(target.deviceId);
+      if (message.command === "preview_stop") socket.previewDevices.delete(target.deviceId);
       const commandId = crypto.randomUUID();
       sendJson(target.socket, {
         type: "command.request",
@@ -266,6 +303,22 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
     socket.on("close", () => {
       clearTimeout(authTimer);
       controllers.delete(socket);
+      for (const deviceId of socket.previewDevices) {
+        const stillViewed = [...controllers].some((controller) =>
+          controller.previewDevices?.has(deviceId));
+        const target = devices.get(deviceId);
+        if (!stillViewed && target) {
+          const now = Date.now();
+          sendJson(target.socket, {
+            type: "command.request",
+            commandId: crypto.randomUUID(),
+            command: "preview_stop",
+            parameters: {},
+            issuedAt: now,
+            expiresAt: now + 30_000
+          });
+        }
+      }
     });
     socket.on("error", (error) => logger.warn?.("Control socket error", error.message));
   });
@@ -301,6 +354,18 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
   });
 
   return server;
+}
+
+function validPreviewFrame(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  if (!Number.isInteger(payload.accountIndex)
+      || payload.accountIndex < 0 || payload.accountIndex > 3) return false;
+  if (!Number.isSafeInteger(payload.sequence) || payload.sequence < 0) return false;
+  if (!Number.isInteger(payload.width) || payload.width < 1 || payload.width > 720) return false;
+  if (!Number.isInteger(payload.height) || payload.height < 1 || payload.height > 1800) return false;
+  if (payload.mime !== "image/jpeg" || typeof payload.imageBase64 !== "string") return false;
+  if (payload.imageBase64.length > Math.ceil(MAX_PREVIEW_BYTES * 4 / 3) + 8) return false;
+  return Buffer.byteLength(payload.imageBase64, "base64") <= MAX_PREVIEW_BYTES;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

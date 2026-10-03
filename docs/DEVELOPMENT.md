@@ -22,7 +22,7 @@ Play Keeper 是一个面向小米 Civi 4 Pro / HyperOS 的轻量 Android WebView
 - 不保存或自动填写账号密码。
 - 不绕过网站登录、安全验证或挂机规则。
 - 不承诺按电源键熄屏、退到后台或被 HyperOS 杀进程后网页仍持续运行。
-- 不提供整机画面、任意点击、键盘注入、ADB、shell 或系统级远控。
+- 不提供整机画面、任意坐标注入、键盘注入、ADB、shell 或系统级远控；只允许用户在最新 WebView 预览上执行受控单击。
 
 ## 2. 技术栈与兼容范围
 
@@ -240,20 +240,32 @@ Android 原生 `CookieManager.getInstance()` 在同一应用内默认共享 Cook
 - 状态变化和每次电池采样都会发送最新完整快照。
 - 所有命令在 Android 主线程执行，并返回明确成功/失败结果。
 
-允许的命令固定为：`switch_account`、`reload_account`、`open_home`、`set_browser_mode`、`set_orientation`、`enter_black_screen`、`exit_black_screen`、`request_status`。不要新增任意 URL、JavaScript 或系统命令入口。
+允许的命令固定为：`switch_account`、`reload_account`、`open_home`、`set_browser_mode`、`set_orientation`、`enter_black_screen`、`exit_black_screen`、`request_status`、`preview_start`、`preview_stop`、`pointer_tap`。不要新增任意 URL、JavaScript 或系统命令入口。
 
-## 12. 已知限制
+## 12. 页面预览、账号名称与远程单击
+
+- 浏览器发送 `preview_start` 后，Android 在主线程把目标 WebView 绘制到最大 720px 的 RGB_565 Bitmap。
+- 图片使用 JPEG 压缩，初始质量 55；超过 700 KiB 时降到 32，仍超限则丢弃该帧。
+- 最大帧率 1 FPS，截图通过 WSS Base64 JSON 传输；Relay 只校验并转发，不保存。
+- 浏览器隐藏、主动停止或最后一个预览控制连接断开时，Relay 向 Android 下发 `preview_stop`。
+- `pointer_tap` 只接受 0～1 的归一化坐标、目标账号和截图序号；超过最近 5 帧的点击拒绝执行。
+- Android 将坐标映射到自己的 WebView 并直接分发一次 DOWN/UP，不需要无障碍或 MediaProjection 权限。
+- 账号登录名称通过限定 DOM 选择器读取；自动识别失败时，用户可长按 Android 账号按钮手动设置。
+- 黑屏仍是 Activity 前台常亮状态。遮罩只覆盖显示，预览直接绘制底层 WebView；该能力必须在 Civi 4 Pro 真机验证。
+
+## 13. 已知限制
 
 - WebView 是否真正持续执行定时器最终取决于网站实现、系统 WebView 和 HyperOS 资源策略。
 - 同时打开 4 个账号会显著增加内存和耗电，应按 1、2、4 个账号逐步压力测试。
 - 页面异常检测目前基于主框架错误和超时，不会分析游戏业务状态。
 - APP 被系统结束后不能继续挂机；下次启动只能恢复登录状态和最后页面。
 - Debug APK 使用 Android Debug 证书，不适合正式分发。正式发布必须使用稳定私有签名。
-- v0.4 只提供状态与 APP 内按钮操作，不提供画面预览或网页坐标点击。
+- WebView 硬件渲染在部分 ROM 上可能导致 `draw(Canvas)` 截图空白，需以 Civi 4 Pro 实测为准。
+- v0.5 远程只支持单击，不支持拖动、多点触控、键盘、文件上传或声音。
 - Activity 不在运行时，当前版本不会额外启动前台服务维持远程在线。
 - 实时监控尚未保存 7 天历史；历史图表和告警阈值属于后续版本。
 
-## 13. 修改原则
+## 14. 修改原则
 
 1. 不改变现有 Profile 名称和测试包名，除非提供迁移方案。
 2. 不把账号密码写入源码、配置、日志或仓库。

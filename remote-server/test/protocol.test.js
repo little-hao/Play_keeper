@@ -42,7 +42,7 @@ test("device telemetry and browser command complete a round trip", async (contex
 
   const deviceAccepted = nextJson(device, "device.accepted");
   device.send(JSON.stringify({
-    type: "device.hello", deviceId: "PK-ABCDEF123456", token: deviceToken, appVersion: "0.4.0"
+    type: "device.hello", deviceId: "PK-ABCDEF123456", token: deviceToken, appVersion: "0.5.0"
   }));
   await deviceAccepted;
 
@@ -78,6 +78,51 @@ test("device telemetry and browser command complete a round trip", async (contex
   const result = await resultPromise;
   assert.equal(result.success, true);
   assert.equal(result.commandId, request.commandId);
+
+  const startPromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "preview_start",
+    parameters: { accountIndex: 2, maxWidth: 720, fps: 1 }
+  }));
+  const start = await startPromise;
+  assert.equal(start.command, "preview_start");
+
+  const previewPromise = nextJson(control, "preview.frame");
+  device.send(JSON.stringify({
+    type: "preview.frame",
+    timestamp: Date.now(),
+    payload: {
+      accountIndex: 2,
+      accountLabel: "测试用户",
+      sequence: 7,
+      width: 720,
+      height: 400,
+      mime: "image/jpeg",
+      blackOverlay: true,
+      imageBase64: Buffer.from("fake-jpeg").toString("base64")
+    }
+  }));
+  const preview = await previewPromise;
+  assert.equal(preview.payload.accountLabel, "测试用户");
+  assert.equal(preview.payload.sequence, 7);
+
+  const tapPromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "pointer_tap",
+    parameters: { accountIndex: 2, x: 0.25, y: 0.75, frameSequence: 7 }
+  }));
+  const tap = await tapPromise;
+  assert.equal(tap.command, "pointer_tap");
+  assert.equal(tap.parameters.x, 0.25);
+
+  const automaticStopPromise = nextJson(device, "command.request");
+  control.close();
+  const automaticStop = await automaticStopPromise;
+  assert.equal(automaticStop.command, "preview_stop");
 });
 
 test("invalid tokens and invalid commands are rejected", async (context) => {
@@ -120,7 +165,9 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
 
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
-  assert.deepEqual(await health.json(), { ok: true, service: "play-keeper-relay" });
+  assert.deepEqual(await health.json(), {
+    ok: true, service: "play-keeper-relay", version: "0.5.0"
+  });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);
   assert.equal(dashboard.status, 200);

@@ -54,6 +54,16 @@ small { color: var(--muted); }
 .account-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin-bottom: 10px; }
 .account-tabs button.active { color: #07120a; background: var(--green); border-color: var(--green); font-weight: 750; }
 .button-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
+.preview-panel { margin: 12px 0; padding: 12px; background: #0d1118; border: 1px solid var(--line); border-radius: 12px; }
+.preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.preview-heading > div:first-child { display: flex; flex-direction: column; gap: 3px; }
+.preview-heading > div:last-child { display: flex; gap: 6px; }
+.preview-heading button { min-height: 34px; padding: 6px 10px; font-size: 12px; }
+.preview-stage { display: grid; place-items: center; min-height: 180px; overflow: hidden; background: #030507; border-radius: 9px; }
+.preview-stage > * { grid-area: 1 / 1; }
+.preview-placeholder { padding: 20px; text-align: center; font-size: 13px; }
+.preview-image { display: block; width: 100%; height: auto; max-height: 72vh; object-fit: contain; cursor: crosshair; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+.preview-help { margin: 8px 0 0; font-size: 11px; }
 .device-note { min-height: 20px; margin: 11px 0 0; font-size: 12px; }
 .log-panel { margin-top: 14px; padding: 16px; }
 .section-title { display: flex; align-items: center; justify-content: space-between; }

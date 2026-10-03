@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=0.5.0">
 </head>
 <body>
   <main class="shell">
@@ -55,11 +55,23 @@
         <div><small>当前账号</small><strong class="active-account">--</strong></div>
       </div>
       <div class="account-tabs" role="group" aria-label="账号切换"></div>
+      <section class="preview-panel">
+        <div class="preview-heading">
+          <div><strong>手机页面</strong><small class="preview-status">按需加载，不在服务器保存</small></div>
+          <div>
+            <button class="preview-start primary">加载画面</button>
+            <button class="preview-stop secondary">停止</button>
+          </div>
+        </div>
+        <div class="preview-stage">
+          <p class="preview-placeholder">点击“加载画面”查看当前账号页面</p>
+          <img class="preview-image hidden" alt="手机当前网页预览，可直接点击操作">
+        </div>
+        <p class="preview-help">画面最高每秒更新一次。点击画面会在当前 WebView 的对应位置执行一次单击。</p>
+      </section>
       <div class="button-grid">
         <button data-command="reload_account">刷新账号</button>
         <button data-command="open_home">返回首页</button>
-        <button data-command="set_browser_mode" data-mode="desktop">桌面模式</button>
-        <button data-command="set_browser_mode" data-mode="mobile">手机模式</button>
         <button data-command="set_orientation" data-orientation="landscape">横屏</button>
         <button data-command="set_orientation" data-orientation="portrait">竖屏</button>
         <button data-command="enter_black_screen">开启黑屏</button>
@@ -68,6 +80,6 @@
       <p class="device-note"></p>
     </article>
   </template>
-  <script type="module" src="/app.js"></script>
+  <script type="module" src="/app.js?v=0.5.0"></script>
 </body>
 </html>

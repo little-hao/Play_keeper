@@ -9,6 +9,7 @@ import android.content.pm.ActivityInfo;
 import android.content.pm.PackageInfo;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Insets;
 import android.graphics.drawable.GradientDrawable;
@@ -19,7 +20,9 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.text.InputType;
+import android.util.Base64;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -52,7 +55,9 @@ import androidx.webkit.WebViewFeature;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.json.JSONTokener;
 
+import java.io.ByteArrayOutputStream;
 import java.util.Locale;
 
 public final class MainActivity extends Activity {
@@ -63,13 +68,28 @@ public final class MainActivity extends Activity {
     private static final String PREF_LAST_URL_PREFIX = "last_url_";
     private static final String PREF_ACCOUNT_OPENED_PREFIX = "account_opened_";
     private static final String PREF_LANDSCAPE_PREFIX = "landscape_mode_";
+    private static final String PREF_ACCOUNT_LABEL_PREFIX = "account_label_";
+    private static final String PREF_ACCOUNT_LABEL_MANUAL_PREFIX = "account_label_manual_";
     private static final int MAX_ACCOUNTS = 4;
     private static final long PAGE_LOAD_TIMEOUT_MS = 60_000L;
     private static final long[] RETRY_DELAYS_MS = {3_000L, 10_000L, 30_000L, 60_000L};
     private static final String DESKTOP_USER_AGENT =
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                     + "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 "
-                    + "SGPlayKeeper/0.3";
+                    + "SGPlayKeeper/0.5";
+    private static final int PREVIEW_DEFAULT_WIDTH = 720;
+    private static final int PREVIEW_MAX_ENCODED_BYTES = 700 * 1024;
+    private static final long PREVIEW_MIN_INTERVAL_MS = 1_000L;
+    private static final String USERNAME_DETECTION_SCRIPT =
+            "(function(){"
+                    + "const s=['[data-username]','[data-user-name]','#username','#userName',"
+                    + "'.username','.user-name','.user_name','.nickname','.nick-name',"
+                    + "'#nickname','#nickName'];"
+                    + "for(const q of s){const e=document.querySelector(q);if(!e)continue;"
+                    + "let v=e.getAttribute('data-username')||e.getAttribute('data-user-name')"
+                    + "||e.value||e.textContent||'';v=v.replace(/\\s+/g,' ').trim();"
+                    + "if(v&&v.length<=32&&!/^(用户名|账号|昵称|登录|未登录|user|username)$/i.test(v))return v;}"
+                    + "return null;})()";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Session[] sessions = new Session[MAX_ACCOUNTS];
@@ -101,6 +121,12 @@ public final class MainActivity extends Activity {
     private boolean blackMode;
     private boolean activityDestroyed;
     private boolean multiProfileSupported;
+    private boolean previewEnabled;
+    private int previewAccount = -1;
+    private int previewMaxWidth = PREVIEW_DEFAULT_WIDTH;
+    private long previewIntervalMs = PREVIEW_MIN_INTERVAL_MS;
+    private long previewSequence;
+    private Runnable previewRunnable;
     private float brightnessBeforeBlack = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
     private long lastBackPressedAt;
 
@@ -172,6 +198,10 @@ public final class MainActivity extends Activity {
             final int accountIndex = i;
             accountButtons[i] = makeButton("账号" + (i + 1),
                     view -> selectAccount(accountIndex, true));
+            accountButtons[i].setOnLongClickListener(view -> {
+                showAccountNameDialog(accountIndex);
+                return true;
+            });
         }
 
         blackButton = makeButton("黑屏", view -> enterBlackMode());
@@ -364,6 +394,9 @@ public final class MainActivity extends Activity {
                     public void onRemoteStateChanged(RemoteConnectionManager.State state,
                                                      String message) {
                         remoteState = state;
+                        if (state != RemoteConnectionManager.State.CONNECTED) {
+                            stopPreview();
+                        }
                         updateRemoteButton();
                     }
 
@@ -410,6 +443,44 @@ public final class MainActivity extends Activity {
                 .setTitle("耗电与温度监控")
                 .setMessage(details)
                 .setPositiveButton("关闭", null)
+                .show();
+    }
+
+    private void showAccountNameDialog(int accountIndex) {
+        EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setSelectAllOnFocus(true);
+        input.setText(accountDisplayName(accountIndex));
+        input.setHint("登录用户名或自定义名称");
+        int padding = dp(20);
+        FrameLayout holder = new FrameLayout(this);
+        holder.setPadding(padding, 0, padding, 0);
+        holder.addView(input, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        new AlertDialog.Builder(this)
+                .setTitle("账号" + (accountIndex + 1) + "名称")
+                .setMessage("网页会尝试自动识别登录用户名；识别不准时可在这里手动设置。留空会恢复自动识别。")
+                .setView(holder)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("保存", (dialog, which) -> {
+                    String label = sanitizeAccountLabel(input.getText().toString());
+                    SharedPreferences.Editor editor = preferences.edit();
+                    if (label.isBlank()) {
+                        editor.remove(accountLabelKey(accountIndex));
+                        editor.remove(accountLabelManualKey(accountIndex));
+                    } else {
+                        editor.putString(accountLabelKey(accountIndex), label);
+                        editor.putBoolean(accountLabelManualKey(accountIndex), true);
+                    }
+                    editor.apply();
+                    updateToolbarState();
+                    Session session = sessions[accountIndex];
+                    if (label.isBlank() && session != null) {
+                        detectAccountName(session);
+                    }
+                    pushTelemetry();
+                })
                 .show();
     }
 
@@ -555,9 +626,38 @@ public final class MainActivity extends Activity {
                     resultMessage = "黑屏保护已关闭";
                     break;
                 case "request_status":
+                    for (Session session : sessions) {
+                        if (session != null) {
+                            detectAccountName(session);
+                        }
+                    }
                     success = true;
                     resultMessage = "状态已更新";
                     break;
+                case "preview_start": {
+                    int index = requiredAccountIndex(parameters);
+                    int maxWidth = parameters.optInt("maxWidth", PREVIEW_DEFAULT_WIDTH);
+                    double fps = parameters.optDouble("fps", 1d);
+                    startPreview(index, maxWidth, fps);
+                    success = true;
+                    resultMessage = "页面预览已启动";
+                    break;
+                }
+                case "preview_stop":
+                    stopPreview();
+                    success = true;
+                    resultMessage = "页面预览已停止";
+                    break;
+                case "pointer_tap": {
+                    int index = requiredAccountIndex(parameters);
+                    executePreviewTap(index,
+                            parameters.optDouble("x", -1d),
+                            parameters.optDouble("y", -1d),
+                            parameters.optLong("frameSequence", -1L));
+                    success = true;
+                    resultMessage = "远程点击已执行";
+                    break;
+                }
                 default:
                     resultMessage = "不支持的远程命令";
                     break;
@@ -575,6 +675,128 @@ public final class MainActivity extends Activity {
             throw new IllegalArgumentException("账号索引无效");
         }
         return index;
+    }
+
+    private void startPreview(int accountIndex, int requestedMaxWidth, double requestedFps) {
+        getOrCreateSession(accountIndex);
+        previewAccount = accountIndex;
+        previewMaxWidth = Math.max(360, Math.min(requestedMaxWidth, 720));
+        double fps = Math.max(0.2d, Math.min(requestedFps, 1d));
+        previewIntervalMs = Math.max(PREVIEW_MIN_INTERVAL_MS, Math.round(1_000d / fps));
+        previewEnabled = true;
+        if (previewRunnable != null) {
+            mainHandler.removeCallbacks(previewRunnable);
+        }
+        previewRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (!previewEnabled || activityDestroyed) {
+                    return;
+                }
+                capturePreviewFrame();
+                mainHandler.postDelayed(this, previewIntervalMs);
+            }
+        };
+        mainHandler.post(previewRunnable);
+        pushTelemetry();
+    }
+
+    private void stopPreview() {
+        previewEnabled = false;
+        previewAccount = -1;
+        if (previewRunnable != null) {
+            mainHandler.removeCallbacks(previewRunnable);
+            previewRunnable = null;
+        }
+        pushTelemetry();
+    }
+
+    private void capturePreviewFrame() {
+        if (!previewEnabled || previewAccount < 0 || previewAccount >= MAX_ACCOUNTS) {
+            return;
+        }
+        Session session = sessions[previewAccount];
+        if (session == null || session.webView.getWidth() <= 0 || session.webView.getHeight() <= 0) {
+            return;
+        }
+        WebView view = session.webView;
+        int sourceWidth = view.getWidth();
+        int sourceHeight = view.getHeight();
+        int targetWidth = Math.min(previewMaxWidth, sourceWidth);
+        int targetHeight = Math.max(1, Math.round(sourceHeight * targetWidth / (float) sourceWidth));
+        Bitmap bitmap = null;
+        try {
+            bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.RGB_565);
+            Canvas canvas = new Canvas(bitmap);
+            canvas.drawColor(Color.WHITE);
+            canvas.scale(targetWidth / (float) sourceWidth, targetHeight / (float) sourceHeight);
+            view.draw(canvas);
+
+            byte[] encoded = compressPreview(bitmap, 55);
+            if (encoded.length > PREVIEW_MAX_ENCODED_BYTES) {
+                encoded = compressPreview(bitmap, 32);
+            }
+            if (encoded.length > PREVIEW_MAX_ENCODED_BYTES) {
+                return;
+            }
+            long sequence = ++previewSequence;
+            JSONObject frame = new JSONObject();
+            frame.put("accountIndex", previewAccount);
+            frame.put("accountLabel", accountDisplayName(previewAccount));
+            frame.put("sequence", sequence);
+            frame.put("width", targetWidth);
+            frame.put("height", targetHeight);
+            frame.put("mime", "image/jpeg");
+            frame.put("blackOverlay", blackMode);
+            frame.put("imageBase64", Base64.encodeToString(encoded, Base64.NO_WRAP));
+            remoteConnectionManager.sendPreviewFrame(frame);
+        } catch (RuntimeException | JSONException ignored) {
+            // A failed frame must not interrupt the local挂机 session.
+        } finally {
+            if (bitmap != null) {
+                bitmap.recycle();
+            }
+        }
+    }
+
+    private byte[] compressPreview(Bitmap bitmap, int quality) {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        bitmap.compress(Bitmap.CompressFormat.JPEG, quality, output);
+        return output.toByteArray();
+    }
+
+    private void executePreviewTap(int accountIndex, double normalizedX,
+                                   double normalizedY, long frameSequence) {
+        if (!previewEnabled || previewAccount != accountIndex) {
+            throw new IllegalStateException("页面预览未开启或账号已变化");
+        }
+        if (normalizedX < 0d || normalizedX > 1d || normalizedY < 0d || normalizedY > 1d) {
+            throw new IllegalArgumentException("点击坐标无效");
+        }
+        if (frameSequence < 0L || frameSequence > previewSequence
+                || previewSequence - frameSequence > 5L) {
+            throw new IllegalArgumentException("预览画面已过期，请等待刷新");
+        }
+        Session session = getOrCreateSession(accountIndex);
+        WebView view = session.webView;
+        if (view.getWidth() <= 0 || view.getHeight() <= 0) {
+            throw new IllegalStateException("网页尚未完成布局");
+        }
+        float x = (float) (normalizedX * view.getWidth());
+        float y = (float) (normalizedY * view.getHeight());
+        long downTime = SystemClock.uptimeMillis();
+        MotionEvent down = MotionEvent.obtain(
+                downTime, downTime, MotionEvent.ACTION_DOWN, x, y, 0);
+        MotionEvent up = MotionEvent.obtain(
+                downTime, downTime + 70L, MotionEvent.ACTION_UP, x, y, 0);
+        try {
+            view.requestFocus();
+            view.dispatchTouchEvent(down);
+            view.dispatchTouchEvent(up);
+        } finally {
+            down.recycle();
+            up.recycle();
+        }
     }
 
     private Session getOrCreateSession(int index) {
@@ -601,10 +823,15 @@ public final class MainActivity extends Activity {
             telemetry.put("device", device);
 
             JSONObject app = new JSONObject();
-            app.put("versionCode", 4);
-            app.put("versionName", "0.4.0-remote-test");
+            app.put("versionCode", 5);
+            app.put("versionName", "0.5.0-preview-test");
             app.put("activeAccount", activeAccount);
             app.put("blackScreen", blackMode);
+            app.put("executionMode", blackMode
+                    ? "foreground_black_overlay" : "foreground_visible");
+            app.put("keepScreenOn", true);
+            app.put("previewEnabled", previewEnabled);
+            app.put("previewAccount", previewAccount);
             app.put("remoteState", remoteState.name().toLowerCase(Locale.ROOT));
             telemetry.put("app", app);
 
@@ -616,7 +843,9 @@ public final class MainActivity extends Activity {
                 Session session = sessions[i];
                 JSONObject account = new JSONObject();
                 account.put("index", i);
-                account.put("label", "账号" + (i + 1));
+                account.put("label", accountDisplayName(i));
+                account.put("labelManual", preferences.getBoolean(
+                        accountLabelManualKey(i), false));
                 account.put("opened", preferences.getBoolean(accountOpenedKey(i), i == 0));
                 account.put("loaded", session != null);
                 account.put("active", i == activeAccount);
@@ -664,6 +893,9 @@ public final class MainActivity extends Activity {
         session.webView.requestFocus();
         updateToolbarState();
         updateProgress(session.progress);
+        if (previewEnabled && previewAccount != accountIndex) {
+            startPreview(accountIndex, previewMaxWidth, 1_000d / previewIntervalMs);
+        }
 
         if (userInitiated) {
             showToast("已切换到账号" + (accountIndex + 1));
@@ -800,6 +1032,7 @@ public final class MainActivity extends Activity {
             if (session.cookieManager != null) {
                 session.cookieManager.flush();
             }
+            scheduleAccountNameDetection(session);
             pushTelemetry();
         }
 
@@ -975,6 +1208,7 @@ public final class MainActivity extends Activity {
     private void updateToolbarState() {
         for (int i = 0; i < MAX_ACCOUNTS; i++) {
             boolean active = i == activeAccount;
+            accountButtons[i].setText(compactAccountDisplayName(i));
             accountButtons[i].setBackground(buttonBackground(active));
             accountButtons[i].setTextColor(active ? Color.rgb(10, 30, 16) : Color.WHITE);
             accountButtons[i].setAlpha(i == 0 || multiProfileSupported ? 1f : 0.45f);
@@ -1047,7 +1281,7 @@ public final class MainActivity extends Activity {
         if (blackMode) {
             return;
         }
-        showToast("黑屏保护已开启；连点屏幕5次或按音量键恢复");
+        showToast("前台常亮黑屏已开启；连点屏幕5次或按音量键恢复");
         blackMode = true;
         WindowManager.LayoutParams attributes = getWindow().getAttributes();
         brightnessBeforeBlack = attributes.screenBrightness;
@@ -1185,6 +1419,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         activityDestroyed = true;
+        stopPreview();
         if (batteryMonitor != null) {
             batteryMonitor.stop();
         }
@@ -1240,6 +1475,81 @@ public final class MainActivity extends Activity {
 
     private String landscapeModeKey(int accountIndex) {
         return PREF_LANDSCAPE_PREFIX + accountIndex;
+    }
+
+    private String accountLabelKey(int accountIndex) {
+        return PREF_ACCOUNT_LABEL_PREFIX + accountIndex;
+    }
+
+    private String accountLabelManualKey(int accountIndex) {
+        return PREF_ACCOUNT_LABEL_MANUAL_PREFIX + accountIndex;
+    }
+
+    private String accountDisplayName(int accountIndex) {
+        String fallback = "账号" + (accountIndex + 1);
+        String saved = preferences.getString(accountLabelKey(accountIndex), fallback);
+        String sanitized = sanitizeAccountLabel(saved);
+        return sanitized.isBlank() ? fallback : sanitized;
+    }
+
+    private String compactAccountDisplayName(int accountIndex) {
+        String label = accountDisplayName(accountIndex);
+        return label.length() > 8 ? label.substring(0, 7) + "…" : label;
+    }
+
+    private String sanitizeAccountLabel(String value) {
+        if (value == null) {
+            return "";
+        }
+        String sanitized = value.replaceAll("[\\r\\n\\t]", " ")
+                .replaceAll("\\s{2,}", " ")
+                .trim();
+        if (sanitized.length() > 24) {
+            sanitized = sanitized.substring(0, 24);
+        }
+        return sanitized;
+    }
+
+    private void detectAccountName(Session session) {
+        if (preferences.getBoolean(accountLabelManualKey(session.index), false)) {
+            return;
+        }
+        session.webView.evaluateJavascript(USERNAME_DETECTION_SCRIPT, encodedResult -> {
+            if (activityDestroyed || sessions[session.index] != session
+                    || encodedResult == null || "null".equals(encodedResult)) {
+                return;
+            }
+            try {
+                Object decoded = new JSONTokener(encodedResult).nextValue();
+                if (!(decoded instanceof String)) {
+                    return;
+                }
+                String label = sanitizeAccountLabel((String) decoded);
+                if (label.isBlank()) {
+                    return;
+                }
+                String current = preferences.getString(accountLabelKey(session.index), "");
+                if (!label.equals(current)) {
+                    preferences.edit().putString(accountLabelKey(session.index), label).apply();
+                    updateToolbarState();
+                    pushTelemetry();
+                }
+            } catch (JSONException ignored) {
+                // Page scripts can return null or non-string values; keep the fallback label.
+            }
+        });
+    }
+
+    private void scheduleAccountNameDetection(Session session) {
+        detectAccountName(session);
+        long[] delays = {2_000L, 8_000L};
+        for (long delay : delays) {
+            mainHandler.postDelayed(() -> {
+                if (!activityDestroyed && sessions[session.index] == session) {
+                    detectAccountName(session);
+                }
+            }, delay);
+        }
     }
 
     private int dp(int value) {

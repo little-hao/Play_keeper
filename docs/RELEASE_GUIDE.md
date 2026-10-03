@@ -26,8 +26,8 @@ app/build/outputs/apk/debug/app-debug.apk
 
 ```groovy
 defaultConfig {
-    versionCode 4
-    versionName '0.4.0-remote-test'
+    versionCode 5
+    versionName '0.5.0-preview-test'
 }
 ```
 
@@ -112,6 +112,7 @@ keyPassword=***
 6. 2 个账号连续挂机 8 小时。
 7. 4 个账号连续挂机 8 小时并记录内存、温度和掉线情况。
 8. 通过后再进行 24 小时测试。
+9. 远程页面预览、单击、Safari 后台自动停止和黑屏期间预览通过测试。
 
 测试记录至少包含：
 

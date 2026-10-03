@@ -113,6 +113,22 @@ final class RemoteConnectionManager {
         }
     }
 
+    void sendPreviewFrame(JSONObject frame) {
+        if (!authenticated || webSocket == null) {
+            return;
+        }
+        try {
+            JSONObject envelope = new JSONObject();
+            envelope.put("type", "preview.frame");
+            envelope.put("deviceId", config.deviceId);
+            envelope.put("timestamp", System.currentTimeMillis());
+            envelope.put("payload", frame);
+            webSocket.send(envelope.toString());
+        } catch (JSONException ignored) {
+            // Preview is best effort. The next scheduled frame can recover.
+        }
+    }
+
     private void connect(int connectionGeneration) {
         if (!desiredConnection || connectionGeneration != generation) {
             return;
@@ -122,7 +138,7 @@ final class RemoteConnectionManager {
         try {
             Request request = new Request.Builder()
                     .url(config.endpoint)
-                    .header("User-Agent", "PlayKeeper-Android/0.4")
+                    .header("User-Agent", "PlayKeeper-Android/0.5")
                     .build();
             webSocket = client.newWebSocket(request, new SocketListener(connectionGeneration));
         } catch (RuntimeException error) {
@@ -177,7 +193,7 @@ final class RemoteConnectionManager {
                 hello.put("type", "device.hello");
                 hello.put("deviceId", config.deviceId);
                 hello.put("token", config.token);
-                hello.put("appVersion", "0.4.0");
+                hello.put("appVersion", "0.5.0");
                 socket.send(hello.toString());
             } catch (JSONException ignored) {
                 socket.close(1002, "invalid hello");

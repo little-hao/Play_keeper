@@ -1,6 +1,6 @@
 # 远程连接方案
 
-状态：v0.4 状态与白名单命令 MVP 已实现；画面预览和远程点击尚未实现。
+状态：v0.5 已实现状态、白名单命令、按需 WebView 预览和受控单击；等待 Civi 4 Pro 真机验证。
 
 目标是通过 iPhone Safari 或桌面网页远程查看并控制 Play Keeper，而不是接管整台 Android 手机。
 
@@ -71,6 +71,9 @@ set_orientation(accountIndex, landscape|portrait)
 enter_black_screen()
 exit_black_screen()
 request_status()
+preview_start(accountIndex, maxWidth, fps)
+preview_stop()
+pointer_tap(accountIndex, x, y, frameSequence)
 ```
 
 每条命令包含：
@@ -92,15 +95,15 @@ Android 执行后返回 `accepted / completed / failed / expired`，网页不能
 - 不传输账号密码、Cookie、LocalStorage 或登录令牌。
 - 不提供没有超时限制的远程输入通道。
 
-## 4. 第二阶段：网页画面预览
+## 4. 第二阶段：网页画面预览（v0.5 已实现原型）
 
 第一阶段稳定后，原型验证本 APP 自有 WebView 捕获：
 
-1. 在 Android 内将目标 WebView 绘制到 Bitmap。
-2. 缩放到 720p 以下。
-3. 编码为 WebP/JPEG，默认 0.5～1 帧/秒。
+1. 在 Android 内将目标 WebView 绘制到 RGB_565 Bitmap。
+2. 最大宽度限制为 720px，保持原始宽高比。
+3. 编码为 JPEG，默认 1 帧/秒，单帧最大 700 KiB。
 4. 仅在远程页面打开预览时传输。
-5. 无操作 60 秒后自动停止。
+5. 浏览器隐藏、断开、用户停止或最后一个预览控制者离线时自动停止。
 
 此方式只捕获 APP 自己拥有的 WebView，不使用系统 MediaProjection。必须在 Civi 4 Pro 验证以下问题：
 
@@ -111,15 +114,14 @@ Android 执行后返回 `accepted / completed / failed / expired`，网页不能
 
 如果 `WebView.draw(Canvas)` 不可靠，可尝试 PixelCopy 捕获当前窗口；但窗口处于黑屏时 PixelCopy 只会得到黑色画面，因此它不能单独满足需求。
 
-## 5. 第三阶段：远程点击
+## 5. 第三阶段：远程点击（v0.5 已实现单击原型）
 
-仅在低帧率预览验证稳定后实现：
+当前单击原型遵循：
 
 - 网页发送归一化坐标 `x: 0..1, y: 0..1`。
 - Android 根据目标 WebView 实际尺寸映射坐标。
 - APP 内部向自己的 WebView 分发受控触摸事件。
-- 一次只允许一个控制者持有控制锁。
-- 控制锁 60 秒无操作自动释放。
+- 点击必须携带最新截图序号；落后超过 5 帧或账号变化后拒绝。
 - 远程控制必须在 Android 端设置中显式启用。
 - 每次点击写入本地审计记录，但不记录网页输入内容。
 
@@ -149,7 +151,7 @@ Android 执行后返回 `accepted / completed / failed / expired`，网页不能
 
 ## 7. 鉴权、配对与安全
 
-### 7.1 v0.4 当前鉴权
+### 7.1 v0.5 当前鉴权
 
 - Relay 启动时从环境变量读取不同的 `DEVICE_TOKEN` 与 `ADMIN_TOKEN`，两者均至少 16 位。
 - Android 使用 `DEVICE_TOKEN` 连接 `/device`，网页使用 `ADMIN_TOKEN` 连接 `/control`。
@@ -185,7 +187,7 @@ Android 首次连接：
   "type": "device.hello",
   "deviceId": "PK-ABCDEF123456",
   "token": "DEVICE_TOKEN",
-  "appVersion": "0.4.0"
+  "appVersion": "0.5.0"
 }
 ```
 
@@ -254,17 +256,20 @@ Relay 校验后向 Android 下发：
 
 尚未完成：1 分钟聚合、7 天本地历史、二维码配对、长期审计和主动推送提醒。
 
-### v0.6：按需页面快照
+### v0.5：按需页面快照与单击（已完成原型）
 
 - 单张截图请求
 - 低帧率预览
 - 带宽、CPU和温度保护
-
-### v0.7：受控点击原型
-
 - 归一化坐标点击
-- 控制锁和会话超时
-- 断线自动停止控制
+- 截图序号校验
+- 断线自动停止预览
+
+### v0.6：交互与真机稳定性
+
+- Civi 4 Pro 黑屏期间截图可靠性验证
+- 滑动与长按控制锁设计
+- 温度过高时自动降帧或停止预览
 
 ## 10. 第一阶段验收标准
 
