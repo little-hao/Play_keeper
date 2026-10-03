@@ -1,6 +1,6 @@
 # 远程连接方案
 
-状态：v1.0.0 已实现状态、白名单命令、三档 WebView 预览、横竖屏等比适配、受控单击、HTML 选择项桥接以及两类账号级脚本；等待 Civi 4 Pro 真机全流程验证。
+状态：v1.1.0 已实现状态、白名单命令、三档 WebView 预览、横竖屏等比适配、受控单击、HTML 选择项桥接，以及拍卖/商店卖出/圣殿守护；等待 Civi 4 Pro 真机全流程验证。
 
 目标是通过 iPhone Safari 或桌面网页远程查看并控制 Play Keeper，而不是接管整台 Android 手机。
 
@@ -75,8 +75,10 @@ preview_start(accountIndex, maxWidth, fps)
 preview_stop()
 pointer_tap(accountIndex, x, y, frameSequence)
 select_option(accountIndex, elementToken, optionIndex)
-configure_auto_sell(accountIndex, enabled, items, buyer, intervalHours)
-run_auto_sell(accountIndex)
+configure_auto_auction(accountIndex, enabled, items, buyer, intervalHours)
+run_auto_auction(accountIndex)
+configure_store_sell(accountIndex, items)
+run_store_sell(accountIndex)
 configure_temple_guard(accountIndex, enabled)
 run_temple_guard(accountIndex)
 ```
@@ -137,8 +139,9 @@ HTML `<select>` 是特殊情况：WebView 会把它渲染为 Android 原生弹�
 ## 5.1 远程脚本配置（v1.0）
 
 - 控制台从当前活动账号的 telemetry 读取脚本状态，不在 VPS 持久化脚本配置。
-- `configure_auto_sell` 只接受 1–10 个长度不超过 30 的道具名、1–168 小时和安全字符组成的买家名。
-- `run_auto_sell` 和 `run_temple_guard` 只是要求 Android 开始一次检查；最终执行结果以 Android 脚本状态和操作日志为准。
+- `configure_auto_auction` 只接受进化宝石/曙光印记、1–168 小时和安全字符组成的买家名。
+- `configure_store_sell` 当前只接受单项金币券；VPS 无法借此请求卖出任意道具。
+- `run_auto_auction`、`run_store_sell` 和 `run_temple_guard` 只是要求 Android 开始一次检查；最终结果以 Android 脚本状态和操作日志为准。
 - Relay 不会生成或转发任意 JavaScript；自动化脚本固定编译在 APK 中。
 
 ## 6. 服务器建议
@@ -201,7 +204,7 @@ Android 首次连接：
   "type": "device.hello",
   "deviceId": "PK-ABCDEF123456",
   "token": "DEVICE_TOKEN",
-  "appVersion": "1.0.0"
+  "appVersion": "1.1.0"
 }
 ```
 
@@ -214,7 +217,7 @@ Android 上报：
   "timestamp": 0,
   "payload": {
     "app": {
-      "versionCode": 7,
+      "versionCode": 8,
       "activeAccount": 0,
       "blackScreen": true
     },

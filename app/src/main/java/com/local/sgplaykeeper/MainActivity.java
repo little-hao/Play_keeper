@@ -77,32 +77,43 @@ public final class MainActivity extends Activity {
     private static final String DESKTOP_USER_AGENT =
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                     + "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 "
-                    + "SGPlayKeeper/0.5";
+                    + "PlayKeeper/1.1";
     private static final int PREVIEW_DEFAULT_WIDTH = 720;
     private static final int PREVIEW_MAX_WIDTH = 2_560;
     private static final int PREVIEW_MAX_ENCODED_BYTES = 2_500 * 1024;
     private static final long PREVIEW_MIN_INTERVAL_MS = 1_000L;
     private static final String USERNAME_DETECTION_SCRIPT =
             "(function(){const clean=v=>(v||'').replace(/\\s+/g,' ').trim();"
-                    + "const valid=v=>v&&v.length<=32&&!/^(用户名|账号|昵称|登录|未登录|user|username)$/i.test(v);"
+                    + "const blocked=/^(用户名|账号|昵称|登录|未登录|user|username|运行中|待机|进入主游戏|曙光口袋助手|Lv\\d+)$/i;"
+                    + "const extract=v=>{v=clean(v);if(!v||v.length>80)return null;"
+                    + "const all=v.match(/[\\p{L}\\p{N}_.-]{2,32}/gu)||[];"
+                    + "return all.find(x=>!blocked.test(x)&&!/^[_.-]+$/.test(x))||null;};"
+                    + "const inspect=root=>{let queue=[root],seen=new Set();for(let depth=0;depth<5;depth++){"
+                    + "const next=[];for(let o of queue){if(typeof o==='string'){try{o=JSON.parse(o);}catch(e){"
+                    + "const v=extract(o);if(v)return v;continue;}}if(!o||typeof o!=='object'||seen.has(o))continue;"
+                    + "seen.add(o);for(const k of ['username','userName','account','nickname']){"
+                    + "const v=extract(o[k]);if(v)return v;}for(const k of ['value','data','userInfo','playerInfo'])"
+                    + "if(o[k]!=null)next.push(o[k]);}queue=next;}return null;};"
+                    + "const preferred=['app_user_info','app_active_session','active_session','vuex_userInfo'];"
+                    + "for(const k of preferred){try{const v=inspect(localStorage.getItem(k));if(v)return v;}catch(e){}}"
                     + "for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i)||'';"
-                    + "if(!/user.?info|vuex_userInfo/i.test(k))continue;try{let o=JSON.parse(localStorage.getItem(k));"
-                    + "if(typeof o==='string')o=JSON.parse(o);const v=clean(o&&"
-                    + "(o.username||o.userName||o.account||o.nickname));if(valid(v))return v;}catch(e){}}"
+                    + "if(!/user.?info|active.?session|vuex_userInfo/i.test(k))continue;"
+                    + "try{const v=inspect(localStorage.getItem(k));if(v)return v;}catch(e){}}"
                     + "const s=['[data-username]','[data-user-name]','#username','#userName',"
                     + "'.username','.user-name','.user_name','.nickname','.nick-name',"
                     + "'#nickname','#nickName','[class*=user-name]','[class*=username]',"
                     + "'[class*=userInfo]','[class*=user-info]'];"
                     + "for(const q of s){const e=document.querySelector(q);if(!e)continue;"
-                    + "const v=clean(e.getAttribute('data-username')||e.getAttribute('data-user-name')"
-                    + "||e.value||e.textContent);if(valid(v))return v;}"
+                    + "const v=extract(e.getAttribute('data-username')||e.getAttribute('data-user-name')"
+                    + "||e.value||e.textContent);if(v)return v;}"
                     + "const w=innerWidth,h=innerHeight,scored=[];"
                     + "for(const e of document.querySelectorAll('body *')){const r=e.getBoundingClientRect();"
                     + "if(!r.width||!r.height||r.top<0||r.top>h*.3||r.left<w*.48)continue;"
-                    + "const v=clean(e.textContent);if(!valid(v)||v.includes(' '))continue;"
-                    + "const hint=(e.id+' '+e.className).toLowerCase();let score=r.left/w*2-r.top/h;"
+                    + "const v=extract(e.textContent);if(!v)continue;"
+                    + "const hint=(String(e.id||'')+' '+String(e.className||'')).toLowerCase();"
+                    + "let score=r.left/w*2-r.top/h;"
                     + "if(/user|name|nick|account|profile/.test(hint))score+=5;"
-                    + "if(/^[A-Za-z0-9_.-]{2,24}$/.test(v))score+=2;scored.push({v,score});}"
+                    + "if(/^[A-Za-z0-9_.-]{2,32}$/.test(v))score+=2;scored.push({v,score});}"
                     + "scored.sort((a,b)=>b.score-a.score);return scored[0]?.v||null;})()";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -496,23 +507,26 @@ public final class MainActivity extends Activity {
         scroll.addView(form, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        CheckBox sellEnabled = new CheckBox(this);
-        sellEnabled.setText("每隔固定时间自动卖出（保留1个）");
-        sellEnabled.setChecked(automationCoordinator.isSellEnabled(accountIndex));
-        form.addView(sellEnabled);
+        CheckBox auctionEnabled = new CheckBox(this);
+        auctionEnabled.setText("每隔固定时间自动拍卖（保留1个）");
+        auctionEnabled.setChecked(automationCoordinator.isAuctionEnabled(accountIndex));
+        form.addView(auctionEnabled);
 
-        TextView itemLabel = formLabel("卖出道具（逗号或换行分隔）");
-        form.addView(itemLabel);
-        EditText items = new EditText(this);
-        items.setText(automationCoordinator.sellItemsText(accountIndex));
-        items.setHint("进化宝石,曙光印记");
-        items.setMinLines(2);
-        form.addView(items, formFieldParams());
+        form.addView(formLabel("拍卖道具"));
+        String auctionItemText = automationCoordinator.auctionItemsText(accountIndex);
+        CheckBox evolutionGem = new CheckBox(this);
+        evolutionGem.setText("进化宝石");
+        evolutionGem.setChecked(auctionItemText.contains("进化宝石"));
+        form.addView(evolutionGem);
+        CheckBox dawnMark = new CheckBox(this);
+        dawnMark.setText("曙光印记");
+        dawnMark.setChecked(auctionItemText.contains("曙光印记"));
+        form.addView(dawnMark);
 
         form.addView(formLabel("指定买家"));
         EditText buyer = new EditText(this);
         buyer.setSingleLine(true);
-        buyer.setText(automationCoordinator.sellBuyer(accountIndex));
+        buyer.setText(automationCoordinator.auctionBuyer(accountIndex));
         buyer.setHint("hao");
         form.addView(buyer, formFieldParams());
 
@@ -520,8 +534,15 @@ public final class MainActivity extends Activity {
         EditText hours = new EditText(this);
         hours.setSingleLine(true);
         hours.setInputType(InputType.TYPE_CLASS_NUMBER);
-        hours.setText(String.valueOf(automationCoordinator.sellIntervalHours(accountIndex)));
+        hours.setText(String.valueOf(automationCoordinator.auctionIntervalHours(accountIndex)));
         form.addView(hours, formFieldParams());
+
+        form.addView(formLabel("道具商店一键卖出（卖出所选道具全部数量）"));
+        CheckBox coinVoucher = new CheckBox(this);
+        coinVoucher.setText("金币券");
+        coinVoucher.setChecked(automationCoordinator.storeSellItemsText(accountIndex)
+                .contains("金币券"));
+        form.addView(coinVoucher);
 
         CheckBox templeEnabled = new CheckBox(this);
         templeEnabled.setText("圣兽云殿守护（每1小时检查）");
@@ -533,16 +554,23 @@ public final class MainActivity extends Activity {
         notice.setTextColor(Color.rgb(160, 166, 178));
         form.addView(notice);
 
-        Button sellNow = makeButton("保存并立即检查卖出", view -> {
-            if (saveAutomationForm(accountIndex, sellEnabled, items, buyer, hours,
-                    templeEnabled)) {
-                automationCoordinator.runSellNow(accountIndex);
+        Button auctionNow = makeButton("保存并立即拍卖", view -> {
+            if (saveAutomationForm(accountIndex, auctionEnabled, evolutionGem, dawnMark,
+                    buyer, hours, coinVoucher, templeEnabled)) {
+                automationCoordinator.runAuctionNow(accountIndex);
             }
         });
-        form.addView(sellNow, automationActionParams());
+        form.addView(auctionNow, automationActionParams());
+        Button storeSellNow = makeButton("保存并立即卖出金币券", view -> {
+            if (saveAutomationForm(accountIndex, auctionEnabled, evolutionGem, dawnMark,
+                    buyer, hours, coinVoucher, templeEnabled)) {
+                automationCoordinator.runStoreSellNow(accountIndex);
+            }
+        });
+        form.addView(storeSellNow, automationActionParams());
         Button templeNow = makeButton("保存并立即检查圣殿挂机", view -> {
-            if (saveAutomationForm(accountIndex, sellEnabled, items, buyer, hours,
-                    templeEnabled)) {
+            if (saveAutomationForm(accountIndex, auctionEnabled, evolutionGem, dawnMark,
+                    buyer, hours, coinVoucher, templeEnabled)) {
                 automationCoordinator.runTempleNow(accountIndex);
             }
         });
@@ -556,8 +584,8 @@ public final class MainActivity extends Activity {
                 .create();
         dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
                 .setOnClickListener(view -> {
-                    if (saveAutomationForm(accountIndex, sellEnabled, items, buyer, hours,
-                            templeEnabled)) {
+                    if (saveAutomationForm(accountIndex, auctionEnabled, evolutionGem, dawnMark,
+                            buyer, hours, coinVoucher, templeEnabled)) {
                         dialog.dismiss();
                         showToast("脚本设置已保存");
                     }
@@ -565,19 +593,33 @@ public final class MainActivity extends Activity {
         dialog.show();
     }
 
-    private boolean saveAutomationForm(int accountIndex, CheckBox sellEnabled,
-                                       EditText items, EditText buyer, EditText hours,
-                                       CheckBox templeEnabled) {
+    private boolean saveAutomationForm(int accountIndex, CheckBox auctionEnabled,
+                                       CheckBox evolutionGem, CheckBox dawnMark,
+                                       EditText buyer, EditText hours,
+                                       CheckBox coinVoucher, CheckBox templeEnabled) {
         try {
             int intervalHours = Integer.parseInt(hours.getText().toString().trim());
-            automationCoordinator.configureSell(accountIndex, sellEnabled.isChecked(),
-                    items.getText().toString(), buyer.getText().toString(), intervalHours);
+            String auctionItems = selectedItems(evolutionGem, dawnMark);
+            String storeItems = selectedItems(coinVoucher);
+            automationCoordinator.configureAuction(accountIndex, auctionEnabled.isChecked(),
+                    auctionItems, buyer.getText().toString(), intervalHours);
+            automationCoordinator.configureStoreSell(accountIndex, storeItems);
             automationCoordinator.configureTemple(accountIndex, templeEnabled.isChecked());
             return true;
         } catch (RuntimeException error) {
             showToast(error.getMessage() == null ? "脚本设置无效" : error.getMessage());
             return false;
         }
+    }
+
+    private String selectedItems(CheckBox... options) {
+        StringBuilder selected = new StringBuilder();
+        for (CheckBox option : options) {
+            if (!option.isChecked()) continue;
+            if (selected.length() > 0) selected.append(',');
+            selected.append(option.getText());
+        }
+        return selected.toString();
     }
 
     private TextView formLabel(String text) {
@@ -810,30 +852,55 @@ public final class MainActivity extends Activity {
                 case "select_option":
                     handleSelectOption(commandId, parameters);
                     return;
+                case "configure_auto_auction":
                 case "configure_auto_sell": {
                     int index = requiredAccountIndex(parameters);
                     JSONArray itemArray = parameters.optJSONArray("items");
                     if (itemArray == null) {
-                        throw new IllegalArgumentException("卖出道具列表无效");
+                        throw new IllegalArgumentException("拍卖道具列表无效");
                     }
                     StringBuilder itemText = new StringBuilder();
                     for (int i = 0; i < itemArray.length(); i++) {
                         if (i > 0) itemText.append(',');
                         itemText.append(itemArray.optString(i));
                     }
-                    automationCoordinator.configureSell(index,
+                    automationCoordinator.configureAuction(index,
                             parameters.optBoolean("enabled", false), itemText.toString(),
                             parameters.optString("buyer", "hao"),
                             parameters.optInt("intervalHours", 12));
                     success = true;
-                    resultMessage = "定时卖出设置已更新";
+                    resultMessage = "定时拍卖设置已更新";
                     break;
                 }
+                case "run_auto_auction":
                 case "run_auto_sell": {
                     int index = requiredAccountIndex(parameters);
-                    automationCoordinator.runSellNow(index);
+                    automationCoordinator.runAuctionNow(index);
                     success = true;
-                    resultMessage = "已启动卖出检查";
+                    resultMessage = "已启动拍卖检查";
+                    break;
+                }
+                case "configure_store_sell": {
+                    int index = requiredAccountIndex(parameters);
+                    JSONArray itemArray = parameters.optJSONArray("items");
+                    if (itemArray == null) {
+                        throw new IllegalArgumentException("商店卖出道具列表无效");
+                    }
+                    StringBuilder itemText = new StringBuilder();
+                    for (int i = 0; i < itemArray.length(); i++) {
+                        if (i > 0) itemText.append(',');
+                        itemText.append(itemArray.optString(i));
+                    }
+                    automationCoordinator.configureStoreSell(index, itemText.toString());
+                    success = true;
+                    resultMessage = "道具商店卖出设置已更新";
+                    break;
+                }
+                case "run_store_sell": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.runStoreSellNow(index);
+                    success = true;
+                    resultMessage = "已启动道具商店卖出";
                     break;
                 }
                 case "configure_temple_guard": {
@@ -1113,8 +1180,8 @@ public final class MainActivity extends Activity {
             telemetry.put("device", device);
 
             JSONObject app = new JSONObject();
-            app.put("versionCode", 7);
-            app.put("versionName", "1.0.0");
+            app.put("versionCode", 8);
+            app.put("versionName", "1.1.0");
             app.put("activeAccount", activeAccount);
             app.put("blackScreen", blackMode);
             app.put("executionMode", blackMode

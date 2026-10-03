@@ -244,38 +244,50 @@ function renderDevices() {
       });
     });
 
-    const sellEnabled = card.querySelector(".sell-enabled");
-    const sellHours = card.querySelector(".sell-hours");
-    const sellItems = card.querySelector(".sell-items");
-    const sellBuyer = card.querySelector(".sell-buyer");
+    const auctionEnabled = card.querySelector(".auction-enabled");
+    const auctionHours = card.querySelector(".auction-hours");
+    const auctionEvolution = card.querySelector(".auction-evolution");
+    const auctionDawn = card.querySelector(".auction-dawn");
+    const auctionBuyer = card.querySelector(".auction-buyer");
+    const storeSellItem = card.querySelector(".store-sell-item");
     const templeEnabled = card.querySelector(".temple-enabled");
-    sellEnabled.checked = automation.sellEnabled === true;
-    sellHours.value = String(Number.isInteger(automation.sellIntervalHours)
-      ? automation.sellIntervalHours : 12);
-    sellItems.value = Array.isArray(automation.sellItems) && automation.sellItems.length
-      ? automation.sellItems.join(",") : "进化宝石,曙光印记";
-    sellBuyer.value = typeof automation.sellBuyer === "string" && automation.sellBuyer
-      ? automation.sellBuyer : "hao";
+    const auctionItems = Array.isArray(automation.auctionItems)
+      ? automation.auctionItems : (automation.sellItems ?? ["进化宝石", "曙光印记"]);
+    auctionEnabled.checked = automation.auctionEnabled === true || automation.sellEnabled === true;
+    auctionHours.value = String(Number.isInteger(automation.auctionIntervalHours)
+      ? automation.auctionIntervalHours : (automation.sellIntervalHours ?? 12));
+    auctionEvolution.checked = auctionItems.includes("进化宝石");
+    auctionDawn.checked = auctionItems.includes("曙光印记");
+    auctionBuyer.value = typeof automation.auctionBuyer === "string" && automation.auctionBuyer
+      ? automation.auctionBuyer : (automation.sellBuyer || "hao");
+    storeSellItem.value = "金币券";
     templeEnabled.checked = automation.templeEnabled === true;
     card.querySelector(".automation-status").textContent = automation.busy
       ? `运行中 · ${automation.lastMessage || "正在执行"}`
       : (automation.lastMessage || "尚未运行");
 
     const saveAutomation = () => {
-      const items = sellItems.value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
-      const intervalHours = Number.parseInt(sellHours.value, 10);
-      const buyer = sellBuyer.value.trim();
-      if (!items.length || items.length > 10) return addLog("卖出道具需填写1–10种");
+      const items = [
+        auctionEvolution.checked ? "进化宝石" : "",
+        auctionDawn.checked ? "曙光印记" : ""
+      ].filter(Boolean);
+      const intervalHours = Number.parseInt(auctionHours.value, 10);
+      const buyer = auctionBuyer.value.trim();
+      if (!items.length) return addLog("至少选择一种拍卖道具");
       if (!Number.isInteger(intervalHours) || intervalHours < 1 || intervalHours > 168) {
-        return addLog("卖出间隔需为1–168小时");
+        return addLog("拍卖间隔需为1–168小时");
       }
       if (!/^[A-Za-z0-9_.-]{1,30}$/.test(buyer)) return addLog("指定买家格式无效");
-      sendCommand(device.deviceId, "configure_auto_sell", {
+      sendCommand(device.deviceId, "configure_auto_auction", {
         accountIndex: activeAccountIndex,
-        enabled: sellEnabled.checked,
+        enabled: auctionEnabled.checked,
         items,
         buyer,
         intervalHours
+      });
+      sendCommand(device.deviceId, "configure_store_sell", {
+        accountIndex: activeAccountIndex,
+        items: [storeSellItem.value]
       });
       sendCommand(device.deviceId, "configure_temple_guard", {
         accountIndex: activeAccountIndex,
@@ -285,8 +297,11 @@ function renderDevices() {
       return true;
     };
     card.querySelector(".save-automation").addEventListener("click", saveAutomation);
-    card.querySelector(".run-sell").addEventListener("click", () => {
-      if (saveAutomation()) sendCommand(device.deviceId, "run_auto_sell", { accountIndex: activeAccountIndex });
+    card.querySelector(".run-auction").addEventListener("click", () => {
+      if (saveAutomation()) sendCommand(device.deviceId, "run_auto_auction", { accountIndex: activeAccountIndex });
+    });
+    card.querySelector(".run-store-sell").addEventListener("click", () => {
+      if (saveAutomation()) sendCommand(device.deviceId, "run_store_sell", { accountIndex: activeAccountIndex });
     });
     card.querySelector(".run-temple").addEventListener("click", () => {
       if (saveAutomation()) sendCommand(device.deviceId, "run_temple_guard", { accountIndex: activeAccountIndex });
