@@ -26,8 +26,8 @@ app/build/outputs/apk/debug/app-debug.apk
 
 ```groovy
 defaultConfig {
-    versionCode 5
-    versionName '0.5.0-preview-test'
+    versionCode 6
+    versionName '0.5.1-select-test'
 }
 ```
 

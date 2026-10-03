@@ -78,7 +78,8 @@ public final class MainActivity extends Activity {
                     + "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 "
                     + "SGPlayKeeper/0.5";
     private static final int PREVIEW_DEFAULT_WIDTH = 720;
-    private static final int PREVIEW_MAX_ENCODED_BYTES = 700 * 1024;
+    private static final int PREVIEW_MAX_WIDTH = 2_560;
+    private static final int PREVIEW_MAX_ENCODED_BYTES = 2_500 * 1024;
     private static final long PREVIEW_MIN_INTERVAL_MS = 1_000L;
     private static final String USERNAME_DETECTION_SCRIPT =
             "(function(){"
@@ -649,15 +650,12 @@ public final class MainActivity extends Activity {
                     resultMessage = "页面预览已停止";
                     break;
                 case "pointer_tap": {
-                    int index = requiredAccountIndex(parameters);
-                    executePreviewTap(index,
-                            parameters.optDouble("x", -1d),
-                            parameters.optDouble("y", -1d),
-                            parameters.optLong("frameSequence", -1L));
-                    success = true;
-                    resultMessage = "远程点击已执行";
-                    break;
+                    handlePreviewTap(commandId, parameters);
+                    return;
                 }
+                case "select_option":
+                    handleSelectOption(commandId, parameters);
+                    return;
                 default:
                     resultMessage = "不支持的远程命令";
                     break;
@@ -680,8 +678,8 @@ public final class MainActivity extends Activity {
     private void startPreview(int accountIndex, int requestedMaxWidth, double requestedFps) {
         getOrCreateSession(accountIndex);
         previewAccount = accountIndex;
-        previewMaxWidth = Math.max(360, Math.min(requestedMaxWidth, 720));
-        double fps = Math.max(0.2d, Math.min(requestedFps, 1d));
+        previewMaxWidth = Math.max(360, Math.min(requestedMaxWidth, PREVIEW_MAX_WIDTH));
+        double fps = Math.max(0.1d, Math.min(requestedFps, 1d));
         previewIntervalMs = Math.max(PREVIEW_MIN_INTERVAL_MS, Math.round(1_000d / fps));
         previewEnabled = true;
         if (previewRunnable != null) {
@@ -732,9 +730,10 @@ public final class MainActivity extends Activity {
             canvas.scale(targetWidth / (float) sourceWidth, targetHeight / (float) sourceHeight);
             view.draw(canvas);
 
-            byte[] encoded = compressPreview(bitmap, 55);
+            int initialQuality = targetWidth > 1_280 ? 72 : targetWidth > 720 ? 64 : 55;
+            byte[] encoded = compressPreview(bitmap, initialQuality);
             if (encoded.length > PREVIEW_MAX_ENCODED_BYTES) {
-                encoded = compressPreview(bitmap, 32);
+                encoded = compressPreview(bitmap, 42);
             }
             if (encoded.length > PREVIEW_MAX_ENCODED_BYTES) {
                 return;
@@ -765,8 +764,55 @@ public final class MainActivity extends Activity {
         return output.toByteArray();
     }
 
-    private void executePreviewTap(int accountIndex, double normalizedX,
-                                   double normalizedY, long frameSequence) {
+    private void handlePreviewTap(String commandId, JSONObject parameters) {
+        try {
+            int accountIndex = requiredAccountIndex(parameters);
+            double normalizedX = parameters.optDouble("x", -1d);
+            double normalizedY = parameters.optDouble("y", -1d);
+            long frameSequence = parameters.optLong("frameSequence", -1L);
+            validatePreviewTap(accountIndex, normalizedX, normalizedY, frameSequence);
+            Session session = getOrCreateSession(accountIndex);
+            WebView view = session.webView;
+            String script = String.format(Locale.US,
+                    "(function(){const e=document.elementFromPoint(%1$.8f*window.innerWidth,"
+                            + "%2$.8f*window.innerHeight);const s=e&&e.closest?e.closest('select'):null;"
+                            + "if(!s)return null;let t=s.dataset.pkRemoteToken;if(!t){t='pk_'"
+                            + "+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10);"
+                            + "s.dataset.pkRemoteToken=t;}const o=Array.from(s.options).slice(0,200)"
+                            + ".map((v,i)=>({index:i,label:(v.textContent||v.label||v.value||'')"
+                            + ".replace(/\\s+/g,' ').trim().slice(0,120),selected:v.selected,"
+                            + "disabled:v.disabled}));return JSON.stringify({elementToken:t,"
+                            + "title:(s.getAttribute('aria-label')||s.name||'请选择').slice(0,80),"
+                            + "selectedIndex:s.selectedIndex,options:o});})()",
+                    normalizedX, normalizedY);
+            view.evaluateJavascript(script, encodedResult -> {
+                try {
+                    JSONObject interaction = decodeSelectInteraction(encodedResult);
+                    if (interaction != null) {
+                        interaction.put("accountIndex", accountIndex);
+                        interaction.put("accountLabel", accountDisplayName(accountIndex));
+                        remoteConnectionManager.sendSelectInteraction(interaction);
+                        remoteConnectionManager.sendCommandResult(
+                                commandId, true, "选择项已发送到控制台");
+                    } else {
+                        dispatchTap(view, normalizedX, normalizedY);
+                        remoteConnectionManager.sendCommandResult(
+                                commandId, true, "远程点击已执行");
+                    }
+                } catch (RuntimeException | JSONException error) {
+                    remoteConnectionManager.sendCommandResult(
+                            commandId, false, "点击处理失败");
+                }
+                pushTelemetry();
+            });
+        } catch (RuntimeException error) {
+            remoteConnectionManager.sendCommandResult(commandId, false,
+                    error.getMessage() == null ? "点击处理失败" : error.getMessage());
+        }
+    }
+
+    private void validatePreviewTap(int accountIndex, double normalizedX,
+                                    double normalizedY, long frameSequence) {
         if (!previewEnabled || previewAccount != accountIndex) {
             throw new IllegalStateException("页面预览未开启或账号已变化");
         }
@@ -777,8 +823,25 @@ public final class MainActivity extends Activity {
                 || previewSequence - frameSequence > 5L) {
             throw new IllegalArgumentException("预览画面已过期，请等待刷新");
         }
-        Session session = getOrCreateSession(accountIndex);
-        WebView view = session.webView;
+    }
+
+    private JSONObject decodeSelectInteraction(String encodedResult) throws JSONException {
+        if (encodedResult == null || "null".equals(encodedResult)) {
+            return null;
+        }
+        Object decoded = new JSONTokener(encodedResult).nextValue();
+        if (!(decoded instanceof String) || ((String) decoded).isBlank()) {
+            return null;
+        }
+        JSONObject interaction = new JSONObject((String) decoded);
+        if (interaction.optJSONArray("options") == null
+                || interaction.optString("elementToken").isBlank()) {
+            return null;
+        }
+        return interaction;
+    }
+
+    private void dispatchTap(WebView view, double normalizedX, double normalizedY) {
         if (view.getWidth() <= 0 || view.getHeight() <= 0) {
             throw new IllegalStateException("网页尚未完成布局");
         }
@@ -796,6 +859,38 @@ public final class MainActivity extends Activity {
         } finally {
             down.recycle();
             up.recycle();
+        }
+    }
+
+    private void handleSelectOption(String commandId, JSONObject parameters) {
+        try {
+            int accountIndex = requiredAccountIndex(parameters);
+            String elementToken = parameters.optString("elementToken");
+            int optionIndex = parameters.optInt("optionIndex", -1);
+            if (!elementToken.matches("[A-Za-z0-9_-]{1,80}")
+                    || optionIndex < 0 || optionIndex >= 200) {
+                throw new IllegalArgumentException("选择参数无效");
+            }
+            Session session = getOrCreateSession(accountIndex);
+            String script = "(function(){const t=" + JSONObject.quote(elementToken)
+                    + ";const i=" + optionIndex
+                    + ";const s=Array.from(document.querySelectorAll('select'))"
+                    + ".find(v=>v.dataset.pkRemoteToken===t);"
+                    + "if(!s||i<0||i>=s.options.length||s.options[i].disabled)return false;"
+                    + "s.selectedIndex=i;s.dispatchEvent(new Event('input',{bubbles:true}));"
+                    + "s.dispatchEvent(new Event('change',{bubbles:true}));return true;})()";
+            session.webView.evaluateJavascript(script, result -> {
+                boolean updated = "true".equals(result);
+                remoteConnectionManager.sendCommandResult(commandId, updated,
+                        updated ? "选择项已更新" : "选择项已失效，请重新点击");
+                if (updated && previewEnabled) {
+                    mainHandler.postDelayed(this::capturePreviewFrame, 250L);
+                }
+                pushTelemetry();
+            });
+        } catch (RuntimeException error) {
+            remoteConnectionManager.sendCommandResult(commandId, false,
+                    error.getMessage() == null ? "选择失败" : error.getMessage());
         }
     }
 
@@ -823,8 +918,8 @@ public final class MainActivity extends Activity {
             telemetry.put("device", device);
 
             JSONObject app = new JSONObject();
-            app.put("versionCode", 5);
-            app.put("versionName", "0.5.0-preview-test");
+            app.put("versionCode", 6);
+            app.put("versionName", "0.5.1-select-test");
             app.put("activeAccount", activeAccount);
             app.put("blackScreen", blackMode);
             app.put("executionMode", blackMode

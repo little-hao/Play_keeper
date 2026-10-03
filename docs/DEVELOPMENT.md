@@ -240,16 +240,19 @@ Android 原生 `CookieManager.getInstance()` 在同一应用内默认共享 Cook
 - 状态变化和每次电池采样都会发送最新完整快照。
 - 所有命令在 Android 主线程执行，并返回明确成功/失败结果。
 
-允许的命令固定为：`switch_account`、`reload_account`、`open_home`、`set_browser_mode`、`set_orientation`、`enter_black_screen`、`exit_black_screen`、`request_status`、`preview_start`、`preview_stop`、`pointer_tap`。不要新增任意 URL、JavaScript 或系统命令入口。
+允许的命令固定为：`switch_account`、`reload_account`、`open_home`、`set_browser_mode`、`set_orientation`、`enter_black_screen`、`exit_black_screen`、`request_status`、`preview_start`、`preview_stop`、`pointer_tap`、`select_option`。不要新增任意 URL、JavaScript 或系统命令入口。
 
 ## 12. 页面预览、账号名称与远程单击
 
-- 浏览器发送 `preview_start` 后，Android 在主线程把目标 WebView 绘制到最大 720px 的 RGB_565 Bitmap。
-- 图片使用 JPEG 压缩，初始质量 55；超过 700 KiB 时降到 32，仍超限则丢弃该帧。
-- 最大帧率 1 FPS，截图通过 WSS Base64 JSON 传输；Relay 只校验并转发，不保存。
+- 浏览器发送 `preview_start` 后，Android 在主线程把目标 WebView 绘制到 RGB_565 Bitmap。
+- 支持 720/1280/2560 三档最大宽度，对应 1/0.33/0.1 FPS；目标是按需查看细节而不是高分辨率实时串流。
+- 图片使用 JPEG 压缩，按分辨率选择 55～72 初始质量；超过 2.5 MiB 时降到 42，仍超限则丢弃该帧。
+- 截图通过 WSS Base64 JSON 传输；Relay 只校验并转发，不保存。
 - 浏览器隐藏、主动停止或最后一个预览控制连接断开时，Relay 向 Android 下发 `preview_stop`。
 - `pointer_tap` 只接受 0～1 的归一化坐标、目标账号和截图序号；超过最近 5 帧的点击拒绝执行。
 - Android 将坐标映射到自己的 WebView 并直接分发一次 DOWN/UP，不需要无障碍或 MediaProjection 权限。
+- HTML `select` 在 WebView 中通常显示为 Android 原生弹窗，该弹窗不属于 WebView Bitmap。点击前先用 `elementFromPoint()` 检测；若命中 `select`，Android 返回经过截断的选项列表，而不触发原生弹窗。
+- 网页选择后发送元素短时 token 和 option 索引；Android 重新定位同一个 `select`、设置 `selectedIndex`，并触发冒泡的 `input/change` 事件。
 - 账号登录名称通过限定 DOM 选择器读取；自动识别失败时，用户可长按 Android 账号按钮手动设置。
 - 黑屏仍是 Activity 前台常亮状态。遮罩只覆盖显示，预览直接绘制底层 WebView；该能力必须在 Civi 4 Pro 真机验证。
 

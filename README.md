@@ -4,7 +4,15 @@
 
 `http://sgplay.cc/home.html#/`
 
-## v0.5.0 更新
+## v0.5.1 修复与增强
+
+- 修复 HTML 地图/副本 `<select>` 在远程画面点击后看不到 Android 原生选择弹窗的问题
+- 远程点击选择框时，控制台显示经过校验的真实选项；选中后回写手机页面并触发 `input/change`
+- 加载画面增加流畅 720、高清 1280、超清 2560 三档
+- 高清约 3 秒一帧，超清约 10 秒一帧，避免高分辨率持续高刷造成发热和流量浪费
+- 高分辨率单帧上限提升到 2.5 MiB，VPS 仍只在内存中转发
+
+## v0.5.0 基础能力
 
 - 远程控制台新增按需手机网页预览，最高 720px、每秒 1 帧
 - 可直接点击远程画面，在 Android 自有 WebView 对应位置执行单击
@@ -52,9 +60,9 @@
 
 ## 当前安装包
 
-`dist/PlayKeeper-Civi4Pro-v0.5.0-preview-test.apk`
+`dist/PlayKeeper-Civi4Pro-v0.5.1-select-test.apk`
 
-测试版包名仍为 `com.local.sgplaykeeper.test`，版本号为 `5`，可覆盖安装 v0.1～v0.4 测试版，并保留原有 WebView 登录数据。
+测试版包名仍为 `com.local.sgplaykeeper.test`，版本号为 `6`，可覆盖安装 v0.1～v0.5 测试版，并保留原有 WebView 登录数据。
 
 ## 远程连接
 

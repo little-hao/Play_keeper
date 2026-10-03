@@ -11,16 +11,28 @@ const elements = {
   deviceList: document.querySelector("#deviceList"),
   deviceTemplate: document.querySelector("#deviceTemplate"),
   eventLog: document.querySelector("#eventLog"),
-  clearLog: document.querySelector("#clearLog")
+  clearLog: document.querySelector("#clearLog"),
+  selectOverlay: document.querySelector("#selectOverlay"),
+  selectTitle: document.querySelector("#selectTitle"),
+  selectAccount: document.querySelector("#selectAccount"),
+  selectOptions: document.querySelector("#selectOptions"),
+  closeSelect: document.querySelector("#closeSelect")
 };
 
 const devices = new Map();
 const previewFrames = new Map();
 const activePreviews = new Set();
+const previewSettings = new Map();
+const previewProfiles = {
+  "720": { maxWidth: 720, fps: 1, label: "流畅" },
+  "1280": { maxWidth: 1280, fps: 0.33, label: "高清" },
+  "2560": { maxWidth: 2560, fps: 0.1, label: "超清" }
+};
 let socket;
 let manuallyClosed = false;
 let reconnectTimer;
 let connectionGeneration = 0;
+let pendingSelect;
 
 elements.adminToken.value = sessionStorage.getItem("playKeeperAdminToken") ?? "";
 elements.connectButton.addEventListener("click", connect);
@@ -30,6 +42,10 @@ elements.refreshStatus.addEventListener("click", () => {
   for (const deviceId of devices.keys()) sendCommand(deviceId, "request_status", {});
 });
 elements.clearLog.addEventListener("click", () => elements.eventLog.replaceChildren());
+elements.closeSelect.addEventListener("click", closeSelectDialog);
+elements.selectOverlay.addEventListener("click", (event) => {
+  if (event.target === elements.selectOverlay) closeSelectDialog();
+});
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") stopAllPreviews();
 });
@@ -70,6 +86,7 @@ function disconnect() {
   devices.clear();
   previewFrames.clear();
   activePreviews.clear();
+  closeSelectDialog();
   renderDevices();
   socket?.close();
   elements.loginPanel.classList.remove("hidden");
@@ -101,6 +118,7 @@ function handleMessage(message) {
       addLog(`${message.device.deviceId} 已上线`);
       break;
     case "device.offline":
+      if (pendingSelect?.deviceId === message.deviceId) closeSelectDialog();
       devices.delete(message.deviceId);
       previewFrames.delete(message.deviceId);
       activePreviews.delete(message.deviceId);
@@ -118,6 +136,9 @@ function handleMessage(message) {
     case "preview.frame":
       previewFrames.set(message.deviceId, message.payload);
       updatePreviewFrame(message.deviceId, message.payload);
+      break;
+    case "interaction.select":
+      showSelectDialog(message.deviceId, message.payload);
       break;
     case "command.queued":
       addLog(`命令已发送至 ${message.deviceId}`);
@@ -180,11 +201,18 @@ function renderDevices() {
         sendCommand(device.deviceId, button.dataset.command, parameters);
       });
     });
+    const resolution = card.querySelector(".preview-resolution");
+    resolution.value = previewSettings.get(device.deviceId) ?? "720";
+    resolution.addEventListener("change", () => previewSettings.set(device.deviceId, resolution.value));
     card.querySelector(".preview-start").addEventListener("click", () => {
       const accountIndex = Number.isInteger(app.activeAccount) ? app.activeAccount : 0;
+      const selectedProfile = previewProfiles[resolution.value] ?? previewProfiles["720"];
+      previewSettings.set(device.deviceId, String(selectedProfile.maxWidth));
       activePreviews.add(device.deviceId);
-      sendCommand(device.deviceId, "preview_start", { accountIndex, maxWidth: 720, fps: 1 });
-      card.querySelector(".preview-status").textContent = "正在等待手机画面…";
+      sendCommand(device.deviceId, "preview_start", {
+        accountIndex, maxWidth: selectedProfile.maxWidth, fps: selectedProfile.fps
+      });
+      card.querySelector(".preview-status").textContent = `正在等待${selectedProfile.label}画面…`;
     });
     card.querySelector(".preview-stop").addEventListener("click", () => {
       sendCommand(device.deviceId, "preview_stop", {});
@@ -196,8 +224,15 @@ function renderDevices() {
       const frame = previewFrames.get(device.deviceId);
       if (!frame) return addLog("尚未收到可点击的手机画面");
       const rectangle = event.currentTarget.getBoundingClientRect();
-      const x = (event.clientX - rectangle.left) / rectangle.width;
-      const y = (event.clientY - rectangle.top) / rectangle.height;
+      const imageRatio = frame.width / frame.height;
+      const boxRatio = rectangle.width / rectangle.height;
+      const contentWidth = boxRatio > imageRatio ? rectangle.height * imageRatio : rectangle.width;
+      const contentHeight = boxRatio > imageRatio ? rectangle.height : rectangle.width / imageRatio;
+      const contentLeft = rectangle.left + (rectangle.width - contentWidth) / 2;
+      const contentTop = rectangle.top + (rectangle.height - contentHeight) / 2;
+      const x = (event.clientX - contentLeft) / contentWidth;
+      const y = (event.clientY - contentTop) / contentHeight;
+      if (x < 0 || x > 1 || y < 0 || y > 1) return addLog("请点击画面内容区域");
       sendCommand(device.deviceId, "pointer_tap", {
         accountIndex: frame.accountIndex,
         x: Math.max(0, Math.min(1, x)),
@@ -206,10 +241,54 @@ function renderDevices() {
       });
     });
     elements.deviceList.append(card);
-    if (!app.previewEnabled) previewFrames.delete(device.deviceId);
+    if (!app.previewEnabled) {
+      previewFrames.delete(device.deviceId);
+      activePreviews.delete(device.deviceId);
+    }
     const frame = previewFrames.get(device.deviceId);
     if (frame) updatePreviewFrame(device.deviceId, frame);
   }
+}
+
+function showSelectDialog(deviceId, interaction) {
+  if (!interaction || !Array.isArray(interaction.options)) return;
+  pendingSelect = { deviceId, interaction };
+  elements.selectTitle.textContent = interaction.title || "请选择";
+  elements.selectAccount.textContent = `${interaction.accountLabel || `账号${interaction.accountIndex + 1}`} · 选择后会立即同步到手机页面`;
+  elements.selectOptions.replaceChildren();
+  for (const option of interaction.options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "select-option";
+    button.disabled = option.disabled === true;
+    button.setAttribute("role", "radio");
+    button.setAttribute("aria-checked", option.selected === true ? "true" : "false");
+    if (option.selected === true) button.classList.add("selected");
+    const label = document.createElement("span");
+    label.textContent = option.label || `选项 ${option.index + 1}`;
+    const mark = document.createElement("span");
+    mark.className = "select-mark";
+    button.append(label, mark);
+    button.addEventListener("click", () => {
+      sendCommand(deviceId, "select_option", {
+        accountIndex: interaction.accountIndex,
+        elementToken: interaction.elementToken,
+        optionIndex: option.index
+      });
+      addLog(`已选择：${label.textContent}`);
+      closeSelectDialog();
+    });
+    elements.selectOptions.append(button);
+  }
+  elements.selectOverlay.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+}
+
+function closeSelectDialog() {
+  pendingSelect = undefined;
+  elements.selectOverlay.classList.add("hidden");
+  elements.selectOptions.replaceChildren();
+  document.body.style.overflow = "";
 }
 
 function stopAllPreviews() {

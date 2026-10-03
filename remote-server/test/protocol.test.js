@@ -42,7 +42,7 @@ test("device telemetry and browser command complete a round trip", async (contex
 
   const deviceAccepted = nextJson(device, "device.accepted");
   device.send(JSON.stringify({
-    type: "device.hello", deviceId: "PK-ABCDEF123456", token: deviceToken, appVersion: "0.5.0"
+    type: "device.hello", deviceId: "PK-ABCDEF123456", token: deviceToken, appVersion: "0.5.1"
   }));
   await deviceAccepted;
 
@@ -108,6 +108,37 @@ test("device telemetry and browser command complete a round trip", async (contex
   assert.equal(preview.payload.accountLabel, "测试用户");
   assert.equal(preview.payload.sequence, 7);
 
+  const interactionPromise = nextJson(control, "interaction.select");
+  device.send(JSON.stringify({
+    type: "interaction.select",
+    timestamp: Date.now(),
+    payload: {
+      accountIndex: 2,
+      accountLabel: "测试用户",
+      elementToken: "pk_test_123",
+      title: "地图",
+      selectedIndex: 1,
+      options: [
+        { index: 0, label: "新手基地", selected: false, disabled: false },
+        { index: 1, label: "圣兽云殿", selected: true, disabled: false }
+      ]
+    }
+  }));
+  const interaction = await interactionPromise;
+  assert.equal(interaction.payload.title, "地图");
+  assert.equal(interaction.payload.options[1].label, "圣兽云殿");
+
+  const selectionPromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "select_option",
+    parameters: { accountIndex: 2, elementToken: "pk_test_123", optionIndex: 0 }
+  }));
+  const selection = await selectionPromise;
+  assert.equal(selection.command, "select_option");
+  assert.equal(selection.parameters.optionIndex, 0);
+
   const tapPromise = nextJson(device, "command.request");
   control.send(JSON.stringify({
     type: "command.send",
@@ -166,7 +197,7 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    ok: true, service: "play-keeper-relay", version: "0.5.0"
+    ok: true, service: "play-keeper-relay", version: "0.5.1"
   });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);

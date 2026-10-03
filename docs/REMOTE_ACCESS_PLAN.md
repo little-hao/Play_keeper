@@ -1,6 +1,6 @@
 # 远程连接方案
 
-状态：v0.5 已实现状态、白名单命令、按需 WebView 预览和受控单击；等待 Civi 4 Pro 真机验证。
+状态：v0.5.1 已实现状态、白名单命令、三档 WebView 预览、受控单击和 HTML 选择项桥接；等待 Civi 4 Pro 真机验证。
 
 目标是通过 iPhone Safari 或桌面网页远程查看并控制 Play Keeper，而不是接管整台 Android 手机。
 
@@ -74,6 +74,7 @@ request_status()
 preview_start(accountIndex, maxWidth, fps)
 preview_stop()
 pointer_tap(accountIndex, x, y, frameSequence)
+select_option(accountIndex, elementToken, optionIndex)
 ```
 
 每条命令包含：
@@ -100,8 +101,8 @@ Android 执行后返回 `accepted / completed / failed / expired`，网页不能
 第一阶段稳定后，原型验证本 APP 自有 WebView 捕获：
 
 1. 在 Android 内将目标 WebView 绘制到 RGB_565 Bitmap。
-2. 最大宽度限制为 720px，保持原始宽高比。
-3. 编码为 JPEG，默认 1 帧/秒，单帧最大 700 KiB。
+2. 最大宽度可选 720、1280 或 2560px，保持原始宽高比。
+3. 编码为 JPEG，对应最高 1、0.33 或 0.1 帧/秒，单帧最大 2.5 MiB。
 4. 仅在远程页面打开预览时传输。
 5. 浏览器隐藏、断开、用户停止或最后一个预览控制者离线时自动停止。
 
@@ -126,6 +127,8 @@ Android 执行后返回 `accepted / completed / failed / expired`，网页不能
 - 每次点击写入本地审计记录，但不记录网页输入内容。
 
 键盘输入、拖动、多点触控和文件上传后置处理。第一版远程点击不得包含通用文字注入，避免密码和聊天内容泄漏。
+
+HTML `<select>` 是特殊情况：WebView 会把它渲染为 Android 原生弹窗，无法出现在 WebView 截图中。v0.5.1 在点击命中 `select` 时读取其选项，在控制台显示远程选择面板，并用短时 DOM token 把选定索引回写到同一元素。选项最多 200 个、单项文字最多 120 字符。
 
 ## 6. 服务器建议
 
@@ -187,7 +190,7 @@ Android 首次连接：
   "type": "device.hello",
   "deviceId": "PK-ABCDEF123456",
   "token": "DEVICE_TOKEN",
-  "appVersion": "0.5.0"
+  "appVersion": "0.5.1"
 }
 ```
 
@@ -256,7 +259,7 @@ Relay 校验后向 Android 下发：
 
 尚未完成：1 分钟聚合、7 天本地历史、二维码配对、长期审计和主动推送提醒。
 
-### v0.5：按需页面快照与单击（已完成原型）
+### v0.5.1：按需页面快照、单击与选择项（已完成原型）
 
 - 单张截图请求
 - 低帧率预览
@@ -264,6 +267,8 @@ Relay 校验后向 Android 下发：
 - 归一化坐标点击
 - 截图序号校验
 - 断线自动停止预览
+- HTML select 远程选项桥接
+- 720/1280/2560 三档画质
 
 ### v0.6：交互与真机稳定性
 

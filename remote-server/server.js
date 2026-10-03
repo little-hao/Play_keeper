@@ -7,8 +7,8 @@ import { WebSocket, WebSocketServer } from "ws";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const publicDirectory = path.join(currentDirectory, "public");
-const MAX_MESSAGE_BYTES = 2 * 1024 * 1024;
-const MAX_PREVIEW_BYTES = 700 * 1024;
+const MAX_MESSAGE_BYTES = 5 * 1024 * 1024;
+const MAX_PREVIEW_BYTES = 2_500 * 1024;
 const COMMAND_WINDOW_MS = 60_000;
 const COMMAND_LIMIT = 180;
 
@@ -31,9 +31,9 @@ const commandValidators = {
     return accountParameters(parameters)
       && Number.isInteger(parameters.maxWidth)
       && parameters.maxWidth >= 360
-      && parameters.maxWidth <= 720
+      && parameters.maxWidth <= 2560
       && typeof parameters.fps === "number"
-      && parameters.fps >= 0.2
+      && parameters.fps >= 0.1
       && parameters.fps <= 1;
   },
   preview_stop: emptyParameters,
@@ -43,6 +43,14 @@ const commandValidators = {
       && finiteRange(parameters.y, 0, 1)
       && Number.isSafeInteger(parameters.frameSequence)
       && parameters.frameSequence >= 0;
+  },
+  select_option(parameters) {
+    return accountParameters(parameters)
+      && typeof parameters.elementToken === "string"
+      && /^[A-Za-z0-9_-]{1,80}$/.test(parameters.elementToken)
+      && Number.isInteger(parameters.optionIndex)
+      && parameters.optionIndex >= 0
+      && parameters.optionIndex < 200;
   }
 };
 
@@ -99,7 +107,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "0.5.0" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "0.5.1" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -234,6 +242,19 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
             });
           }
         }
+      } else if (message.type === "interaction.select") {
+        const interaction = sanitizeSelectInteraction(message.payload);
+        if (!interaction) return;
+        for (const controller of controllers) {
+          if (controller.previewDevices?.has(entry.deviceId)) {
+            sendJson(controller, {
+              type: "interaction.select",
+              deviceId: entry.deviceId,
+              timestamp: Number(message.timestamp) || Date.now(),
+              payload: interaction
+            });
+          }
+        }
       }
     });
 
@@ -361,11 +382,41 @@ function validPreviewFrame(payload) {
   if (!Number.isInteger(payload.accountIndex)
       || payload.accountIndex < 0 || payload.accountIndex > 3) return false;
   if (!Number.isSafeInteger(payload.sequence) || payload.sequence < 0) return false;
-  if (!Number.isInteger(payload.width) || payload.width < 1 || payload.width > 720) return false;
-  if (!Number.isInteger(payload.height) || payload.height < 1 || payload.height > 1800) return false;
+  if (!Number.isInteger(payload.width) || payload.width < 1 || payload.width > 2560) return false;
+  if (!Number.isInteger(payload.height) || payload.height < 1 || payload.height > 3200) return false;
   if (payload.mime !== "image/jpeg" || typeof payload.imageBase64 !== "string") return false;
   if (payload.imageBase64.length > Math.ceil(MAX_PREVIEW_BYTES * 4 / 3) + 8) return false;
   return Buffer.byteLength(payload.imageBase64, "base64") <= MAX_PREVIEW_BYTES;
+}
+
+function sanitizeSelectInteraction(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  if (!Number.isInteger(payload.accountIndex)
+      || payload.accountIndex < 0 || payload.accountIndex > 3) return null;
+  if (typeof payload.elementToken !== "string"
+      || !/^[A-Za-z0-9_-]{1,80}$/.test(payload.elementToken)) return null;
+  if (!Array.isArray(payload.options) || payload.options.length < 1
+      || payload.options.length > 200) return null;
+  const options = [];
+  for (const option of payload.options) {
+    if (!option || !Number.isInteger(option.index)
+        || option.index < 0 || option.index >= 200
+        || typeof option.label !== "string") return null;
+    options.push({
+      index: option.index,
+      label: option.label.slice(0, 120),
+      selected: option.selected === true,
+      disabled: option.disabled === true
+    });
+  }
+  return {
+    accountIndex: payload.accountIndex,
+    accountLabel: String(payload.accountLabel ?? `账号${payload.accountIndex + 1}`).slice(0, 24),
+    elementToken: payload.elementToken,
+    title: String(payload.title ?? "请选择").slice(0, 80),
+    selectedIndex: Number.isInteger(payload.selectedIndex) ? payload.selectedIndex : -1,
+    options
+  };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

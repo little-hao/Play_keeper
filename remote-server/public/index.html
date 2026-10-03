@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css?v=0.5.0">
+  <link rel="stylesheet" href="/styles.css?v=0.5.1">
 </head>
 <body>
   <main class="shell">
@@ -58,8 +58,15 @@
       <section class="preview-panel">
         <div class="preview-heading">
           <div><strong>手机页面</strong><small class="preview-status">按需加载，不在服务器保存</small></div>
-          <div>
-            <button class="preview-start primary">加载画面</button>
+          <div class="preview-actions">
+            <label>画质
+              <select class="preview-resolution" aria-label="预览画质">
+                <option value="720">流畅 720</option>
+                <option value="1280">高清 1280</option>
+                <option value="2560">超清 2560</option>
+              </select>
+            </label>
+            <button class="preview-start primary">加载/刷新</button>
             <button class="preview-stop secondary">停止</button>
           </div>
         </div>
@@ -80,6 +87,16 @@
       <p class="device-note"></p>
     </article>
   </template>
-  <script type="module" src="/app.js?v=0.5.0"></script>
+  <div id="selectOverlay" class="select-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="selectTitle">
+    <section class="select-dialog panel">
+      <div class="section-title">
+        <div><p class="eyebrow">手机页面选择项</p><h2 id="selectTitle">请选择</h2></div>
+        <button id="closeSelect" class="secondary">取消</button>
+      </div>
+      <p id="selectAccount" class="select-account"></p>
+      <div id="selectOptions" class="select-options" role="radiogroup"></div>
+    </section>
+  </div>
+  <script type="module" src="/app.js?v=0.5.1"></script>
 </body>
 </html>
