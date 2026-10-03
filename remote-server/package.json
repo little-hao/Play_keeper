@@ -1,0 +1,17 @@
+{
+  "name": "play-keeper-relay",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "description": "Play Keeper encrypted WebSocket relay and iPhone web dashboard",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "ws": "8.22.0"
+  }
+}

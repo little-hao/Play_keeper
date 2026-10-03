@@ -14,13 +14,15 @@ Play Keeper 是一个面向小米 Civi 4 Pro / HyperOS 的轻量 Android WebView
 - 网络异常、加载卡死及 WebView 渲染进程异常后自动恢复。
 - 每个账号保存最后页面、浏览器模式和横竖屏偏好。
 - 兼容 Android 15 强制 edge-to-edge，以及 Civi 4 Pro 的刘海和手势区域。
+- 前台采集设备电池与热状态，并可通过加密出站连接上报。
+- 允许 iPhone Safari/桌面浏览器执行严格白名单内的 APP 操作。
 
 非目标：
 
 - 不保存或自动填写账号密码。
 - 不绕过网站登录、安全验证或挂机规则。
 - 不承诺按电源键熄屏、退到后台或被 HyperOS 杀进程后网页仍持续运行。
-- 不提供远程控制能力；远控属于独立系统。
+- 不提供整机画面、任意点击、键盘注入、ADB、shell 或系统级远控。
 
 ## 2. 技术栈与兼容范围
 
@@ -43,7 +45,10 @@ AndroidX WebKit 选择 1.12.0 是为了在当前 compileSdk 35 构建环境中�
 app/src/main/
 ├── AndroidManifest.xml
 ├── java/com/local/sgplaykeeper/
-│   └── MainActivity.java
+│   ├── MainActivity.java         UI、WebView 会话与命令执行
+│   ├── BatteryMonitor.java       15 秒实时电池/热状态采样
+│   ├── RemoteConfigStore.java    WSS 配置与 Keystore 密钥存储
+│   └── RemoteConnectionManager.java  WSS 鉴权、遥测、命令与重连
 └── res/
     ├── drawable/                 启动图标矢量
     ├── mipmap-anydpi-v26/        Android 8+ 自适应图标
@@ -53,6 +58,17 @@ app/src/main/
     └── xml/
         ├── data_extraction_rules.xml
         └── network_security_config.xml
+```
+
+仓库根目录的 `remote-server/` 是独立 Node.js 20+ 服务：
+
+```text
+remote-server/
+├── server.js                     HTTP 静态站点、设备/控制端 WSS 中继
+├── public/                       iPhone/桌面响应式控制台
+├── test/protocol.test.js         鉴权、遥测、命令回执协议测试
+├── Caddyfile.example             HTTPS/WSS 反向代理示例
+└── play-keeper-relay.service.example  systemd 示例
 ```
 
 当前功能集中在 `MainActivity.java`，便于原型阶段快速验证。功能继续增长时，建议按以下方向拆分：
@@ -71,13 +87,23 @@ MainActivity
 │   ├── 账号1～账号4
 │   ├── 黑屏 / 首页 / 刷新
 │   ├── 桌面或手机模式
-│   └── 横屏或竖屏
+│   ├── 横屏或竖屏
+│   ├── 实时电量与温度
+│   └── 远程连接状态/设置
 ├── WebView 容器
 │   ├── Session 0 → Default Profile
 │   ├── Session 1 → sgplay_account_2
 │   ├── Session 2 → sgplay_account_3
 │   └── Session 3 → sgplay_account_4
 └── 全屏黑色遮罩
+```
+
+远程链路与本地挂机解耦：`MainActivity` 继续直接管理 WebView；`RemoteConnectionManager` 只把状态序列化为 JSON，并将通过白名单验证后的命令回调到主线程。服务器故障、密钥错误或网络断开都不能停止 WebView 或触发 Activity 退出。
+
+```text
+Play Keeper ── WSS /device ── Relay ── WSS /control ── Safari
+     │                            │
+     └─ 设备密钥                  └─ 管理密钥
 ```
 
 所有已打开的 WebView 都保持 `VISIBLE` 并附着在同一个 `FrameLayout` 中，当前账号通过 `bringToFront()` 显示。这样可以减少非当前账号因 `GONE/INVISIBLE` 引起的网页计时器暂停风险。此方式会增加内存消耗，因此账号数量暂时限制为 4。
@@ -194,16 +220,40 @@ Android 原生 `CookieManager.getInstance()` 在同一应用内默认共享 Cook
 - 备份和设备迁移排除应用私有数据，避免登录 Cookie 被云端备份。
 - 由于目标网站使用 HTTP，`network_security_config.xml` 只对 `sgplay.cc` 及子域开放明文流量，其他域默认禁止。
 - HTTP 登录信息存在被同网络攻击者监听或篡改的风险，不应复用重要密码。
+- 远程端点只接受 `wss://`；设备密钥用 Android Keystore 中的 AES-GCM 密钥加密后存入偏好。
+- Relay 使用不同的 `DEVICE_TOKEN` 和 `ADMIN_TOKEN` 对设备与控制台分别鉴权。
+- 远程命令只允许固定名称与严格参数；服务端生成 UUID，并设置 30 秒过期时间。
+- 管理端限速为每连接每分钟 30 条命令，消息体上限 256 KiB。
+- 控制台管理密钥只存入浏览器 `sessionStorage`；关闭标签页后清除。
+- 遥测只包含设备、APP、账号槽位和电池状态，不包含密码、Cookie 或网页存储。
 
-## 11. 已知限制
+## 11. 耗电与远程状态
+
+`BatteryMonitor` 每 15 秒读取一次 Android 提供的整机电池数据。当前电流、电量计数等字段在 ROM 不支持时必须保持 `null`/“不可用”，不能用 0 代替。功率按电池电压与瞬时电流估算，代表电池净流入/流出，不是 Play Keeper 单个进程的精确功耗。
+
+`RemoteConnectionManager` 使用 OkHttp WebSocket：
+
+- 连接建立后发送 `device.hello`，鉴权成功才允许上报或执行命令。
+- OkHttp 每 30 秒发送协议级 Ping。
+- 断线按 2、5、15、30、60 秒重连；成功后归零。
+- 服务器拒绝密钥后停止自动重试，避免错误凭据持续请求。
+- 状态变化和每次电池采样都会发送最新完整快照。
+- 所有命令在 Android 主线程执行，并返回明确成功/失败结果。
+
+允许的命令固定为：`switch_account`、`reload_account`、`open_home`、`set_browser_mode`、`set_orientation`、`enter_black_screen`、`exit_black_screen`、`request_status`。不要新增任意 URL、JavaScript 或系统命令入口。
+
+## 12. 已知限制
 
 - WebView 是否真正持续执行定时器最终取决于网站实现、系统 WebView 和 HyperOS 资源策略。
 - 同时打开 4 个账号会显著增加内存和耗电，应按 1、2、4 个账号逐步压力测试。
 - 页面异常检测目前基于主框架错误和超时，不会分析游戏业务状态。
 - APP 被系统结束后不能继续挂机；下次启动只能恢复登录状态和最后页面。
 - Debug APK 使用 Android Debug 证书，不适合正式分发。正式发布必须使用稳定私有签名。
+- v0.4 只提供状态与 APP 内按钮操作，不提供画面预览或网页坐标点击。
+- Activity 不在运行时，当前版本不会额外启动前台服务维持远程在线。
+- 实时监控尚未保存 7 天历史；历史图表和告警阈值属于后续版本。
 
-## 12. 修改原则
+## 13. 修改原则
 
 1. 不改变现有 Profile 名称和测试包名，除非提供迁移方案。
 2. 不把账号密码写入源码、配置、日志或仓库。
@@ -211,3 +261,4 @@ Android 原生 `CookieManager.getInstance()` 在同一应用内默认共享 Cook
 4. WebView API 必须做系统功能检测，不能假设所有 ROM 支持。
 5. 每次修改都运行 `assembleDebug`、`lintDebug`、签名验证和 Civi 4 Pro 回归测试。
 6. 版本升级同步更新 `versionCode`、`versionName`、README 和 CHANGELOG。
+7. 修改远程协议后必须同时更新 Android、Relay、网页控制台并运行 `npm test`。

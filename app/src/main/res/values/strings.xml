@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SG多账号挂机</string>
+    <string name="remote_device_id">设备 ID：%1$s</string>
+    <string name="remote_security_notice">连接密钥由服务器 DEVICE_TOKEN 提供，并使用 Android Keystore 加密保存。只允许 WSS 加密地址。</string>
 </resources>

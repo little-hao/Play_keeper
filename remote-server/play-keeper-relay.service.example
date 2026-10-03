@@ -1,0 +1,20 @@
+[Unit]
+Description=Play Keeper remote relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=playkeeper
+WorkingDirectory=/opt/play-keeper/remote-server
+EnvironmentFile=/etc/play-keeper-relay.env
+ExecStart=/usr/bin/node /opt/play-keeper/remote-server/server.js
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d12">
+  <title>Play Keeper 远程控制</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <p class="eyebrow">PLAY KEEPER</p>
+        <h1>远程控制台</h1>
+      </div>
+      <span id="connectionState" class="state offline">未连接</span>
+    </header>
+
+    <section id="loginPanel" class="panel login">
+      <h2>连接服务器</h2>
+      <p>输入部署服务时设置的管理密钥。密钥只保留在本页会话中，关闭页面后自动清除。</p>
+      <label for="adminToken">管理密钥</label>
+      <div class="login-row">
+        <input id="adminToken" type="password" autocomplete="current-password" placeholder="ADMIN_TOKEN">
+        <button id="connectButton" class="primary">连接</button>
+      </div>
+      <p id="loginError" class="error" role="alert"></p>
+    </section>
+
+    <section id="dashboard" class="hidden" aria-live="polite">
+      <div class="summary-row">
+        <div><span id="deviceCount">0</span><small>在线设备</small></div>
+        <button id="refreshStatus" class="secondary">刷新状态</button>
+        <button id="disconnectButton" class="secondary">断开</button>
+      </div>
+      <div id="deviceList" class="device-list"></div>
+      <section class="panel log-panel">
+        <div class="section-title"><h2>操作记录</h2><button id="clearLog" class="text-button">清空</button></div>
+        <ol id="eventLog" class="event-log"></ol>
+      </section>
+    </section>
+  </main>
+
+  <template id="deviceTemplate">
+    <article class="panel device-card">
+      <div class="device-heading">
+        <div><span class="online-dot"></span><strong class="device-id"></strong><small class="device-model"></small></div>
+        <span class="last-update"></span>
+      </div>
+      <div class="metrics">
+        <div><small>电量</small><strong class="battery-level">--</strong></div>
+        <div><small>温度</small><strong class="battery-temp">--</strong></div>
+        <div><small>功率</small><strong class="battery-power">--</strong></div>
+        <div><small>当前账号</small><strong class="active-account">--</strong></div>
+      </div>
+      <div class="account-tabs" role="group" aria-label="账号切换"></div>
+      <div class="button-grid">
+        <button data-command="reload_account">刷新账号</button>
+        <button data-command="open_home">返回首页</button>
+        <button data-command="set_browser_mode" data-mode="desktop">桌面模式</button>
+        <button data-command="set_browser_mode" data-mode="mobile">手机模式</button>
+        <button data-command="set_orientation" data-orientation="landscape">横屏</button>
+        <button data-command="set_orientation" data-orientation="portrait">竖屏</button>
+        <button data-command="enter_black_screen">开启黑屏</button>
+        <button data-command="exit_black_screen">退出黑屏</button>
+      </div>
+      <p class="device-note"></p>
+    </article>
+  </template>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -2,9 +2,11 @@ package com.local.sgplaykeeper;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
+import android.content.pm.PackageInfo;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.Color;
@@ -17,6 +19,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputType;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -35,13 +38,20 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.util.Locale;
 
@@ -76,9 +86,16 @@ public final class MainActivity extends Activity {
     private Button refreshButton;
     private Button desktopButton;
     private Button orientationButton;
+    private Button batteryButton;
+    private Button remoteButton;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private SharedPreferences preferences;
+    private BatteryMonitor batteryMonitor;
+    private BatteryMonitor.Snapshot latestBatterySnapshot;
+    private RemoteConfigStore remoteConfigStore;
+    private RemoteConnectionManager remoteConnectionManager;
+    private RemoteConnectionManager.State remoteState = RemoteConnectionManager.State.DISABLED;
 
     private int activeAccount;
     private boolean blackMode;
@@ -108,6 +125,7 @@ public final class MainActivity extends Activity {
         registerNetworkRecovery();
         restoreOpenedAccounts();
         selectAccount(activeAccount, false);
+        startMonitoringAndRemoteConnection();
 
         if (!multiProfileSupported) {
             showToast("当前系统网页组件不支持账号隔离，请更新 Android System WebView");
@@ -161,6 +179,8 @@ public final class MainActivity extends Activity {
         refreshButton = makeButton("刷新", view -> manualReload());
         desktopButton = makeButton("桌面", view -> toggleDesktopMode());
         orientationButton = makeButton("横屏", view -> toggleOrientation());
+        batteryButton = makeButton("电量 --", view -> showBatteryDetails());
+        remoteButton = makeButton("远程", view -> showRemoteSettings());
         rebuildToolbar();
 
         progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -235,6 +255,8 @@ public final class MainActivity extends Activity {
         detachFromParent(refreshButton);
         detachFromParent(desktopButton);
         detachFromParent(orientationButton);
+        detachFromParent(batteryButton);
+        detachFromParent(remoteButton);
         toolbarHost.removeAllViews();
 
         boolean landscape = getResources().getConfiguration().orientation
@@ -249,6 +271,8 @@ public final class MainActivity extends Activity {
             row.addView(refreshButton, weightedButtonParams(0.72f));
             row.addView(desktopButton, weightedButtonParams(0.82f));
             row.addView(orientationButton, weightedButtonParams(0.82f));
+            row.addView(batteryButton, weightedButtonParams(1.05f));
+            row.addView(remoteButton, weightedButtonParams(0.82f));
             toolbarHost.addView(row, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
             toolbarHost.getLayoutParams().height = dp(44);
@@ -263,6 +287,8 @@ public final class MainActivity extends Activity {
             actionRow.addView(refreshButton, weightedButtonParams(1f));
             actionRow.addView(desktopButton, weightedButtonParams(1f));
             actionRow.addView(orientationButton, weightedButtonParams(1f));
+            actionRow.addView(batteryButton, weightedButtonParams(1.15f));
+            actionRow.addView(remoteButton, weightedButtonParams(1f));
             toolbarHost.addView(accountRow, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, dp(38)));
             toolbarHost.addView(actionRow, new LinearLayout.LayoutParams(
@@ -309,6 +335,318 @@ public final class MainActivity extends Activity {
         return drawable;
     }
 
+    private GradientDrawable coloredButtonBackground(int color) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(color);
+        drawable.setCornerRadius(dp(5));
+        return drawable;
+    }
+
+    private void startMonitoringAndRemoteConnection() {
+        batteryMonitor = new BatteryMonitor(this, snapshot -> {
+            latestBatterySnapshot = snapshot;
+            batteryButton.setText(snapshot.compactLabel());
+            if (snapshot.thermalStatus >= android.os.PowerManager.THERMAL_STATUS_SEVERE) {
+                batteryButton.setBackground(coloredButtonBackground(Color.rgb(184, 76, 59)));
+            } else if (!Double.isNaN(snapshot.temperatureC) && snapshot.temperatureC >= 42d) {
+                batteryButton.setBackground(coloredButtonBackground(Color.rgb(180, 124, 40)));
+            } else {
+                batteryButton.setBackground(buttonBackground(false));
+            }
+            pushTelemetry();
+        });
+        batteryMonitor.start();
+
+        remoteConfigStore = new RemoteConfigStore(this);
+        remoteConnectionManager = new RemoteConnectionManager(
+                new RemoteConnectionManager.Listener() {
+                    @Override
+                    public void onRemoteStateChanged(RemoteConnectionManager.State state,
+                                                     String message) {
+                        remoteState = state;
+                        updateRemoteButton();
+                    }
+
+                    @Override
+                    public void onRemoteCommand(String commandId, String command,
+                                                JSONObject parameters) {
+                        executeRemoteCommand(commandId, command, parameters);
+                    }
+
+                    @Override
+                    public JSONObject createTelemetry() {
+                        return buildTelemetry();
+                    }
+                });
+        remoteConnectionManager.start(remoteConfigStore.load());
+    }
+
+    private void updateRemoteButton() {
+        switch (remoteState) {
+            case CONNECTED:
+                remoteButton.setText("远程在线");
+                remoteButton.setBackground(coloredButtonBackground(Color.rgb(42, 143, 80)));
+                break;
+            case CONNECTING:
+                remoteButton.setText("连接中");
+                remoteButton.setBackground(coloredButtonBackground(Color.rgb(39, 108, 174)));
+                break;
+            case ERROR:
+                remoteButton.setText("远程异常");
+                remoteButton.setBackground(coloredButtonBackground(Color.rgb(174, 92, 42)));
+                break;
+            default:
+                remoteButton.setText("远程");
+                remoteButton.setBackground(buttonBackground(false));
+                break;
+        }
+    }
+
+    private void showBatteryDetails() {
+        String details = latestBatterySnapshot == null
+                ? "正在读取电池信息……"
+                : latestBatterySnapshot.detailText();
+        new AlertDialog.Builder(this)
+                .setTitle("耗电与温度监控")
+                .setMessage(details)
+                .setPositiveButton("关闭", null)
+                .show();
+    }
+
+    private void showRemoteSettings() {
+        RemoteConfigStore.Config config = remoteConfigStore.load();
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(20), dp(8), dp(20), 0);
+
+        TextView deviceId = new TextView(this);
+        deviceId.setText(getString(R.string.remote_device_id, config.deviceId));
+        deviceId.setTextIsSelectable(true);
+        deviceId.setTextSize(14);
+        content.addView(deviceId, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        EditText endpoint = new EditText(this);
+        endpoint.setHint("wss://你的域名/device");
+        endpoint.setSingleLine(true);
+        endpoint.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        endpoint.setText(config.endpoint);
+        content.addView(endpoint, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        EditText token = new EditText(this);
+        token.setHint("设备连接密钥");
+        token.setSingleLine(true);
+        token.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        token.setText(config.token);
+        content.addView(token, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        CheckBox enabled = new CheckBox(this);
+        enabled.setText("启用远程连接");
+        enabled.setChecked(config.enabled);
+        content.addView(enabled, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView notice = new TextView(this);
+        notice.setText(R.string.remote_security_notice);
+        notice.setTextSize(12);
+        notice.setTextColor(Color.GRAY);
+        content.addView(notice, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("远程连接设置")
+                .setView(content)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("保存", null)
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(view -> {
+                    String endpointValue = endpoint.getText().toString().trim();
+                    String tokenValue = token.getText().toString().trim();
+                    if (enabled.isChecked()
+                            && (!endpointValue.startsWith("wss://") || tokenValue.isBlank())) {
+                        showToast("启用远程连接需要 WSS 地址和设备密钥");
+                        return;
+                    }
+                    if (!remoteConfigStore.save(enabled.isChecked(), endpointValue, tokenValue)) {
+                        showToast("连接密钥加密保存失败");
+                        return;
+                    }
+                    remoteConnectionManager.start(remoteConfigStore.load());
+                    dialog.dismiss();
+                }));
+        dialog.show();
+    }
+
+    private void executeRemoteCommand(String commandId, String command,
+                                      JSONObject parameters) {
+        boolean success = false;
+        String resultMessage;
+        try {
+            switch (command) {
+                case "switch_account": {
+                    int index = requiredAccountIndex(parameters);
+                    selectAccount(index, false);
+                    success = sessions[index] != null && activeAccount == index;
+                    resultMessage = success ? "账号已切换" : "账号切换失败";
+                    break;
+                }
+                case "reload_account": {
+                    int index = requiredAccountIndex(parameters);
+                    Session session = getOrCreateSession(index);
+                    reloadSession(session);
+                    success = true;
+                    resultMessage = "账号页面已刷新";
+                    break;
+                }
+                case "open_home": {
+                    int index = requiredAccountIndex(parameters);
+                    Session session = getOrCreateSession(index);
+                    session.webView.loadUrl(START_URL);
+                    success = true;
+                    resultMessage = "账号已返回首页";
+                    break;
+                }
+                case "set_browser_mode": {
+                    int index = requiredAccountIndex(parameters);
+                    String mode = parameters.optString("mode");
+                    if (!"desktop".equals(mode) && !"mobile".equals(mode)) {
+                        throw new IllegalArgumentException("浏览器模式无效");
+                    }
+                    Session session = getOrCreateSession(index);
+                    boolean desktop = "desktop".equals(mode);
+                    session.desktopMode = desktop;
+                    preferences.edit().putBoolean(desktopModeKey(index), desktop).apply();
+                    applyUserAgent(session);
+                    session.webView.reload();
+                    if (index == activeAccount) {
+                        updateToolbarState();
+                    }
+                    success = true;
+                    resultMessage = "浏览器模式已更新";
+                    break;
+                }
+                case "set_orientation": {
+                    int index = requiredAccountIndex(parameters);
+                    String orientation = parameters.optString("orientation");
+                    if (!"landscape".equals(orientation) && !"portrait".equals(orientation)) {
+                        throw new IllegalArgumentException("屏幕方向无效");
+                    }
+                    preferences.edit().putBoolean(
+                            landscapeModeKey(index), "landscape".equals(orientation)).apply();
+                    if (index == activeAccount) {
+                        updateToolbarState();
+                        applyPreferredOrientation(index);
+                    }
+                    success = true;
+                    resultMessage = "屏幕方向已更新";
+                    break;
+                }
+                case "enter_black_screen":
+                    enterBlackMode();
+                    success = true;
+                    resultMessage = "黑屏保护已开启";
+                    break;
+                case "exit_black_screen":
+                    exitBlackMode();
+                    success = true;
+                    resultMessage = "黑屏保护已关闭";
+                    break;
+                case "request_status":
+                    success = true;
+                    resultMessage = "状态已更新";
+                    break;
+                default:
+                    resultMessage = "不支持的远程命令";
+                    break;
+            }
+        } catch (RuntimeException error) {
+            resultMessage = error.getMessage() == null ? "命令执行失败" : error.getMessage();
+        }
+        remoteConnectionManager.sendCommandResult(commandId, success, resultMessage);
+        pushTelemetry();
+    }
+
+    private int requiredAccountIndex(JSONObject parameters) {
+        int index = parameters.optInt("accountIndex", -1);
+        if (index < 0 || index >= MAX_ACCOUNTS) {
+            throw new IllegalArgumentException("账号索引无效");
+        }
+        return index;
+    }
+
+    private Session getOrCreateSession(int index) {
+        if (index > 0 && !multiProfileSupported) {
+            throw new IllegalStateException("系统 WebView 不支持账号隔离");
+        }
+        if (sessions[index] == null && !createSession(index)) {
+            throw new IllegalStateException("账号容器创建失败");
+        }
+        return sessions[index];
+    }
+
+    private JSONObject buildTelemetry() {
+        JSONObject telemetry = new JSONObject();
+        try {
+            JSONObject device = new JSONObject();
+            device.put("manufacturer", Build.MANUFACTURER);
+            device.put("model", Build.MODEL);
+            device.put("androidVersion", Build.VERSION.RELEASE);
+            device.put("sdkInt", Build.VERSION.SDK_INT);
+            PackageInfo webViewPackage = WebView.getCurrentWebViewPackage();
+            device.put("webViewVersion", webViewPackage == null
+                    ? JSONObject.NULL : webViewPackage.versionName);
+            telemetry.put("device", device);
+
+            JSONObject app = new JSONObject();
+            app.put("versionCode", 4);
+            app.put("versionName", "0.4.0-remote-test");
+            app.put("activeAccount", activeAccount);
+            app.put("blackScreen", blackMode);
+            app.put("remoteState", remoteState.name().toLowerCase(Locale.ROOT));
+            telemetry.put("app", app);
+
+            telemetry.put("battery", latestBatterySnapshot == null
+                    ? JSONObject.NULL : latestBatterySnapshot.toJson());
+
+            JSONArray accounts = new JSONArray();
+            for (int i = 0; i < MAX_ACCOUNTS; i++) {
+                Session session = sessions[i];
+                JSONObject account = new JSONObject();
+                account.put("index", i);
+                account.put("label", "账号" + (i + 1));
+                account.put("opened", preferences.getBoolean(accountOpenedKey(i), i == 0));
+                account.put("loaded", session != null);
+                account.put("active", i == activeAccount);
+                account.put("desktopMode", session != null
+                        ? session.desktopMode
+                        : preferences.getBoolean(desktopModeKey(i), true));
+                account.put("orientation", preferences.getBoolean(landscapeModeKey(i), true)
+                        ? "landscape" : "portrait");
+                if (session != null) {
+                    account.put("loading", session.loading);
+                    account.put("failed", session.failedForCurrentLoad);
+                    account.put("retryAttempt", session.retryAttempt);
+                    String url = session.webView.getUrl();
+                    account.put("url", isAllowedUrl(url) ? url : JSONObject.NULL);
+                }
+                accounts.put(account);
+            }
+            telemetry.put("accounts", accounts);
+        } catch (JSONException ignored) {
+            // All telemetry values are controlled by the app.
+        }
+        return telemetry;
+    }
+
+    private void pushTelemetry() {
+        if (remoteConnectionManager != null) {
+            remoteConnectionManager.sendTelemetry();
+        }
+    }
+
     private void selectAccount(int accountIndex, boolean userInitiated) {
         if (accountIndex > 0 && !multiProfileSupported) {
             showToast("多账号需要更新 Android System WebView 后使用");
@@ -330,6 +668,7 @@ public final class MainActivity extends Activity {
         if (userInitiated) {
             showToast("已切换到账号" + (accountIndex + 1));
         }
+        pushTelemetry();
     }
 
     private void restoreOpenedAccounts() {
@@ -461,6 +800,7 @@ public final class MainActivity extends Activity {
             if (session.cookieManager != null) {
                 session.cookieManager.flush();
             }
+            pushTelemetry();
         }
 
         @Override
@@ -470,6 +810,7 @@ public final class MainActivity extends Activity {
                 session.loading = false;
                 session.failedForCurrentLoad = true;
                 scheduleRetry(session, "页面连接失败");
+                pushTelemetry();
             }
         }
 
@@ -480,6 +821,7 @@ public final class MainActivity extends Activity {
                 session.loading = false;
                 session.failedForCurrentLoad = true;
                 scheduleRetry(session, "服务器异常 " + errorResponse.getStatusCode());
+                pushTelemetry();
             }
         }
 
@@ -550,6 +892,7 @@ public final class MainActivity extends Activity {
         int accountIndex = session.index;
         removeAndDestroySession(session);
         showToast("账号" + (accountIndex + 1) + "：" + message);
+        pushTelemetry();
         mainHandler.postDelayed(() -> {
             if (!activityDestroyed && sessions[accountIndex] == null) {
                 if (createSession(accountIndex) && accountIndex == activeAccount) {
@@ -599,6 +942,7 @@ public final class MainActivity extends Activity {
         updateToolbarState();
         session.webView.reload();
         showToast(session.desktopMode ? "已切换为桌面模式" : "已切换为手机模式");
+        pushTelemetry();
     }
 
     private void toggleOrientation() {
@@ -610,6 +954,7 @@ public final class MainActivity extends Activity {
         updateToolbarState();
         applyPreferredOrientation(activeAccount);
         showToast(nextLandscape ? "账号已切换为横屏" : "账号已切换为竖屏");
+        pushTelemetry();
     }
 
     private void applyPreferredOrientation(int accountIndex) {
@@ -712,6 +1057,7 @@ public final class MainActivity extends Activity {
         blackOverlay.bringToFront();
         blackOverlay.requestFocus();
         hideSystemBars();
+        pushTelemetry();
     }
 
     private void exitBlackMode() {
@@ -726,6 +1072,7 @@ public final class MainActivity extends Activity {
         showSystemBars();
         root.requestApplyInsets();
         showToast("已退出黑屏保护");
+        pushTelemetry();
     }
 
     private void hideSystemBars() {
@@ -838,6 +1185,12 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         activityDestroyed = true;
+        if (batteryMonitor != null) {
+            batteryMonitor.stop();
+        }
+        if (remoteConnectionManager != null) {
+            remoteConnectionManager.destroy();
+        }
         if (connectivityManager != null && networkCallback != null) {
             try {
                 connectivityManager.unregisterNetworkCallback(networkCallback);

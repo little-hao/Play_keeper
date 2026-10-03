@@ -27,7 +27,7 @@ app/build/outputs/apk/debug/app-debug.apk
 ```groovy
 defaultConfig {
     versionCode 4
-    versionName '0.4.0-test'
+    versionName '0.4.0-remote-test'
 }
 ```
 
@@ -139,6 +139,7 @@ git push -u origin feature/short-description
 - 构建产物没有误提交。
 - README、CHANGELOG 与版本号一致。
 - APK 已通过签名、对齐和包信息检查。
+- `remote-server` 变更已执行 `npm test`，且未提交 `.env`、token 或 `node_modules`。
 
 ## 8. 回滚原则
 

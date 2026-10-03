@@ -4,7 +4,17 @@
 
 `http://sgplay.cc/home.html#/`
 
-## v0.3.0 更新
+## v0.4.0 更新
+
+- 新增电量、温度、电压、电流、估算功率、热状态和省电模式监控
+- 新增仅使用 WSS 的远程连接，可通过 iPhone Safari 或电脑网页操作
+- 远程支持切换账号、刷新、首页、桌面/手机、横竖屏和黑屏开关
+- 安卓设备密钥使用 Android Keystore 加密保存
+- 新增可独立部署的 Node.js 中继服务与响应式网页控制台
+- 远程服务断线按 2、5、15、30、60 秒递增重连，不影响本地挂机
+- 保留 v0.3 的 4 账号隔离、横竖屏记忆、黑屏和异常恢复能力
+
+## v0.3.0 基础能力
 
 - 每个账号单独保存横屏/竖屏偏好，切换账号时自动恢复
 - 横屏采用单行紧凑工具栏，竖屏自动调整为双行工具栏
@@ -32,9 +42,21 @@
 
 ## 当前安装包
 
-`dist/PlayKeeper-Civi4Pro-v0.3.0-test.apk`
+`dist/PlayKeeper-Civi4Pro-v0.4.0-remote-test.apk`
 
-测试版包名仍为 `com.local.sgplaykeeper.test`，版本号为 `3`，可覆盖安装 v0.1/v0.2 测试版，并保留原有 WebView 登录数据。
+测试版包名仍为 `com.local.sgplaykeeper.test`，版本号为 `4`，可覆盖安装 v0.1～v0.3 测试版，并保留原有 WebView 登录数据。
+
+## 远程连接
+
+远程控制由三个部分组成：安卓 APP、仓库中的 `remote-server`、iPhone/电脑浏览器。服务必须先部署到带 HTTPS 证书的域名。
+
+1. 在服务器进入 `remote-server`，安装依赖并配置两个不同的长随机密钥：`ADMIN_TOKEN` 和 `DEVICE_TOKEN`。
+2. 用 Caddy/Nginx 将域名的 HTTPS/WSS 反向代理到本地 `127.0.0.1:8080`。
+3. 安卓 APP 点击“远程”，填写 `wss://你的域名/device` 和 `DEVICE_TOKEN`，勾选启用。
+4. iPhone Safari 打开 `https://你的域名`，输入 `ADMIN_TOKEN`。
+5. 网页显示设备在线后即可查看耗电状态并执行 APP 内白名单操作。
+
+测试阶段不提供整机画面或任意点击，网页只能控制 Play Keeper 自身。完整部署说明见 `remote-server/README.md` 和 `docs/REMOTE_ACCESS_PLAN.md`。
 
 ## 小米建议设置
 
@@ -58,8 +80,9 @@
 
 - `docs/DEVELOPMENT.md`：架构、核心实现、状态模型、异常恢复与安全约束
 - `docs/RELEASE_GUIDE.md`：版本升级、构建、签名、验证和发布流程
-- `docs/REMOTE_ACCESS_PLAN.md`：iPhone/网页远程连接架构与安全方案
-- `docs/POWER_MONITORING_PLAN.md`：耗电、温度采样和告警设计
+- `docs/REMOTE_ACCESS_PLAN.md`：已实现的 iPhone/网页远程连接架构、协议和安全边界
+- `docs/POWER_MONITORING_PLAN.md`：已实现的实时耗电、温度监控及后续历史计划
+- `remote-server/README.md`：中继服务部署与密钥配置
 - `docs/CIVI4_PRO_TEST_PLAN.md`：小米 Civi 4 Pro 回归测试方案
 - `CHANGELOG.md`：版本变更记录
 

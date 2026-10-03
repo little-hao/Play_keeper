@@ -1,6 +1,6 @@
 # 远程连接方案
 
-状态：设计阶段，尚未进入生产实现。
+状态：v0.4 状态与白名单命令 MVP 已实现；画面预览和远程点击尚未实现。
 
 目标是通过 iPhone Safari 或桌面网页远程查看并控制 Play Keeper，而不是接管整台 Android 手机。
 
@@ -127,12 +127,12 @@ Android 执行后返回 `accepted / completed / failed / expired`，网页不能
 
 ## 6. 服务器建议
 
-### 6.1 推荐部署
+### 6.1 当前实现与推荐部署
 
 - 一个低配 VPS
 - Caddy 或 Nginx 提供 HTTPS/WSS
-- 轻量 Go 服务负责设备连接、鉴权、命令路由和静态 PWA
-- SQLite 用于单用户测试；多设备正式使用时迁移 PostgreSQL
+- 仓库 `remote-server` 中的 Node.js 20+ 服务负责设备连接、鉴权、命令路由和静态网页
+- 当前状态仅保存在内存，不使用数据库；服务重启后设备自动重连并重新上报
 - 第二阶段如采用 WebRTC，再增加 coturn；第一阶段不需要
 
 ### 6.2 Android 连接策略
@@ -147,9 +147,17 @@ Android 执行后返回 `accepted / completed / failed / expired`，网页不能
 
 如果未来要求 APP 退到后台后仍远程在线，需要单独评估 Android 14+ 前台服务类型、权限、耗电和应用商店合规，不应直接复用当前前台 Activity 方案。
 
-## 7. 配对与安全
+## 7. 鉴权、配对与安全
 
-### 7.1 首次配对
+### 7.1 v0.4 当前鉴权
+
+- Relay 启动时从环境变量读取不同的 `DEVICE_TOKEN` 与 `ADMIN_TOKEN`，两者均至少 16 位。
+- Android 使用 `DEVICE_TOKEN` 连接 `/device`，网页使用 `ADMIN_TOKEN` 连接 `/control`。
+- Android 的 token 使用 Keystore AES-GCM 加密落盘；网页 token 只保存在标签页会话存储。
+- Relay 不把 token、遥测或操作记录写入磁盘。
+- 该方式适合单用户测试。多个不互信用户共用服务前必须升级为逐设备凭据和用户账号体系。
+
+### 7.2 后续二维码配对方案
 
 1. Android APP 生成设备密钥并保存到 Android Keystore。
 2. APP 显示一次性二维码和 8 位配对码，5 分钟过期。
@@ -157,7 +165,7 @@ Android 执行后返回 `accepted / completed / failed / expired`，网页不能
 4. 服务端绑定用户与 deviceId，并签发可撤销设备凭据。
 5. 后续不再传输配对码。
 
-### 7.2 安全要求
+### 7.3 安全要求
 
 - 全部流量使用 TLS 1.2+，禁止明文 WebSocket。
 - 控制台账号启用 Passkey 或 TOTP 二次验证。
@@ -170,6 +178,17 @@ Android 执行后返回 `accepted / completed / failed / expired`，网页不能
 
 ## 8. 协议草案
 
+Android 首次连接：
+
+```json
+{
+  "type": "device.hello",
+  "deviceId": "PK-ABCDEF123456",
+  "token": "DEVICE_TOKEN",
+  "appVersion": "0.4.0"
+}
+```
+
 Android 上报：
 
 ```json
@@ -177,23 +196,35 @@ Android 上报：
   "type": "telemetry.update",
   "deviceId": "device-public-id",
   "timestamp": 0,
-  "app": {
-    "versionCode": 3,
-    "activeAccount": 0,
-    "blackScreen": true
-  },
-  "battery": {
-    "levelPercent": 99,
-    "charging": true,
-    "temperatureC": 34.2,
-    "currentMa": 620,
-    "estimatedPowerW": 2.6
-  },
-  "accounts": []
+  "payload": {
+    "app": {
+      "versionCode": 4,
+      "activeAccount": 0,
+      "blackScreen": true
+    },
+    "battery": {
+      "levelPercent": 99,
+      "temperatureC": 34.2,
+      "currentNowMa": 620,
+      "estimatedPowerW": 2.6
+    },
+    "accounts": []
+  }
 }
 ```
 
-网页下发：
+网页向 Relay 请求：
+
+```json
+{
+  "type": "command.send",
+  "deviceId": "PK-ABCDEF123456",
+  "command": "reload_account",
+  "parameters": { "accountIndex": 1 }
+}
+```
+
+Relay 校验后向 Android 下发：
 
 ```json
 {
@@ -208,23 +239,20 @@ Android 上报：
 }
 ```
 
-所有字段必须使用版本化 JSON Schema 校验。未知命令或多余危险字段直接拒绝。
+当前实现使用固定命令表和逐命令参数校验，未知命令或非法账号索引直接拒绝。未来协议增加可选字段时应引入版本号和 JSON Schema，同时保持旧客户端兼容。
 
 ## 9. 实施顺序
 
-### v0.4：本地耗电监控
+### v0.4：耗电监控与远程命令 MVP（已完成）
 
 - 电池与热状态采集
 - APP 内状态条和详情面板
-- 1 分钟聚合、7 天本地历史
-- 温度与异常掉电提醒
-
-### v0.5：远程状态与命令 MVP
-
 - Android WSS 客户端
 - VPS Relay API
 - iPhone Safari PWA
-- 配对、设备状态、白名单命令和审计日志
+- 双密钥鉴权、设备状态、白名单命令和当前会话操作日志
+
+尚未完成：1 分钟聚合、7 天本地历史、二维码配对、长期审计和主动推送提醒。
 
 ### v0.6：按需页面快照
 

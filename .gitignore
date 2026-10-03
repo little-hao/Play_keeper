@@ -1,5 +1,7 @@
 .DS_Store
 .gradle/
+remote-server/node_modules/
+remote-server/.env
 **/build/
 local.properties
 *.iml
