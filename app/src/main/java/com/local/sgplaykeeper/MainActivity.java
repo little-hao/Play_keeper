@@ -568,6 +568,27 @@ public final class MainActivity extends Activity {
         templeEnabled.setChecked(automationCoordinator.isTempleEnabled(accountIndex));
         form.addView(templeEnabled);
 
+        form.addView(formLabel("装备定向转移（每次最多5件）"));
+        EditText equipmentItems = new EditText(this);
+        equipmentItems.setSingleLine(true);
+        equipmentItems.setHint("菜鸟戒指,菜鸟宝石,菜鸟项链");
+        equipmentItems.setText(automationCoordinator.equipmentItemsText(accountIndex));
+        form.addView(equipmentItems, formFieldParams());
+
+        form.addView(formLabel("装备单价（默认920金币）"));
+        EditText equipmentPrice = new EditText(this);
+        equipmentPrice.setSingleLine(true);
+        equipmentPrice.setInputType(InputType.TYPE_CLASS_NUMBER);
+        equipmentPrice.setText(String.valueOf(automationCoordinator.equipmentPrice(accountIndex)));
+        form.addView(equipmentPrice, formFieldParams());
+
+        form.addView(formLabel("装备指定买家ID（上架必填）"));
+        EditText equipmentBuyer = new EditText(this);
+        equipmentBuyer.setSingleLine(true);
+        equipmentBuyer.setHint("支持字母、数字和 @ _ . -");
+        equipmentBuyer.setText(automationCoordinator.equipmentBuyer(accountIndex));
+        form.addView(equipmentBuyer, formFieldParams());
+
         TextView notice = formLabel("脚本仅在 Play Keeper 前台或常亮黑屏模式运行；"
                 + "关屏或被 HyperOS 清理后无法保证定时执行。");
         notice.setTextColor(Color.rgb(160, 166, 178));
@@ -575,25 +596,45 @@ public final class MainActivity extends Activity {
 
         Button auctionNow = makeButton("保存并立即拍卖", view -> {
             if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                    buyer, hours, storeEnabled, templeEnabled)) {
+                    buyer, hours, storeEnabled, templeEnabled, equipmentItems,
+                    equipmentPrice, equipmentBuyer)) {
                 automationCoordinator.runAuctionNow(accountIndex);
             }
         });
         form.addView(auctionNow, automationActionParams());
         Button storeSellNow = makeButton("保存并立即卖出金币券", view -> {
             if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                    buyer, hours, storeEnabled, templeEnabled)) {
+                    buyer, hours, storeEnabled, templeEnabled, equipmentItems,
+                    equipmentPrice, equipmentBuyer)) {
                 automationCoordinator.runStoreSellNow(accountIndex);
             }
         });
         form.addView(storeSellNow, automationActionParams());
         Button templeNow = makeButton("保存并立即检查圣殿挂机", view -> {
             if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                    buyer, hours, storeEnabled, templeEnabled)) {
+                    buyer, hours, storeEnabled, templeEnabled, equipmentItems,
+                    equipmentPrice, equipmentBuyer)) {
                 automationCoordinator.runTempleNow(accountIndex);
             }
         });
         form.addView(templeNow, automationActionParams());
+
+        Button equipmentSellNow = makeButton("保存并立即上架装备", view -> {
+            if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
+                    buyer, hours, storeEnabled, templeEnabled, equipmentItems,
+                    equipmentPrice, equipmentBuyer)) {
+                automationCoordinator.runEquipmentSellNow(accountIndex);
+            }
+        });
+        form.addView(equipmentSellNow, automationActionParams());
+        Button equipmentBuyNow = makeButton("保存并立即购买装备", view -> {
+            if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
+                    buyer, hours, storeEnabled, templeEnabled, equipmentItems,
+                    equipmentPrice, equipmentBuyer)) {
+                automationCoordinator.runEquipmentBuyNow(accountIndex);
+            }
+        });
+        form.addView(equipmentBuyNow, automationActionParams());
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(accountDisplayName(accountIndex) + " · 一键脚本")
@@ -604,7 +645,8 @@ public final class MainActivity extends Activity {
         dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
                 .setOnClickListener(view -> {
                     if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                            buyer, hours, storeEnabled, templeEnabled)) {
+                            buyer, hours, storeEnabled, templeEnabled, equipmentItems,
+                            equipmentPrice, equipmentBuyer)) {
                         dialog.dismiss();
                         showToast("脚本设置已保存");
                     }
@@ -615,7 +657,9 @@ public final class MainActivity extends Activity {
     private boolean saveAutomationForm(int accountIndex, CheckBox auctionEnabled,
                                        EditText auctionItems,
                                        EditText buyer, EditText hours,
-                                       CheckBox storeEnabled, CheckBox templeEnabled) {
+                                       CheckBox storeEnabled, CheckBox templeEnabled,
+                                       EditText equipmentItems, EditText equipmentPrice,
+                                       EditText equipmentBuyer) {
         try {
             int intervalHours = Integer.parseInt(hours.getText().toString().trim());
             String auctionItemText = auctionItems.getText().toString();
@@ -625,6 +669,10 @@ public final class MainActivity extends Activity {
             automationCoordinator.configureStoreSell(accountIndex, storeEnabled.isChecked(),
                     storeItems, intervalHours);
             automationCoordinator.configureTemple(accountIndex, templeEnabled.isChecked());
+            int transferPrice = Integer.parseInt(equipmentPrice.getText().toString().trim());
+            automationCoordinator.configureEquipmentTransfer(accountIndex,
+                    equipmentItems.getText().toString(), transferPrice,
+                    equipmentBuyer.getText().toString());
             return true;
         } catch (RuntimeException error) {
             showToast(error.getMessage() == null ? "脚本设置无效" : error.getMessage());
@@ -915,6 +963,38 @@ public final class MainActivity extends Activity {
                     resultMessage = "已启动道具商店卖出";
                     break;
                 }
+                case "configure_equipment_transfer": {
+                    int index = requiredAccountIndex(parameters);
+                    JSONArray itemArray = parameters.optJSONArray("items");
+                    if (itemArray == null) {
+                        throw new IllegalArgumentException("装备列表无效");
+                    }
+                    StringBuilder itemText = new StringBuilder();
+                    for (int i = 0; i < itemArray.length(); i++) {
+                        if (i > 0) itemText.append(',');
+                        itemText.append(itemArray.optString(i));
+                    }
+                    automationCoordinator.configureEquipmentTransfer(index,
+                            itemText.toString(), parameters.optInt("price", 920),
+                            parameters.optString("buyer", ""));
+                    success = true;
+                    resultMessage = "装备定向转移设置已更新";
+                    break;
+                }
+                case "run_equipment_sell": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.runEquipmentSellNow(index);
+                    success = true;
+                    resultMessage = "已启动装备上架";
+                    break;
+                }
+                case "run_equipment_buy": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.runEquipmentBuyNow(index);
+                    success = true;
+                    resultMessage = "已启动装备购买";
+                    break;
+                }
                 case "configure_temple_guard": {
                     int index = requiredAccountIndex(parameters);
                     automationCoordinator.configureTemple(index,
@@ -1192,8 +1272,8 @@ public final class MainActivity extends Activity {
             telemetry.put("device", device);
 
             JSONObject app = new JSONObject();
-            app.put("versionCode", 9);
-            app.put("versionName", "1.2.0");
+            app.put("versionCode", 10);
+            app.put("versionName", "1.3.0-equipment-test");
             app.put("activeAccount", activeAccount);
             app.put("blackScreen", blackMode);
             app.put("executionMode", blackMode

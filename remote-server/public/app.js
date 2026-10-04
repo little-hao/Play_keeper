@@ -258,6 +258,9 @@ function renderDevices() {
     const storeSellEnabled = card.querySelector(".store-sell-enabled");
     const storeSellItem = card.querySelector(".store-sell-item");
     const templeEnabled = card.querySelector(".temple-enabled");
+    const equipmentItemsInput = card.querySelector(".equipment-items");
+    const equipmentPriceInput = card.querySelector(".equipment-price");
+    const equipmentBuyerInput = card.querySelector(".equipment-buyer");
     const auctionItems = Array.isArray(automation.auctionItems)
       ? automation.auctionItems : (automation.sellItems ?? ["进化宝石", "曙光印记"]);
     auctionEnabled.checked = automation.auctionEnabled === true || automation.sellEnabled === true;
@@ -269,6 +272,12 @@ function renderDevices() {
     storeSellEnabled.checked = automation.storeSellEnabled === true;
     storeSellItem.value = "金币券";
     templeEnabled.checked = automation.templeEnabled === true;
+    equipmentItemsInput.value = Array.isArray(automation.equipmentItems)
+      ? automation.equipmentItems.join(",") : "菜鸟戒指,菜鸟宝石,菜鸟项链";
+    equipmentPriceInput.value = String(Number.isInteger(automation.equipmentPrice)
+      ? automation.equipmentPrice : 920);
+    equipmentBuyerInput.value = typeof automation.equipmentBuyer === "string"
+      ? automation.equipmentBuyer : "";
     card.querySelector(".automation-status").textContent = automation.busy
       ? `运行中 · ${automation.lastMessage || "正在执行"}`
       : (automation.lastMessage || "尚未运行");
@@ -278,6 +287,10 @@ function renderDevices() {
         .map((item) => item.trim()).filter(Boolean);
       const intervalHours = Number.parseInt(auctionHours.value, 10);
       const buyer = auctionBuyer.value.trim();
+      const equipmentItems = equipmentItemsInput.value.split(/[,，\n]/)
+        .map((item) => item.trim()).filter(Boolean);
+      const equipmentPrice = Number.parseInt(equipmentPriceInput.value, 10);
+      const equipmentBuyer = equipmentBuyerInput.value.trim();
       if (!items.length || items.length > 10 || items.some((item) => item.length > 30)) {
         return addLog("拍卖道具需填写1–10种，每项不超过30字");
       }
@@ -285,6 +298,16 @@ function renderDevices() {
         return addLog("拍卖间隔需为1–168小时");
       }
       if (!/^[A-Za-z0-9_.-]{1,30}$/.test(buyer)) return addLog("指定买家格式无效");
+      if (!equipmentItems.length || equipmentItems.length > 5
+          || equipmentItems.some((item) => item.length > 30)) {
+        return addLog("装备名称需填写1–5种，每项不超过30字");
+      }
+      if (!Number.isInteger(equipmentPrice) || equipmentPrice < 1 || equipmentPrice > 9_999_999) {
+        return addLog("装备单价需为1–9999999金币");
+      }
+      if (!/^[A-Za-z0-9@_.-]{0,30}$/.test(equipmentBuyer)) {
+        return addLog("装备指定买家ID格式无效");
+      }
       sendCommand(device.deviceId, "configure_auto_auction", {
         accountIndex: activeAccountIndex,
         enabled: auctionEnabled.checked,
@@ -302,6 +325,12 @@ function renderDevices() {
         accountIndex: activeAccountIndex,
         enabled: templeEnabled.checked
       });
+      sendCommand(device.deviceId, "configure_equipment_transfer", {
+        accountIndex: activeAccountIndex,
+        items: equipmentItems,
+        price: equipmentPrice,
+        buyer: equipmentBuyer
+      });
       addLog(`${accountLabel(accounts, activeAccountIndex)} 脚本设置已发送`);
       return true;
     };
@@ -314,6 +343,13 @@ function renderDevices() {
     });
     card.querySelector(".run-temple").addEventListener("click", () => {
       if (saveAutomation()) sendCommand(device.deviceId, "run_temple_guard", { accountIndex: activeAccountIndex });
+    });
+    card.querySelector(".run-equipment-sell").addEventListener("click", () => {
+      if (!equipmentBuyerInput.value.trim()) return addLog("上架装备前请填写指定买家ID");
+      if (saveAutomation()) sendCommand(device.deviceId, "run_equipment_sell", { accountIndex: activeAccountIndex });
+    });
+    card.querySelector(".run-equipment-buy").addEventListener("click", () => {
+      if (saveAutomation()) sendCommand(device.deviceId, "run_equipment_buy", { accountIndex: activeAccountIndex });
     });
     elements.deviceList.append(card);
     if (!app.previewEnabled) {

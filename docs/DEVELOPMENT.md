@@ -35,7 +35,7 @@ Play Keeper 是一个面向小米 Civi 4 Pro / HyperOS 的轻量 Android WebView
 | minSdk | 26 |
 | AndroidX WebKit | 1.12.0 |
 | v1.2.0 兼容包名 | `com.local.sgplaykeeper.test` |
-| 版本 | versionCode 9 / versionName 1.2.0 |
+| 版本 | versionCode 10 / versionName 1.3.0-equipment-test |
 
 AndroidX WebKit 选择 1.12.0 是为了在当前 compileSdk 35 构建环境中稳定使用 Multi-Profile API。升级 WebKit 前需要重新检查其 `minCompileSdk`、传递依赖和 Civi 4 Pro 的实际 WebView 功能支持。
 
@@ -254,7 +254,7 @@ Android 原生 `CookieManager.getInstance()` 在同一应用内默认共享 Cook
 - 状态变化和每次电池采样都会发送最新完整快照。
 - 所有命令在 Android 主线程执行，并返回明确成功/失败结果。
 
-允许的命令固定为：`switch_account`、`reload_account`、`open_home`、`set_browser_mode`、`set_orientation`、`enter_black_screen`、`exit_black_screen`、`request_status`、`preview_start`、`preview_stop`、`pointer_tap`、`select_option`、`configure_auto_auction`、`run_auto_auction`、`configure_store_sell`、`run_store_sell`、`configure_temple_guard`、`run_temple_guard`。`configure_auto_sell`/`run_auto_sell` 仅作为 v1.0 兼容别名。不要新增任意 URL、JavaScript 或系统命令入口。
+允许的命令固定为：`switch_account`、`reload_account`、`open_home`、`set_browser_mode`、`set_orientation`、`enter_black_screen`、`exit_black_screen`、`request_status`、`preview_start`、`preview_stop`、`pointer_tap`、`select_option`、`configure_auto_auction`、`run_auto_auction`、`configure_store_sell`、`run_store_sell`、`configure_temple_guard`、`run_temple_guard`、`configure_equipment_transfer`、`run_equipment_sell`、`run_equipment_buy`。`configure_auto_sell`/`run_auto_sell` 仅作为 v1.0 兼容别名。不要新增任意 URL、JavaScript 或系统命令入口。
 
 ## 12. 页面预览、账号名称与远程单击
 
@@ -307,13 +307,22 @@ Android 原生 `CookieManager.getInstance()` 在同一应用内默认共享 Cook
 - 配置后再寻找“开始挂机”并点击；任何控件不匹配都中止并上报错误。
 - 定时周期固定为 1h，支持 Android/远程网页手动立即检查。
 
+### 13.5 装备定向转移（v1.3 测试）
+
+- 配置按账号独立保存：1–5个完整装备名、1–9999999金币单价和最长30字符的指定买家ID。买家ID允许字母、数字、`@_.-`，不保存登录密码。
+- 卖方流程仅操作右侧含“装备数：”的背包容器，按完整名称匹配。上架弹窗必须同时满足标题“上架装备拍卖”和装备名一致，然后才填入单价与玩家ID。
+- 输入使用原生 `HTMLInputElement.value` setter 并触发 `input/change`，兼容 Vue/uni-app 受控输入框。点击确认前再读回价格和买家；提交后必须看到弹窗关闭且背包同名行数减少。
+- 买方流程仅操作左侧含“价格(金币)”的拍卖列表，同时精确匹配装备名与单价。购买弹窗再校验“购买装备确认”、装备名和价格。
+- 因购买弹窗不显示卖家ID，如同一装备名+价格出现多条，脚本中止并要求人工核对，不选择第一条。
+- 上架或购买完成后共用 `restoreAfkAfterOperation()` 返回挂机辅助、恢复竖屏和圣兽云殿检查。任何结构、数量或复核失败都会中止当前任务。
+
 ## 14. 已知限制
 
 - WebView 是否真正持续执行定时器最终取决于网站实现、系统 WebView 和 HyperOS 资源策略。
 - 同时打开 4 个账号会显著增加内存和耗电，应按 1、2、4 个账号逐步压力测试。
 - 页面异常检测包含主框架错误、超时及30分钟战斗场次停滞；停滞仅作远程提示，不自动重新登录。
 - APP 被系统结束后不能继续挂机；下次启动只能恢复登录状态和最后页面。
-- v1.2.0 为了覆盖安装历史版本并保留 WebView Profile，延续现有 Android Debug 证书。此方案仅适合当前个人 GitHub 分发，不适合公开应用商店。
+- v1.3.0-equipment-test 为了覆盖安装历史版本并保留 WebView Profile，延续现有 Android Debug 证书。此方案仅适合当前个人 GitHub 分发，不适合公开应用商店。
 - WebView 硬件渲染在部分 ROM 上可能导致 `draw(Canvas)` 截图空白，需以 Civi 4 Pro 实测为准。
 - v0.5 远程只支持单击，不支持拖动、多点触控、键盘、文件上传或声音。
 - Activity 不在运行时，当前版本不会额外启动前台服务维持远程在线。

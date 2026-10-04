@@ -82,6 +82,21 @@ const commandValidators = {
       && parameters.intervalHours <= 168;
   },
   run_store_sell: accountParameters,
+  configure_equipment_transfer(parameters) {
+    return accountParameters(parameters)
+      && Array.isArray(parameters.items)
+      && parameters.items.length >= 1
+      && parameters.items.length <= 5
+      && parameters.items.every((item) => typeof item === "string"
+        && item.trim().length >= 1 && item.trim().length <= 30)
+      && Number.isInteger(parameters.price)
+      && parameters.price >= 1
+      && parameters.price <= 9_999_999
+      && typeof parameters.buyer === "string"
+      && (/^[A-Za-z0-9@_.-]{0,30}$/).test(parameters.buyer);
+  },
+  run_equipment_sell: accountParameters,
+  run_equipment_buy: accountParameters,
   configure_temple_guard(parameters) {
     return accountParameters(parameters) && typeof parameters.enabled === "boolean";
   },
@@ -141,7 +156,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.2.0" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.3.0-equipment-test" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {

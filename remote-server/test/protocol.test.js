@@ -178,6 +178,23 @@ test("device telemetry and browser command complete a round trip", async (contex
   assert.equal(storeSell.command, "configure_store_sell");
   assert.deepEqual(storeSell.parameters.items, ["金币券"]);
 
+  const equipmentPromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "configure_equipment_transfer",
+    parameters: {
+      accountIndex: 2,
+      items: ["菜鸟戒指", "菜鸟宝石", "菜鸟项链"],
+      price: 920,
+      buyer: "buyer@id"
+    }
+  }));
+  const equipment = await equipmentPromise;
+  assert.equal(equipment.command, "configure_equipment_transfer");
+  assert.equal(equipment.parameters.price, 920);
+  assert.equal(equipment.parameters.buyer, "buyer@id");
+
   const automaticStopPromise = nextJson(device, "command.request");
   control.close();
   const automaticStop = await automaticStopPromise;
@@ -233,7 +250,7 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    ok: true, service: "play-keeper-relay", version: "1.2.0"
+    ok: true, service: "play-keeper-relay", version: "1.3.0-equipment-test"
   });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);
