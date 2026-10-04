@@ -178,8 +178,9 @@ function renderDevices() {
     card.querySelector(".battery-level").textContent = value(battery.levelPercent, "%");
     card.querySelector(".battery-temp").textContent = value(battery.temperatureC, "°C", 1);
     card.querySelector(".battery-power").textContent = value(battery.estimatedPowerW, "W", 2);
+    const activeMonitor = activeAccountTelemetry.automation ?? {};
     card.querySelector(".active-account").textContent = Number.isInteger(app.activeAccount)
-      ? accountLabel(accounts, app.activeAccount) : "--";
+      ? `${accountLabel(accounts, app.activeAccount)}${activeMonitor.monitorStatus === "offline" ? " · 掉线" : ""}` : "--";
     const runState = app.blackScreen
       ? "前台常亮 · 黑色遮罩已开启"
       : "前台常亮 · 页面可见";
@@ -188,7 +189,13 @@ function renderDevices() {
     const tabs = card.querySelector(".account-tabs");
     for (let index = 0; index < 4; index += 1) {
       const button = document.createElement("button");
-      button.textContent = accountLabel(accounts, index);
+      const account = accounts.find((item) => item?.index === index) ?? {};
+      const monitor = account.automation ?? {};
+      const isOffline = monitor.monitorStatus === "offline";
+      button.textContent = `${accountLabel(accounts, index)}${isOffline ? " · 掉线" : ""}`;
+      if (isOffline) button.classList.add("offline");
+      if (monitor.monitorStatus === "online") button.classList.add("healthy");
+      button.title = monitor.monitorMessage || "等待战斗统计检查";
       if (app.activeAccount === index) button.classList.add("active");
       button.addEventListener("click", () => sendCommand(device.deviceId, "switch_account", { accountIndex: index }));
       tabs.append(button);
@@ -246,9 +253,9 @@ function renderDevices() {
 
     const auctionEnabled = card.querySelector(".auction-enabled");
     const auctionHours = card.querySelector(".auction-hours");
-    const auctionEvolution = card.querySelector(".auction-evolution");
-    const auctionDawn = card.querySelector(".auction-dawn");
+    const auctionItemsInput = card.querySelector(".auction-items");
     const auctionBuyer = card.querySelector(".auction-buyer");
+    const storeSellEnabled = card.querySelector(".store-sell-enabled");
     const storeSellItem = card.querySelector(".store-sell-item");
     const templeEnabled = card.querySelector(".temple-enabled");
     const auctionItems = Array.isArray(automation.auctionItems)
@@ -256,10 +263,10 @@ function renderDevices() {
     auctionEnabled.checked = automation.auctionEnabled === true || automation.sellEnabled === true;
     auctionHours.value = String(Number.isInteger(automation.auctionIntervalHours)
       ? automation.auctionIntervalHours : (automation.sellIntervalHours ?? 12));
-    auctionEvolution.checked = auctionItems.includes("进化宝石");
-    auctionDawn.checked = auctionItems.includes("曙光印记");
+    auctionItemsInput.value = auctionItems.join(",") || "进化宝石,曙光印记";
     auctionBuyer.value = typeof automation.auctionBuyer === "string" && automation.auctionBuyer
       ? automation.auctionBuyer : (automation.sellBuyer || "hao");
+    storeSellEnabled.checked = automation.storeSellEnabled === true;
     storeSellItem.value = "金币券";
     templeEnabled.checked = automation.templeEnabled === true;
     card.querySelector(".automation-status").textContent = automation.busy
@@ -267,13 +274,13 @@ function renderDevices() {
       : (automation.lastMessage || "尚未运行");
 
     const saveAutomation = () => {
-      const items = [
-        auctionEvolution.checked ? "进化宝石" : "",
-        auctionDawn.checked ? "曙光印记" : ""
-      ].filter(Boolean);
+      const items = auctionItemsInput.value.split(/[,，\n]/)
+        .map((item) => item.trim()).filter(Boolean);
       const intervalHours = Number.parseInt(auctionHours.value, 10);
       const buyer = auctionBuyer.value.trim();
-      if (!items.length) return addLog("至少选择一种拍卖道具");
+      if (!items.length || items.length > 10 || items.some((item) => item.length > 30)) {
+        return addLog("拍卖道具需填写1–10种，每项不超过30字");
+      }
       if (!Number.isInteger(intervalHours) || intervalHours < 1 || intervalHours > 168) {
         return addLog("拍卖间隔需为1–168小时");
       }
@@ -287,7 +294,9 @@ function renderDevices() {
       });
       sendCommand(device.deviceId, "configure_store_sell", {
         accountIndex: activeAccountIndex,
-        items: [storeSellItem.value]
+        enabled: storeSellEnabled.checked,
+        items: [storeSellItem.value],
+        intervalHours
       });
       sendCommand(device.deviceId, "configure_temple_guard", {
         accountIndex: activeAccountIndex,

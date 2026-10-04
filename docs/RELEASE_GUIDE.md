@@ -26,15 +26,15 @@ app/build/outputs/apk/debug/app-debug.apk
 
 ```groovy
 defaultConfig {
-    versionCode 8
-    versionName '1.1.0'
+    versionCode 9
+    versionName '1.2.0'
 }
 ```
 
 - `versionCode` 必须递增，否则 Android 不允许覆盖安装。
 - `versionName` 采用语义化版本，测试包可追加 `-test`。
 - 不要修改 `applicationId`，否则会安装成另一个 APP，无法继承 Profile 数据。
-- v1.1.0 的 Debug/Release 都保留 `applicationIdSuffix '.test'`，以覆盖历史版本并保留 WebView Profile。
+- v1.2.0 的 Debug/Release 都保留 `applicationIdSuffix '.test'`，以覆盖历史版本并保留 WebView Profile。
 
 ## 3. Debug 构建验证
 
@@ -82,9 +82,9 @@ adb install -r app-debug.apk
 
 `-r` 表示覆盖安装并保留数据。若签名不同，Android 会拒绝覆盖安装；不要为了解决此问题卸载旧版，除非用户接受所有登录状态被清除。
 
-## 5. v1.1.0 兼容签名与后续正式签名
+## 5. v1.2.0 兼容签名与后续正式签名
 
-v1.1.0 GitHub 发布包使用历史版本同一 Android Debug 证书，目的是支持 `adb install -r` 和系统直接覆盖安装，不丢失 4 个账号的登录数据。构建时 Release buildType 显式使用同一签名，且不带 `-debug` 版本名后缀。
+v1.2.0 GitHub 发布包使用历史版本同一 Android Debug 证书，目的是支持 `adb install -r` 和系统直接覆盖安装，不丢失 4 个账号的登录数据。构建时 Release buildType 显式使用同一签名，且不带 `-debug` 版本名后缀。
 
 该签名只适合当前个人 GitHub 分发，不适合公开商店。如未来需要应用商店或多人分发，应创建稳定私有 release keystore，同时提供明确的登录数据迁移方案。
 

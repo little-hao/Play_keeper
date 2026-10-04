@@ -31,6 +31,10 @@ final class AutomationCoordinator {
 
         void openHome(int accountIndex);
 
+        void prepareAutomation(int accountIndex, boolean landscape);
+
+        boolean isAccountOpened(int accountIndex);
+
         void onAutomationChanged();
 
         void showMessage(String message);
@@ -38,12 +42,11 @@ final class AutomationCoordinator {
 
     static final long DEFAULT_SELL_INTERVAL_MS = 12L * 60L * 60L * 1000L;
     static final long TEMPLE_CHECK_INTERVAL_MS = 60L * 60L * 1000L;
+    static final long BATTLE_MONITOR_INTERVAL_MS = 30L * 60L * 1000L;
     private static final long TICK_INTERVAL_MS = 60_000L;
     private static final String DEFAULT_AUCTION_ITEMS = "进化宝石,曙光印记";
     private static final String DEFAULT_STORE_ITEMS = "金币券";
     private static final String DEFAULT_BUYER = "hao";
-    private static final Set<String> ALLOWED_AUCTION_ITEMS = new LinkedHashSet<>(
-            Arrays.asList("进化宝石", "曙光印记"));
     private static final Set<String> ALLOWED_STORE_ITEMS = new LinkedHashSet<>(
             Arrays.asList("金币券"));
 
@@ -53,6 +56,9 @@ final class AutomationCoordinator {
     private static final String PREF_SELL_INTERVAL = "automation_sell_interval_";
     private static final String PREF_SELL_LAST = "automation_sell_last_";
     private static final String PREF_STORE_ITEMS = "automation_store_items_";
+    private static final String PREF_STORE_ENABLED = "automation_store_enabled_";
+    private static final String PREF_STORE_INTERVAL = "automation_store_interval_";
+    private static final String PREF_STORE_LAST = "automation_store_last_";
     private static final String PREF_TEMPLE_ENABLED = "automation_temple_enabled_";
     private static final String PREF_TEMPLE_LAST = "automation_temple_last_";
 
@@ -90,9 +96,13 @@ final class AutomationCoordinator {
         return preferences.getBoolean(PREF_TEMPLE_ENABLED + accountIndex, false);
     }
 
+    boolean isStoreSellEnabled(int accountIndex) {
+        return preferences.getBoolean(PREF_STORE_ENABLED + accountIndex, false);
+    }
+
     String auctionItemsText(int accountIndex) {
-        List<String> items = parseAllowedItems(preferences.getString(
-                PREF_SELL_ITEMS + accountIndex, DEFAULT_AUCTION_ITEMS), ALLOWED_AUCTION_ITEMS);
+        List<String> items = parseAuctionItems(preferences.getString(
+                PREF_SELL_ITEMS + accountIndex, DEFAULT_AUCTION_ITEMS));
         return items.isEmpty() ? DEFAULT_AUCTION_ITEMS : String.join(",", items);
     }
 
@@ -113,10 +123,16 @@ final class AutomationCoordinator {
         return items.isEmpty() ? DEFAULT_STORE_ITEMS : String.join(",", items);
     }
 
+    int storeSellIntervalHours(int accountIndex) {
+        long interval = preferences.getLong(
+                PREF_STORE_INTERVAL + accountIndex, DEFAULT_SELL_INTERVAL_MS);
+        return (int) Math.max(1L, Math.min(168L, interval / (60L * 60L * 1000L)));
+    }
+
     void configureAuction(int accountIndex, boolean enabled, String itemText,
                           String buyer, int intervalHours) {
         requireAccount(accountIndex);
-        List<String> items = requireAllowedItems(itemText, ALLOWED_AUCTION_ITEMS, "拍卖");
+        List<String> items = parseAuctionItems(itemText);
         if (items.isEmpty()) {
             throw new IllegalArgumentException("至少需要一种拍卖道具");
         }
@@ -135,11 +151,17 @@ final class AutomationCoordinator {
         host.onAutomationChanged();
     }
 
-    void configureStoreSell(int accountIndex, String itemText) {
+    void configureStoreSell(int accountIndex, boolean enabled, String itemText,
+                            int intervalHours) {
         requireAccount(accountIndex);
         List<String> items = requireAllowedItems(itemText, ALLOWED_STORE_ITEMS, "商店卖出");
-        preferences.edit().putString(
-                PREF_STORE_ITEMS + accountIndex, String.join(",", items)).apply();
+        int safeHours = Math.max(1, Math.min(168, intervalHours));
+        preferences.edit()
+                .putBoolean(PREF_STORE_ENABLED + accountIndex, enabled)
+                .putString(PREF_STORE_ITEMS + accountIndex, String.join(",", items))
+                .putLong(PREF_STORE_INTERVAL + accountIndex,
+                        safeHours * 60L * 60L * 1000L)
+                .apply();
         host.onAutomationChanged();
     }
 
@@ -167,8 +189,7 @@ final class AutomationCoordinator {
     void appendAccountTelemetry(JSONObject account, int accountIndex) throws JSONException {
         RuntimeState state = states[accountIndex];
         JSONObject automation = new JSONObject();
-        List<String> auctionItems = parseAllowedItems(
-                auctionItemsText(accountIndex), ALLOWED_AUCTION_ITEMS);
+        List<String> auctionItems = parseAuctionItems(auctionItemsText(accountIndex));
         automation.put("auctionEnabled", isAuctionEnabled(accountIndex));
         automation.put("auctionItems", new JSONArray(auctionItems));
         automation.put("auctionBuyer", auctionBuyer(accountIndex));
@@ -177,6 +198,10 @@ final class AutomationCoordinator {
                 PREF_SELL_LAST + accountIndex, 0L));
         automation.put("storeSellItems", new JSONArray(parseAllowedItems(
                 storeSellItemsText(accountIndex), ALLOWED_STORE_ITEMS)));
+        automation.put("storeSellEnabled", isStoreSellEnabled(accountIndex));
+        automation.put("storeSellIntervalHours", storeSellIntervalHours(accountIndex));
+        automation.put("storeSellLastRunAt", preferences.getLong(
+                PREF_STORE_LAST + accountIndex, 0L));
         // v1.0 Relay compatibility while the VPS is being upgraded.
         automation.put("sellEnabled", isAuctionEnabled(accountIndex));
         automation.put("sellItems", new JSONArray(auctionItems));
@@ -191,6 +216,10 @@ final class AutomationCoordinator {
         automation.put("status", state.status);
         automation.put("lastMessage", state.lastMessage);
         automation.put("updatedAt", state.updatedAt);
+        automation.put("monitorStatus", state.monitorStatus);
+        automation.put("monitorMessage", state.monitorMessage);
+        automation.put("lastBattleCount", state.lastBattleCount);
+        automation.put("battleLastCheckAt", state.lastBattleCheckAt);
         account.put("automation", automation);
     }
 
@@ -202,7 +231,7 @@ final class AutomationCoordinator {
             }
             long now = System.currentTimeMillis();
             for (int i = 0; i < states.length; i++) {
-                if (states[i].busy) {
+                if (states[i].busy || !host.isAccountOpened(i)) {
                     continue;
                 }
                 long sellInterval = preferences.getLong(
@@ -212,9 +241,20 @@ final class AutomationCoordinator {
                     runAutoAuction(i, false);
                     continue;
                 }
+                long storeInterval = preferences.getLong(
+                        PREF_STORE_INTERVAL + i, DEFAULT_SELL_INTERVAL_MS);
+                long storeLast = preferences.getLong(PREF_STORE_LAST + i, 0L);
+                if (isStoreSellEnabled(i) && now - storeLast >= storeInterval) {
+                    runStoreSell(i, false);
+                    continue;
+                }
                 long templeLast = preferences.getLong(PREF_TEMPLE_LAST + i, 0L);
                 if (isTempleEnabled(i) && now - templeLast >= TEMPLE_CHECK_INTERVAL_MS) {
                     runTempleGuard(i, false, false);
+                    continue;
+                }
+                if (now - states[i].lastBattleCheckAt >= BATTLE_MONITOR_INTERVAL_MS) {
+                    monitorBattleProgress(i);
                 }
             }
             handler.postDelayed(this, TICK_INTERVAL_MS);
@@ -227,8 +267,7 @@ final class AutomationCoordinator {
             if (manual) host.showMessage(accountName(accountIndex) + "脚本正在执行");
             return;
         }
-        List<String> items = parseAllowedItems(
-                auctionItemsText(accountIndex), ALLOWED_AUCTION_ITEMS);
+        List<String> items = parseAuctionItems(auctionItemsText(accountIndex));
         if (items.isEmpty()) {
             finish(accountIndex, "auction", "error", "拍卖道具列表为空", manual);
             return;
@@ -246,7 +285,9 @@ final class AutomationCoordinator {
             finish(accountIndex, "auction", "error", "账号页面未就绪", manual);
             return;
         }
-        navigateToAuction(accountIndex, view, items, manual, 0);
+        host.prepareAutomation(accountIndex, true);
+        handler.postDelayed(() -> navigateToAuction(
+                accountIndex, view, items, manual, 0), 1_800L);
     }
 
     private void navigateToAuction(int accountIndex, WebView view, List<String> items,
@@ -257,7 +298,7 @@ final class AutomationCoordinator {
                 + "const hasBackpack=Array.from(document.querySelectorAll('.cont-box'))"
                 + ".some(e=>visible(e)&&/背包道具数/.test(e.textContent||''));"
                 + "if(hasBackpack&&text.includes('拍卖的道具'))return 'ready';"
-                + "const all=Array.from(document.querySelectorAll('[name],button,[role=button],uni-button'));"
+                + "const all=Array.from(document.querySelectorAll('[name],button,[role=button],uni-button,a,view'));"
                 + "const exact=(e,label)=>(e.getAttribute('name')||'').trim()===label"
                 + "||(e.textContent||'').trim()===label;"
                 + "const auction=all.find(e=>visible(e)&&(exact(e,'道具交易所')||exact(e,'交易所')));"
@@ -271,7 +312,7 @@ final class AutomationCoordinator {
             if ("ready".equals(result)) {
                 handler.postDelayed(() -> processAuctionItem(
                         accountIndex, view, items, 0, manual), 400L);
-            } else if (result.endsWith("_clicked") && attempt < 5) {
+            } else if (result.endsWith("_clicked") && attempt < 9) {
                 long delay = "auction_clicked".equals(result) ? 3_000L : 1_500L;
                 handler.postDelayed(() -> navigateToAuction(
                         accountIndex, view, items, manual, attempt + 1), delay);
@@ -292,7 +333,7 @@ final class AutomationCoordinator {
         if (itemIndex >= items.size()) {
             preferences.edit().putLong(PREF_SELL_LAST + accountIndex,
                     System.currentTimeMillis()).apply();
-            finish(accountIndex, "auction", "ok", "定时拍卖检查完成", manual);
+            restoreAfkAfterOperation(accountIndex, view, manual, "拍卖检查完成");
             return;
         }
         String itemName = items.get(itemIndex);
@@ -300,10 +341,10 @@ final class AutomationCoordinator {
         String script = "(function(){"
                 + "const target=" + JSONObject.quote(itemName) + ";"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
-                + "const boxes=Array.from(document.querySelectorAll('.cont-box')).filter(visible);"
+                + "const boxes=Array.from(document.querySelectorAll('.cont-box'));"
                 + "const box=boxes.find(e=>/\u80cc\u5305\u9053\u5177\u6570/.test(e.textContent||''));"
                 + "if(!box)return JSON.stringify({status:'not_ready'});"
-                + "const rows=Array.from(box.querySelectorAll('.ul .li')).filter(visible);"
+                + "const rows=Array.from(box.querySelectorAll('.ul .li'));"
                 + "const row=rows.find(e=>{const c=Array.from(e.children);"
                 + "return c.length>=4&&(c[1].textContent||'').trim()===target;});"
                 + "if(!row)return JSON.stringify({status:'missing'});"
@@ -311,9 +352,9 @@ final class AutomationCoordinator {
                 + "const count=parseInt((cells[3]||'').replace(/[^0-9-]/g,''),10);"
                 + "if(!Number.isFinite(count))return JSON.stringify({status:'bad_count'});"
                 + "if(count<=1)return JSON.stringify({status:'kept',count});"
-                + "row.click();"
+                + "row.scrollIntoView({block:'nearest'});row.click();"
                 + "const sell=Array.from(document.querySelectorAll('button,uni-button,[role=button]'))"
-                + ".filter(visible).find(e=>(e.textContent||'').trim()==='\u5356\u51fa');"
+                + ".find(e=>(e.textContent||'').trim()==='\u5356\u51fa');"
                 + "if(!sell)return JSON.stringify({status:'no_sell'});"
                 + "sell.click();return JSON.stringify({status:'dialog',count,quantity:count-1});})()";
         view.evaluateJavascript(script, encoded -> {
@@ -333,13 +374,13 @@ final class AutomationCoordinator {
             }
             int quantity = result.optInt("quantity", 0);
             handler.postDelayed(() -> fillAndConfirmSell(accountIndex, view, items,
-                    itemIndex, itemName, quantity, manual), 700L);
+                    itemIndex, itemName, quantity, manual, 0), 900L);
         });
     }
 
     private void fillAndConfirmSell(int accountIndex, WebView view, List<String> items,
                                     int itemIndex, String itemName, int quantity,
-                                    boolean manual) {
+                                    boolean manual, int attempt) {
         String buyer = auctionBuyer(accountIndex);
         String script = "(function(){"
                 + "const target=" + JSONObject.quote(itemName) + ",buyer="
@@ -350,31 +391,42 @@ final class AutomationCoordinator {
                 + "if(!modal)return JSON.stringify({status:'no_dialog'});"
                 + "const name=(modal.querySelector('.item-name')?.textContent||'').trim();"
                 + "if(name!==target)return JSON.stringify({status:'wrong_item',name});"
-                + "const inputs=Array.from(modal.querySelectorAll('input'))"
+                + "const inputs=Array.from(modal.querySelectorAll('input,textarea,[contenteditable=true]'))"
                 + ".filter(e=>e.type!=='hidden'&&!e.disabled);"
-                + "const attr=(e)=>(`${e.name||''} ${e.id||''} ${e.placeholder||''}`);"
-                + "const numbers=inputs.filter(e=>e.type==='number'||/数量|单价|price|quantity/i.test(attr(e)));"
-                + "const q=inputs.find(e=>/数量|quantity/i.test(attr(e)))||numbers[0]||inputs[0];"
-                + "const p=inputs.find(e=>/单价|price/i.test(attr(e)))||numbers.find(e=>e!==q)||inputs[1];"
-                + "const b=inputs.find(e=>/买家|玩家|buyer|target/i.test(attr(e)))"
-                + "||inputs.find(e=>e.type==='text'&&e!==q&&e!==p)||inputs[2];"
-                + "if(!q||!p||!b)return JSON.stringify({status:'inputs_missing',count:inputs.length});"
-                + "const set=(e,v)=>{const d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');"
-                + "d.set.call(e,String(v));e.dispatchEvent(new Event('input',{bubbles:true}));"
+                + "const attr=e=>{let p=e.parentElement,s='';for(let i=0;p&&i<3;i++,p=p.parentElement)"
+                + "s+=' '+(p.textContent||'');return `${e.name||''} ${e.id||''} ${e.placeholder||''} ${s}`;};"
+                + "const q=inputs.find(e=>/数量|quantity/i.test(attr(e)))"
+                + "||inputs.find(e=>e.type==='number')||inputs[0];"
+                + "const p=inputs.find(e=>/单价|price/i.test(attr(e))&&e!==q);"
+                + "const b=inputs.find(e=>/指定买家|买家|玩家|buyer|target/i.test(attr(e)))"
+                + "||inputs.find(e=>e!==q&&e!==p&&(e.type==='text'||e.tagName==='TEXTAREA'))"
+                + "||inputs.find(e=>e!==q&&e!==p);"
+                + "if(!q||!b)return JSON.stringify({status:'inputs_missing',count:inputs.length});"
+                + "const set=(e,v)=>{if(e.isContentEditable)e.textContent=String(v);else{"
+                + "const proto=e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;"
+                + "const d=Object.getOwnPropertyDescriptor(proto,'value');d.set.call(e,String(v));}"
+                + "e.dispatchEvent(new Event('input',{bubbles:true}));"
                 + "e.dispatchEvent(new Event('change',{bubbles:true}));};"
-                + "const price=parseInt(p.value,10);"
-                + "if(!Number.isFinite(price)||price<=0)return JSON.stringify({status:'bad_price'});"
+                + "const get=e=>e.isContentEditable?e.textContent:e.value;"
+                + "const price=p?parseInt(p.value,10):0;"
+                + "if(p&&(!Number.isFinite(price)||price<=0))return JSON.stringify({status:'bad_price'});"
                 + "set(q,qty);set(b,buyer);"
                 + "const confirm=Array.from(modal.querySelectorAll('button,uni-button,[role=button]'))"
                 + ".find(e=>(e.textContent||'').trim()==='\u786e\u8ba4\u4e0a\u67b6');"
                 + "if(!confirm)return JSON.stringify({status:'no_confirm'});"
-                + "if(parseInt(q.value,10)!==qty||b.value!==buyer)"
+                + "if(parseInt(get(q),10)!==qty||get(b)!==buyer)"
                 + "return JSON.stringify({status:'verify_failed'});"
                 + "confirm.click();return JSON.stringify({status:'submitted',price});})()";
         view.evaluateJavascript(script, encoded -> {
             JSONObject result = decodeObject(encoded);
             if (result == null || !"submitted".equals(result.optString("status"))) {
                 String reason = result == null ? "未知错误" : result.optString("status");
+                if (("no_dialog".equals(reason) || "inputs_missing".equals(reason))
+                        && attempt < 4) {
+                    handler.postDelayed(() -> fillAndConfirmSell(accountIndex, view, items,
+                            itemIndex, itemName, quantity, manual, attempt + 1), 600L);
+                    return;
+                }
                 finish(accountIndex, "auction", "error",
                         itemName + "：提交前复核失败（" + reason + "）", manual);
                 return;
@@ -434,7 +486,10 @@ final class AutomationCoordinator {
             finish(accountIndex, "store_sell", "error", "账号页面未就绪", manual);
             return;
         }
-        navigateToStore(accountIndex, view, items, manual, 0);
+        state.storeSoldNames.clear();
+        host.prepareAutomation(accountIndex, true);
+        handler.postDelayed(() -> navigateToStore(
+                accountIndex, view, items, manual, 0), 1_800L);
     }
 
     private void navigateToStore(int accountIndex, WebView view, List<String> items,
@@ -446,7 +501,7 @@ final class AutomationCoordinator {
                 + "||Array.from(document.querySelectorAll('.cont-box'))"
                 + ".some(e=>visible(e)&&/背包道具数/.test(e.textContent||''));"
                 + "if(hasBackpack&&text.includes('道具商店')&&text.includes('威望商店'))return 'ready';"
-                + "const all=Array.from(document.querySelectorAll('[name],button,[role=button],uni-button'));"
+                + "const all=Array.from(document.querySelectorAll('[name],button,[role=button],uni-button,a,view'));"
                 + "const exact=(e,label)=>(e.getAttribute('name')||'').trim()===label"
                 + "||(e.textContent||'').trim()===label;"
                 + "const store=all.find(e=>visible(e)&&exact(e,'道具商店'));"
@@ -460,7 +515,7 @@ final class AutomationCoordinator {
             if ("ready".equals(result)) {
                 handler.postDelayed(() -> processStoreItem(
                         accountIndex, view, items, 0, manual), 400L);
-            } else if (result.endsWith("_clicked") && attempt < 5) {
+            } else if (result.endsWith("_clicked") && attempt < 9) {
                 long delay = "store_clicked".equals(result) ? 3_000L : 1_500L;
                 handler.postDelayed(() -> navigateToStore(
                         accountIndex, view, items, manual, attempt + 1), delay);
@@ -479,31 +534,38 @@ final class AutomationCoordinator {
                                   int itemIndex, boolean manual) {
         if (stopped || !states[accountIndex].busy) return;
         if (itemIndex >= items.size()) {
-            finish(accountIndex, "store_sell", "ok", "道具商店卖出检查完成", manual);
+            preferences.edit().putLong(PREF_STORE_LAST + accountIndex,
+                    System.currentTimeMillis()).apply();
+            restoreAfkAfterOperation(accountIndex, view, manual, "金币券卖出检查完成");
             return;
         }
         String itemName = items.get(itemIndex);
         updateState(accountIndex, "正在检查商店卖出：" + itemName);
+        String skippedNames = new JSONArray(states[accountIndex].storeSoldNames).toString();
         String script = "(function(){"
                 + "const target=" + JSONObject.quote(itemName) + ";"
+                + "const skipped=new Set(" + skippedNames + ");"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
                 + "const list=document.querySelector('#backpack-items')"
                 + "||Array.from(document.querySelectorAll('.cont-box')).filter(visible)"
                 + ".find(e=>/背包道具数/.test(e.textContent||''))?.querySelector('.ul');"
                 + "if(!list)return JSON.stringify({status:'not_ready'});"
-                + "const rows=Array.from(list.querySelectorAll('.li')).filter(visible);"
+                + "const rows=Array.from(list.querySelectorAll('.li'));"
                 + "const row=rows.find(e=>{const c=Array.from(e.children);"
-                + "return c.length>=4&&(c[1].textContent||'').trim()===target;});"
+                + "if(c.length<4)return false;const name=(c[1].textContent||'').trim();"
+                + "const count=parseInt((c[3].textContent||'').replace(/[^0-9-]/g,''),10);"
+                + "return name.includes(target)&&!skipped.has(name)&&Number.isFinite(count)&&count>0;});"
                 + "if(!row)return JSON.stringify({status:'missing'});"
                 + "const cells=Array.from(row.children).map(e=>(e.textContent||'').trim());"
+                + "const actualName=cells[1]||target;"
                 + "const count=parseInt((cells[3]||'').replace(/[^0-9-]/g,''),10);"
                 + "if(!Number.isFinite(count)||count<=0)"
                 + "return JSON.stringify({status:'bad_count',count});"
-                + "row.click();"
+                + "row.scrollIntoView({block:'nearest'});row.click();"
                 + "const sell=Array.from(document.querySelectorAll('button,uni-button,[role=button]'))"
-                + ".filter(visible).find(e=>(e.textContent||'').trim()==='卖出');"
+                + ".find(e=>(e.textContent||'').trim()==='卖出');"
                 + "if(!sell)return JSON.stringify({status:'no_sell'});"
-                + "sell.click();return JSON.stringify({status:'dialog',count,quantity:count});})()";
+                + "sell.click();return JSON.stringify({status:'dialog',actualName,count,quantity:count});})()";
         view.evaluateJavascript(script, encoded -> {
             JSONObject result = decodeObject(encoded);
             String status = result == null ? "invalid" : result.optString("status");
@@ -519,19 +581,20 @@ final class AutomationCoordinator {
                 return;
             }
             int quantity = result.optInt("quantity", 0);
+            String actualName = result.optString("actualName", itemName);
             handler.postDelayed(() -> fillAndConfirmStoreSell(accountIndex, view, items,
-                    itemIndex, itemName, quantity, manual), 700L);
+                    itemIndex, actualName, quantity, manual, 0), 900L);
         });
     }
 
     private void fillAndConfirmStoreSell(int accountIndex, WebView view, List<String> items,
                                          int itemIndex, String itemName, int quantity,
-                                         boolean manual) {
+                                         boolean manual, int attempt) {
         String script = "(function(){"
                 + "const target=" + JSONObject.quote(itemName) + ",qty=" + quantity + ";"
-                + "const modal=Array.from(document.querySelectorAll('.sell-modal'))"
+                + "const modal=Array.from(document.querySelectorAll('.sell-modal,[role=dialog],.uni-popup__wrapper'))"
                 + ".find(e=>e.getClientRects().length>0"
-                + "&&(e.querySelector('.modal-title')?.textContent||'').trim()==='卖出确认');"
+                + "&&/(卖出|出售)/.test(e.querySelector('.modal-title,.uni-popup__title')?.textContent||e.textContent||''));"
                 + "if(!modal)return JSON.stringify({status:'no_dialog'});"
                 + "const name=(modal.querySelector('.item-name')?.textContent||'').trim();"
                 + "if(name!==target)return JSON.stringify({status:'wrong_item',name});"
@@ -543,8 +606,8 @@ final class AutomationCoordinator {
                 + "const d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');"
                 + "d.set.call(q,String(qty));q.dispatchEvent(new Event('input',{bubbles:true}));"
                 + "q.dispatchEvent(new Event('change',{bubbles:true}));"
-                + "const confirm=Array.from(modal.querySelectorAll('button,uni-button,[role=button]'))"
-                + ".find(e=>(e.textContent||'').trim()==='确认卖出');"
+                + "const confirm=Array.from(modal.querySelectorAll('button,uni-button,[role=button],view'))"
+                + ".find(e=>/^确认(卖出|出售)$/.test((e.textContent||'').replace(/\\s+/g,'')));"
                 + "if(!confirm)return JSON.stringify({status:'no_confirm'});"
                 + "if(parseInt(q.value,10)!==qty)return JSON.stringify({status:'verify_failed'});"
                 + "confirm.click();return JSON.stringify({status:'submitted'});})()";
@@ -552,12 +615,19 @@ final class AutomationCoordinator {
             JSONObject result = decodeObject(encoded);
             if (result == null || !"submitted".equals(result.optString("status"))) {
                 String reason = result == null ? "未知错误" : result.optString("status");
+                if (("no_dialog".equals(reason) || "quantity_missing".equals(reason))
+                        && attempt < 4) {
+                    handler.postDelayed(() -> fillAndConfirmStoreSell(accountIndex, view, items,
+                            itemIndex, itemName, quantity, manual, attempt + 1), 600L);
+                    return;
+                }
                 finish(accountIndex, "store_sell", "error",
                         itemName + "：卖出前复核失败（" + reason + "）", manual);
                 return;
             }
             updateState(accountIndex, String.format(Locale.ROOT,
                     "%s：已提交卖出%d个", itemName, quantity));
+            states[accountIndex].storeSoldNames.add(itemName);
             handler.postDelayed(() -> verifyStoreSellAndContinue(accountIndex, view, items,
                     itemIndex, itemName, manual, 0), 3_000L);
         });
@@ -566,9 +636,9 @@ final class AutomationCoordinator {
     private void verifyStoreSellAndContinue(int accountIndex, WebView view, List<String> items,
                                             int itemIndex, String itemName, boolean manual,
                                             int attempt) {
-        String script = "(function(){const m=Array.from(document.querySelectorAll('.sell-modal'))"
+        String script = "(function(){const m=Array.from(document.querySelectorAll('.sell-modal,[role=dialog],.uni-popup__wrapper'))"
                 + ".find(e=>e.getClientRects().length>0"
-                + "&&(e.querySelector('.modal-title')?.textContent||'').trim()==='卖出确认');"
+                + "&&/(卖出|出售)/.test(e.querySelector('.modal-title,.uni-popup__title')?.textContent||e.textContent||''));"
                 + "return m?'open':'closed';})()";
         view.evaluateJavascript(script, encoded -> {
             if (!"closed".equals(decodeString(encoded))) {
@@ -582,7 +652,74 @@ final class AutomationCoordinator {
                 return;
             }
             handler.postDelayed(() -> processStoreItem(
-                    accountIndex, view, items, itemIndex + 1, manual), 1_000L);
+                    accountIndex, view, items, itemIndex, manual), 1_500L);
+        });
+    }
+
+    private void restoreAfkAfterOperation(int accountIndex, WebView view, boolean manual,
+                                          String completedMessage) {
+        updateState(accountIndex, completedMessage + "，正在返回挂机辅助");
+        String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
+                + "const all=Array.from(document.querySelectorAll('[name],button,[role=button],uni-button,view,div'));"
+                + "const exact=e=>(e.getAttribute('name')||'').trim()==='挂机辅助'"
+                + "||(e.textContent||'').replace(/\\s+/g,'').trim()==='挂机辅助';"
+                + "const target=all.filter(visible).find(exact)||all.find(exact);"
+                + "if(!target)return 'missing';target.click();return 'clicked';})()";
+        view.evaluateJavascript(script, encoded -> {
+            if (!"clicked".equals(decodeString(encoded))) {
+                host.openHome(accountIndex);
+            }
+            host.prepareAutomation(accountIndex, false);
+            handler.postDelayed(() -> runTempleGuard(
+                    accountIndex, manual, true), 4_000L);
+        });
+    }
+
+    private void monitorBattleProgress(int accountIndex) {
+        RuntimeState state = states[accountIndex];
+        state.lastBattleCheckAt = System.currentTimeMillis();
+        WebView view;
+        try {
+            view = host.requireWebView(accountIndex);
+        } catch (RuntimeException error) {
+            state.monitorStatus = "unknown";
+            state.monitorMessage = "账号页面未就绪";
+            host.onAutomationChanged();
+            return;
+        }
+        String script = "(function(){const clean=e=>(e?.textContent||'').replace(/\\s+/g,'');"
+                + "const labels=Array.from(document.querySelectorAll('*')).filter(e=>clean(e)==='总场次');"
+                + "for(const label of labels){let node=label;for(let depth=0;node&&depth<4;depth++,node=node.parentElement){"
+                + "const text=clean(node);const m=text.match(/(\\d+)总场次|总场次[：:]?(\\d+)/);"
+                + "if(m)return JSON.stringify({status:'ok',count:parseInt(m[1]||m[2],10)});}}"
+                + "const section=Array.from(document.querySelectorAll('*')).find(e=>clean(e)==='战斗统计')?.parentElement;"
+                + "const text=clean(section);const fallback=text.match(/(\\d+)总场次|总场次[：:]?(\\d+)/);"
+                + "if(!fallback)return JSON.stringify({status:labels.length?'unreadable':'missing'});"
+                + "return JSON.stringify({status:'ok',count:parseInt(fallback[1]||fallback[2],10)});})()";
+        view.evaluateJavascript(script, encoded -> {
+            JSONObject result = decodeObject(encoded);
+            if (result == null || !"ok".equals(result.optString("status"))) {
+                state.monitorStatus = "unknown";
+                state.monitorMessage = "等待竖屏挂机统计页面";
+                host.onAutomationChanged();
+                return;
+            }
+            int count = result.optInt("count", -1);
+            if (count < 0) {
+                state.monitorStatus = "unknown";
+                state.monitorMessage = "无法读取战斗场次";
+            } else if (state.lastBattleCount < 0 || count < state.lastBattleCount) {
+                state.monitorStatus = "monitoring";
+                state.monitorMessage = "已记录战斗统计基线";
+            } else if (count > state.lastBattleCount) {
+                state.monitorStatus = "online";
+                state.monitorMessage = "战斗统计正常增加";
+            } else {
+                state.monitorStatus = "offline";
+                state.monitorMessage = "连续30分钟战斗场次未增加";
+            }
+            state.lastBattleCount = count;
+            host.onAutomationChanged();
         });
     }
 
@@ -599,6 +736,7 @@ final class AutomationCoordinator {
             state.lastMessage = "正在检查圣兽云殿挂机";
             state.updatedAt = System.currentTimeMillis();
             host.onAutomationChanged();
+            host.prepareAutomation(accountIndex, false);
         }
         WebView view;
         try {
@@ -678,6 +816,10 @@ final class AutomationCoordinator {
         state.lastMessage = message;
         state.updatedAt = System.currentTimeMillis();
         host.onAutomationChanged();
+        if ("error".equals(status)
+                && ("auction".equals(task) || "store_sell".equals(task))) {
+            host.prepareAutomation(accountIndex, false);
+        }
         if (manual || "error".equals(status)) {
             host.showMessage(accountName(accountIndex) + "：" + message);
         }
@@ -696,6 +838,24 @@ final class AutomationCoordinator {
                 String safe = item.replaceAll("[\\r\\t]", " ").trim();
                 if (allowed.contains(safe)) {
                     unique.add(safe);
+                }
+            }
+        }
+        return new ArrayList<>(unique);
+    }
+
+    private List<String> parseAuctionItems(String value) {
+        Set<String> unique = new LinkedHashSet<>();
+        if (value != null) {
+            for (String item : value.split("[,，\\n]")) {
+                String safe = item.replaceAll("[\\r\\t]", " ").trim();
+                if (safe.isBlank()) continue;
+                if (safe.length() > 30) {
+                    throw new IllegalArgumentException("拍卖道具名称不能超过30个字符");
+                }
+                unique.add(safe);
+                if (unique.size() > 10) {
+                    throw new IllegalArgumentException("拍卖道具最多填写10种");
                 }
             }
         }
@@ -757,5 +917,10 @@ final class AutomationCoordinator {
         String status = "idle";
         String lastMessage = "尚未运行";
         long updatedAt;
+        final Set<String> storeSoldNames = new LinkedHashSet<>();
+        String monitorStatus = "unknown";
+        String monitorMessage = "等待首次30分钟检查";
+        int lastBattleCount = -1;
+        long lastBattleCheckAt;
     }
 }

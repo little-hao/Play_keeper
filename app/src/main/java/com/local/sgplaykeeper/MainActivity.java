@@ -77,7 +77,7 @@ public final class MainActivity extends Activity {
     private static final String DESKTOP_USER_AGENT =
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                     + "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 "
-                    + "PlayKeeper/1.1";
+                    + "PlayKeeper/1.2";
     private static final int PREVIEW_DEFAULT_WIDTH = 720;
     private static final int PREVIEW_MAX_WIDTH = 2_560;
     private static final int PREVIEW_MAX_ENCODED_BYTES = 2_500 * 1024;
@@ -415,6 +415,23 @@ public final class MainActivity extends Activity {
                     }
 
                     @Override
+                    public void prepareAutomation(int accountIndex, boolean landscape) {
+                        selectAccount(accountIndex, false);
+                        preferences.edit().putBoolean(
+                                landscapeModeKey(accountIndex), landscape).apply();
+                        applyPreferredOrientation(accountIndex);
+                        updateToolbarState();
+                        pushTelemetry();
+                    }
+
+                    @Override
+                    public boolean isAccountOpened(int accountIndex) {
+                        return sessions[accountIndex] != null
+                                || preferences.getBoolean(accountOpenedKey(accountIndex),
+                                accountIndex == 0);
+                    }
+
+                    @Override
                     public void onAutomationChanged() {
                         pushTelemetry();
                     }
@@ -512,16 +529,12 @@ public final class MainActivity extends Activity {
         auctionEnabled.setChecked(automationCoordinator.isAuctionEnabled(accountIndex));
         form.addView(auctionEnabled);
 
-        form.addView(formLabel("拍卖道具"));
-        String auctionItemText = automationCoordinator.auctionItemsText(accountIndex);
-        CheckBox evolutionGem = new CheckBox(this);
-        evolutionGem.setText("进化宝石");
-        evolutionGem.setChecked(auctionItemText.contains("进化宝石"));
-        form.addView(evolutionGem);
-        CheckBox dawnMark = new CheckBox(this);
-        dawnMark.setText("曙光印记");
-        dawnMark.setChecked(auctionItemText.contains("曙光印记"));
-        form.addView(dawnMark);
+        form.addView(formLabel("拍卖道具（逗号分隔，可自行修改）"));
+        EditText auctionItems = new EditText(this);
+        auctionItems.setText(automationCoordinator.auctionItemsText(accountIndex));
+        auctionItems.setHint("进化宝石,曙光印记");
+        auctionItems.setSingleLine(true);
+        form.addView(auctionItems, formFieldParams());
 
         form.addView(formLabel("指定买家"));
         EditText buyer = new EditText(this);
@@ -530,18 +543,24 @@ public final class MainActivity extends Activity {
         buyer.setHint("hao");
         form.addView(buyer, formFieldParams());
 
-        form.addView(formLabel("检查间隔（小时，1–168）"));
+        form.addView(formLabel("拍卖/金币券卖出间隔（小时，默认12）"));
         EditText hours = new EditText(this);
         hours.setSingleLine(true);
         hours.setInputType(InputType.TYPE_CLASS_NUMBER);
         hours.setText(String.valueOf(automationCoordinator.auctionIntervalHours(accountIndex)));
         form.addView(hours, formFieldParams());
 
-        form.addView(formLabel("道具商店一键卖出（卖出所选道具全部数量）"));
+        CheckBox storeEnabled = new CheckBox(this);
+        storeEnabled.setText("每隔固定时间自动卖出金币券（全部数量）");
+        storeEnabled.setChecked(automationCoordinator.isStoreSellEnabled(accountIndex));
+        form.addView(storeEnabled);
+
+        form.addView(formLabel("道具商店匹配规则（名称包含“金币券”）"));
         CheckBox coinVoucher = new CheckBox(this);
-        coinVoucher.setText("金币券");
+        coinVoucher.setText("*金币券*（包括1W/5W/10W金币券）");
         coinVoucher.setChecked(automationCoordinator.storeSellItemsText(accountIndex)
                 .contains("金币券"));
+        coinVoucher.setEnabled(false);
         form.addView(coinVoucher);
 
         CheckBox templeEnabled = new CheckBox(this);
@@ -555,22 +574,22 @@ public final class MainActivity extends Activity {
         form.addView(notice);
 
         Button auctionNow = makeButton("保存并立即拍卖", view -> {
-            if (saveAutomationForm(accountIndex, auctionEnabled, evolutionGem, dawnMark,
-                    buyer, hours, coinVoucher, templeEnabled)) {
+            if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
+                    buyer, hours, storeEnabled, templeEnabled)) {
                 automationCoordinator.runAuctionNow(accountIndex);
             }
         });
         form.addView(auctionNow, automationActionParams());
         Button storeSellNow = makeButton("保存并立即卖出金币券", view -> {
-            if (saveAutomationForm(accountIndex, auctionEnabled, evolutionGem, dawnMark,
-                    buyer, hours, coinVoucher, templeEnabled)) {
+            if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
+                    buyer, hours, storeEnabled, templeEnabled)) {
                 automationCoordinator.runStoreSellNow(accountIndex);
             }
         });
         form.addView(storeSellNow, automationActionParams());
         Button templeNow = makeButton("保存并立即检查圣殿挂机", view -> {
-            if (saveAutomationForm(accountIndex, auctionEnabled, evolutionGem, dawnMark,
-                    buyer, hours, coinVoucher, templeEnabled)) {
+            if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
+                    buyer, hours, storeEnabled, templeEnabled)) {
                 automationCoordinator.runTempleNow(accountIndex);
             }
         });
@@ -584,8 +603,8 @@ public final class MainActivity extends Activity {
                 .create();
         dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
                 .setOnClickListener(view -> {
-                    if (saveAutomationForm(accountIndex, auctionEnabled, evolutionGem, dawnMark,
-                            buyer, hours, coinVoucher, templeEnabled)) {
+                    if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
+                            buyer, hours, storeEnabled, templeEnabled)) {
                         dialog.dismiss();
                         showToast("脚本设置已保存");
                     }
@@ -594,32 +613,23 @@ public final class MainActivity extends Activity {
     }
 
     private boolean saveAutomationForm(int accountIndex, CheckBox auctionEnabled,
-                                       CheckBox evolutionGem, CheckBox dawnMark,
+                                       EditText auctionItems,
                                        EditText buyer, EditText hours,
-                                       CheckBox coinVoucher, CheckBox templeEnabled) {
+                                       CheckBox storeEnabled, CheckBox templeEnabled) {
         try {
             int intervalHours = Integer.parseInt(hours.getText().toString().trim());
-            String auctionItems = selectedItems(evolutionGem, dawnMark);
-            String storeItems = selectedItems(coinVoucher);
+            String auctionItemText = auctionItems.getText().toString();
+            String storeItems = "金币券";
             automationCoordinator.configureAuction(accountIndex, auctionEnabled.isChecked(),
-                    auctionItems, buyer.getText().toString(), intervalHours);
-            automationCoordinator.configureStoreSell(accountIndex, storeItems);
+                    auctionItemText, buyer.getText().toString(), intervalHours);
+            automationCoordinator.configureStoreSell(accountIndex, storeEnabled.isChecked(),
+                    storeItems, intervalHours);
             automationCoordinator.configureTemple(accountIndex, templeEnabled.isChecked());
             return true;
         } catch (RuntimeException error) {
             showToast(error.getMessage() == null ? "脚本设置无效" : error.getMessage());
             return false;
         }
-    }
-
-    private String selectedItems(CheckBox... options) {
-        StringBuilder selected = new StringBuilder();
-        for (CheckBox option : options) {
-            if (!option.isChecked()) continue;
-            if (selected.length() > 0) selected.append(',');
-            selected.append(option.getText());
-        }
-        return selected.toString();
     }
 
     private TextView formLabel(String text) {
@@ -891,7 +901,9 @@ public final class MainActivity extends Activity {
                         if (i > 0) itemText.append(',');
                         itemText.append(itemArray.optString(i));
                     }
-                    automationCoordinator.configureStoreSell(index, itemText.toString());
+                    automationCoordinator.configureStoreSell(index,
+                            parameters.optBoolean("enabled", false), itemText.toString(),
+                            parameters.optInt("intervalHours", 12));
                     success = true;
                     resultMessage = "道具商店卖出设置已更新";
                     break;
@@ -1180,8 +1192,8 @@ public final class MainActivity extends Activity {
             telemetry.put("device", device);
 
             JSONObject app = new JSONObject();
-            app.put("versionCode", 8);
-            app.put("versionName", "1.1.0");
+            app.put("versionCode", 9);
+            app.put("versionName", "1.2.0");
             app.put("activeAccount", activeAccount);
             app.put("blackScreen", blackMode);
             app.put("executionMode", blackMode

@@ -57,8 +57,9 @@ const commandValidators = {
       && typeof parameters.enabled === "boolean"
       && Array.isArray(parameters.items)
       && parameters.items.length >= 1
-      && parameters.items.length <= 2
-      && parameters.items.every((item) => ["进化宝石", "曙光印记"].includes(item))
+      && parameters.items.length <= 10
+      && parameters.items.every((item) => typeof item === "string"
+        && item.trim().length >= 1 && item.trim().length <= 30)
       && typeof parameters.buyer === "string"
       && /^[A-Za-z0-9_.-]{1,30}$/.test(parameters.buyer)
       && Number.isInteger(parameters.intervalHours)
@@ -72,9 +73,13 @@ const commandValidators = {
   run_auto_sell: accountParameters,
   configure_store_sell(parameters) {
     return accountParameters(parameters)
+      && typeof parameters.enabled === "boolean"
       && Array.isArray(parameters.items)
       && parameters.items.length === 1
-      && parameters.items[0] === "金币券";
+      && parameters.items[0] === "金币券"
+      && Number.isInteger(parameters.intervalHours)
+      && parameters.intervalHours >= 1
+      && parameters.intervalHours <= 168;
   },
   run_store_sell: accountParameters,
   configure_temple_guard(parameters) {
@@ -136,7 +141,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.1.0" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.2.0" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {

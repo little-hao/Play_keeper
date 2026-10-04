@@ -42,7 +42,7 @@ test("device telemetry and browser command complete a round trip", async (contex
 
   const deviceAccepted = nextJson(device, "device.accepted");
   device.send(JSON.stringify({
-    type: "device.hello", deviceId: "PK-ABCDEF123456", token: deviceToken, appVersion: "1.1.0"
+    type: "device.hello", deviceId: "PK-ABCDEF123456", token: deviceToken, appVersion: "1.2.0"
   }));
   await deviceAccepted;
 
@@ -172,7 +172,7 @@ test("device telemetry and browser command complete a round trip", async (contex
     type: "command.send",
     deviceId: "PK-ABCDEF123456",
     command: "configure_store_sell",
-    parameters: { accountIndex: 2, items: ["金币券"] }
+    parameters: { accountIndex: 2, enabled: true, items: ["金币券"], intervalHours: 12 }
   }));
   const storeSell = await storeSellPromise;
   assert.equal(storeSell.command, "configure_store_sell");
@@ -209,7 +209,7 @@ test("invalid tokens and invalid commands are rejected", async (context) => {
   const whitelistErrorPromise = nextJson(control, "command.error");
   control.send(JSON.stringify({
     type: "command.send", deviceId: "missing", command: "configure_store_sell",
-    parameters: { accountIndex: 0, items: ["进化宝石"] }
+    parameters: { accountIndex: 0, enabled: true, items: ["进化宝石"], intervalHours: 12 }
   }));
   const whitelistError = await whitelistErrorPromise;
   assert.match(whitelistError.message, /无效/);
@@ -233,7 +233,7 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    ok: true, service: "play-keeper-relay", version: "1.1.0"
+    ok: true, service: "play-keeper-relay", version: "1.2.0"
   });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);
@@ -241,6 +241,6 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   const dashboardHtml = await dashboard.text();
   assert.match(dashboardHtml, /Play Keeper 远程控制/);
   assert.match(dashboardHtml, /立即拍卖/);
-  assert.match(dashboardHtml, /立即卖出金币券/);
+  assert.match(dashboardHtml, /立即卖金币券/);
   assert.match(dashboard.headers.get("content-security-policy"), /object-src 'none'/);
 });

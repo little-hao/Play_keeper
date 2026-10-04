@@ -34,8 +34,8 @@ Play Keeper 是一个面向小米 Civi 4 Pro / HyperOS 的轻量 Android WebView
 | compileSdk / targetSdk | 35 |
 | minSdk | 26 |
 | AndroidX WebKit | 1.12.0 |
-| v1.1.0 兼容包名 | `com.local.sgplaykeeper.test` |
-| 版本 | versionCode 8 / versionName 1.1.0 |
+| v1.2.0 兼容包名 | `com.local.sgplaykeeper.test` |
+| 版本 | versionCode 9 / versionName 1.2.0 |
 
 AndroidX WebKit 选择 1.12.0 是为了在当前 compileSdk 35 构建环境中稳定使用 Multi-Profile API。升级 WebKit 前需要重新检查其 `minCompileSdk`、传递依赖和 Civi 4 Pro 的实际 WebView 功能支持。
 
@@ -155,11 +155,14 @@ Android 原生 `CookieManager.getInstance()` 在同一应用内默认共享 Cook
 | `landscape_mode_N` | 账号横屏/竖屏偏好 |
 | `account_label_N` | 网页识别或手动设置的登录用户名 |
 | `automation_sell_enabled_N` | 定时拍卖开关（沿用旧键以兼容升级） |
-| `automation_sell_items_N` | 拍卖道具：进化宝石/曙光印记 |
+| `automation_sell_items_N` | 拍卖道具文本，默认进化宝石/曙光印记，最多10种 |
 | `automation_sell_buyer_N` | 拍卖指定买家，默认 `hao` |
 | `automation_sell_interval_N` | 拍卖检查周期，默认 12h |
 | `automation_sell_last_N` | 最后完成拍卖检查时间 |
 | `automation_store_items_N` | 道具商店卖出道具，当前仅金币券 |
+| `automation_store_enabled_N` | 定时金币券卖出开关 |
+| `automation_store_interval_N` | 金币券卖出周期，默认 12h |
+| `automation_store_last_N` | 最后完成金币券卖出检查时间 |
 | `automation_temple_enabled_N` | 圣兽云殿守护开关 |
 | `automation_temple_last_N` | 最后圣殿检查时间 |
 
@@ -274,7 +277,7 @@ Android 原生 `CookieManager.getInstance()` 在同一应用内默认共享 Cook
 ### 13.1 定时拍卖
 
 1. 按可见控件依次进入“进入主游戏 → 中心城镇 → 道具交易所”，不直接调用站点私有 API。
-2. 仅在标题包含“背包道具数”的容器中寻找目标行，按精确道具名匹配。
+2. 仅在标题包含“背包道具数”的容器中寻找目标行，滚动定位并按用户填写的完整道具名匹配。
 3. 数量 `<= 1` 直接跳过；数量 `> 1` 时卖出 `count - 1`。
 4. 保留站点弹窗预填的 `itemPrice`，不自行猜测价格。
 5. 数量、单价、指定买家先按字段属性定位，再按输入类型和顺序兜底；填写后复核道具名、数量、价格和买家，才点击“确认上架”。
@@ -284,13 +287,20 @@ Android 原生 `CookieManager.getInstance()` 在同一应用内默认共享 Cook
 
 ### 13.2 道具商店卖出
 
-1. 按可见控件进入“中心城镇 → 道具商店”。
-2. 只在 `#backpack-items` 或带“背包道具数”的容器中精确匹配金币券。
+1. 自动切横屏，并按可见控件进入“进入主游戏 → 中心城镇 → 道具商店”。
+2. 只在 `#backpack-items` 或带“背包道具数”的容器中按名称包含“金币券”匹配，覆盖1W/5W/10W等项目。
 3. 选择背包行并点击“卖出”，在“卖出确认”弹窗把数量设为当前全部数量。
 4. 复核弹窗道具名、数量和“确认卖出”按钮后才提交；该功能不复用拍卖指定买家字段。
-5. 当前只支持手动一键执行，不参加 12h 定时任务，白名单仅 `金币券`。
+5. 支持手动执行及默认12h定时任务，白名单仅 `金币券`；每个匹配名称在单轮任务中只提交一次。
 
-### 13.3 圣兽云殿守护
+### 13.3 操作后恢复与掉线监控
+
+- 拍卖或商店卖出完成后点击主游戏公告栏的“挂机辅助”，切回竖屏，再执行圣兽云殿守护。
+- 每30分钟读取竖屏页面“战斗统计”的场次数值。首次读取建立基线，增加标记正常，连续一次不增加标记掉线，数值回退视为新一轮基线。
+- 无法读取统计时状态保持未知，不把横屏交易页面误判成掉线。
+- 监控结果随遥测发送，远程控制台对掉线账号使用红色标签。
+
+### 13.4 圣兽云殿守护
 
 - 优先寻找页面上含“停止挂机”的可见控件；存在时记录正常，不点击。
 - 否则寻找 options 含“圣兽云殿”的 HTML `select`，触发 `input/change`，并选择“手动挂机”。
@@ -301,9 +311,9 @@ Android 原生 `CookieManager.getInstance()` 在同一应用内默认共享 Cook
 
 - WebView 是否真正持续执行定时器最终取决于网站实现、系统 WebView 和 HyperOS 资源策略。
 - 同时打开 4 个账号会显著增加内存和耗电，应按 1、2、4 个账号逐步压力测试。
-- 页面异常检测目前基于主框架错误和超时，不会分析游戏业务状态。
+- 页面异常检测包含主框架错误、超时及30分钟战斗场次停滞；停滞仅作远程提示，不自动重新登录。
 - APP 被系统结束后不能继续挂机；下次启动只能恢复登录状态和最后页面。
-- v1.1.0 为了覆盖安装历史版本并保留 WebView Profile，延续现有 Android Debug 证书。此方案仅适合当前个人 GitHub 分发，不适合公开应用商店。
+- v1.2.0 为了覆盖安装历史版本并保留 WebView Profile，延续现有 Android Debug 证书。此方案仅适合当前个人 GitHub 分发，不适合公开应用商店。
 - WebView 硬件渲染在部分 ROM 上可能导致 `draw(Canvas)` 截图空白，需以 Civi 4 Pro 实测为准。
 - v0.5 远程只支持单击，不支持拖动、多点触控、键盘、文件上传或声音。
 - Activity 不在运行时，当前版本不会额外启动前台服务维持远程在线。

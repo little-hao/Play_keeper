@@ -154,7 +154,7 @@ final class RemoteConnectionManager {
         try {
             Request request = new Request.Builder()
                     .url(config.endpoint)
-                    .header("User-Agent", "PlayKeeper-Android/1.1.0")
+                    .header("User-Agent", "PlayKeeper-Android/1.2.0")
                     .build();
             webSocket = client.newWebSocket(request, new SocketListener(connectionGeneration));
         } catch (RuntimeException error) {
@@ -209,7 +209,7 @@ final class RemoteConnectionManager {
                 hello.put("type", "device.hello");
                 hello.put("deviceId", config.deviceId);
                 hello.put("token", config.token);
-                hello.put("appVersion", "1.1.0");
+                hello.put("appVersion", "1.2.0");
                 socket.send(hello.toString());
             } catch (JSONException ignored) {
                 socket.close(1002, "invalid hello");
