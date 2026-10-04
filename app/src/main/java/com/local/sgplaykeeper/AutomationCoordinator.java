@@ -44,11 +44,20 @@ final class AutomationCoordinator {
     static final long TEMPLE_CHECK_INTERVAL_MS = 60L * 60L * 1000L;
     static final long BATTLE_MONITOR_INTERVAL_MS = 30L * 60L * 1000L;
     private static final long TICK_INTERVAL_MS = 60_000L;
-    private static final String DEFAULT_AUCTION_ITEMS = "进化宝石,曙光印记";
+    static final String AUCTION_PRESET_ONE = "曙光印记,进化宝石";
+    static final String AUCTION_PRESET_TWO = "强化丹A,强化丹B,天仙雨露,雨露结晶";
+    static final String AUCTION_PRESET_THREE = "黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石";
+    private static final String DEFAULT_AUCTION_ITEMS = AUCTION_PRESET_ONE;
     private static final String DEFAULT_STORE_ITEMS = "金币券";
     private static final String DEFAULT_BUYER = "hao";
-    private static final String DEFAULT_EQUIPMENT_ITEMS = "菜鸟戒指,菜鸟宝石,菜鸟项链";
+    static final String DEFAULT_EQUIPMENT_ITEMS = "柔情方巾·改,轻罗流萤衫·改,逢羡履·改,君我剑·改,佳人之恋·改,"
+            + "三生戒·改,比翼·改,相望镯·改,尾生之泪·改,龙神印记·庆";
     private static final int DEFAULT_EQUIPMENT_PRICE = 920;
+    private static final int EQUIPMENT_ACTIVE_LIMIT = 5;
+    private static final long EQUIPMENT_WAIT_INTERVAL_MS = 30_000L;
+    private static final long EQUIPMENT_WAIT_TIMEOUT_MS = 24L * 60L * 60L * 1000L;
+    private static final long PAINTING_CHECK_INTERVAL_MS = 15_000L;
+    private static final long PAINTING_TIMEOUT_MS = 3L * 60L * 60L * 1000L;
     private static final Set<String> ALLOWED_STORE_ITEMS = new LinkedHashSet<>(
             Arrays.asList("金币券"));
 
@@ -333,8 +342,17 @@ final class AutomationCoordinator {
         state.busy = true;
         state.task = selling ? "equipment_sell" : "equipment_buy";
         state.status = "running";
-        state.lastMessage = selling ? "正在打开装备交易所上架" : "正在打开装备交易所购买";
+        state.lastMessage = selling ? "正在一键脱下装备" : "正在打开装备交易所购买";
         state.updatedAt = System.currentTimeMillis();
+        state.orientationRecoveryClicked = false;
+        state.equipmentListedInBatch = 0;
+        state.equipmentBatchNames.clear();
+        state.equipmentBatchSeen = false;
+        state.equipmentBatchEmptyChecks = 0;
+        state.equipmentWaitStartedAt = System.currentTimeMillis();
+        state.equipmentPurchasedNames.clear();
+        state.paintingStarted = false;
+        state.paintingStartedAt = 0L;
         host.onAutomationChanged();
         WebView view;
         try {
@@ -344,8 +362,63 @@ final class AutomationCoordinator {
             return;
         }
         host.prepareAutomation(accountIndex, true);
-        handler.postDelayed(() -> navigateToEquipmentExchange(
-                accountIndex, view, items, selling, manual, 0), 1_800L);
+        if (selling) {
+            handler.postDelayed(() -> preparePetEquipment(
+                    accountIndex, view, items, false, manual, 0), 1_800L);
+        } else {
+            handler.postDelayed(() -> navigateToEquipmentExchange(
+                    accountIndex, view, items, false, manual, 0), 1_800L);
+        }
+    }
+
+    private void preparePetEquipment(int accountIndex, WebView view, List<String> items,
+                                     boolean equip, boolean manual, int attempt) {
+        String action = equip ? "一键穿装备" : "一键脱装备";
+        String script = "(function(){"
+                + "const visible=e=>e&&e.getClientRects().length>0;"
+                + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'');"
+                + orientationRecoveryScript(accountIndex)
+                + "const all=Array.from(document.querySelectorAll('[name],button,[role=button],uni-button,a,view,div')).filter(visible);"
+                + "const exact=(e,label)=>(e.getAttribute('name')||'').trim()===label"
+                + "||clean(e)===label;"
+                + "const action=all.find(e=>exact(e," + JSONObject.quote(action) + "));"
+                + "if(action){action.click();return 'action_clicked';}"
+                + "const pet=all.find(e=>exact(e,'宠物资料'));"
+                + "if(pet){pet.click();return 'pet_clicked';}"
+                + "const game=all.find(e=>exact(e,'进入主游戏'));"
+                + "if(game){game.click();return 'game_clicked';}return 'missing';})()";
+        view.evaluateJavascript(script, encoded -> {
+            String result = decodeString(encoded);
+            if ("orientation_clicked".equals(result)) {
+                states[accountIndex].orientationRecoveryClicked = true;
+                updateState(accountIndex, "已点击横屏恢复，正在确认画面");
+                handler.postDelayed(() -> preparePetEquipment(
+                        accountIndex, view, items, equip, manual, attempt + 1), 1_800L);
+            } else if ("orientation_failed".equals(result)
+                    || "orientation_missing".equals(result)) {
+                finish(accountIndex, equip ? "equipment_buy" : "equipment_sell", "error",
+                        "横屏提示未恢复，已停止继续点击", manual);
+            } else if ("action_clicked".equals(result)) {
+                updateState(accountIndex, equip ? "已执行一键穿装备" : "已执行一键脱装备");
+                if (equip) {
+                    handler.postDelayed(() -> returnToAfkForPainting(
+                            accountIndex, view, manual), 1_800L);
+                } else {
+                    handler.postDelayed(() -> navigateToEquipmentExchange(
+                            accountIndex, view, items, true, manual, 0), 1_800L);
+                }
+            } else if (result.endsWith("_clicked") && attempt < 10) {
+                handler.postDelayed(() -> preparePetEquipment(
+                        accountIndex, view, items, equip, manual, attempt + 1), 1_500L);
+            } else if (attempt == 0) {
+                host.openHome(accountIndex);
+                handler.postDelayed(() -> preparePetEquipment(
+                        accountIndex, view, items, equip, manual, 1), 4_000L);
+            } else {
+                finish(accountIndex, equip ? "equipment_buy" : "equipment_sell", "error",
+                        "未找到“宠物资料 → " + action + "”", manual);
+            }
+        });
     }
 
     private void navigateToEquipmentExchange(int accountIndex, WebView view, List<String> items,
@@ -353,6 +426,7 @@ final class AutomationCoordinator {
         String script = "(function(){"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
                 + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'');"
+                + orientationRecoveryScript(accountIndex)
                 + "const boxes=Array.from(document.querySelectorAll('.cont-box'));"
                 + "const backpack=boxes.some(e=>visible(e)&&clean(e).includes('装备数：'));"
                 + "const market=boxes.some(e=>visible(e)&&clean(e).includes('价格(金币)'));"
@@ -371,6 +445,15 @@ final class AutomationCoordinator {
             if ("ready".equals(result)) {
                 handler.postDelayed(() -> processEquipmentItem(
                         accountIndex, view, items, 0, selling, manual), 500L);
+            } else if ("orientation_clicked".equals(result)) {
+                states[accountIndex].orientationRecoveryClicked = true;
+                updateState(accountIndex, "已点击横屏恢复，正在确认画面");
+                handler.postDelayed(() -> navigateToEquipmentExchange(
+                        accountIndex, view, items, selling, manual, attempt + 1), 1_800L);
+            } else if ("orientation_failed".equals(result)
+                    || "orientation_missing".equals(result)) {
+                finish(accountIndex, selling ? "equipment_sell" : "equipment_buy", "error",
+                        "横屏提示未恢复，已停止继续点击", manual);
             } else if (result.endsWith("_clicked") && attempt < 10) {
                 long delay = "exchange_clicked".equals(result) ? 2_500L : 1_500L;
                 handler.postDelayed(() -> navigateToEquipmentExchange(
@@ -390,8 +473,12 @@ final class AutomationCoordinator {
                                       int itemIndex, boolean selling, boolean manual) {
         if (stopped || !states[accountIndex].busy) return;
         if (itemIndex >= items.size()) {
-            restoreAfkAfterOperation(accountIndex, view, manual,
-                    selling ? "装备上架检查完成" : "装备购买检查完成");
+            if (selling) {
+                restoreAfkAfterOperation(accountIndex, view, manual, "装备上架检查完成");
+            } else {
+                updateState(accountIndex, "全部目标装备已购买，正在一键穿装备");
+                preparePetEquipment(accountIndex, view, items, true, manual, 0);
+            }
             return;
         }
         String itemName = items.get(itemIndex);
@@ -413,7 +500,9 @@ final class AutomationCoordinator {
                 + "const rows=Array.from(box.querySelectorAll('.ul .li'));"
                 + "const matches=rows.filter(e=>{const c=Array.from(e.children);"
                 + "return c.length>=2&&(c[1].textContent||'').trim()===target;});"
-                + "if(!matches.length)return JSON.stringify({status:'missing'});"
+                + "if(!matches.length){const refresh=Array.from(document.querySelectorAll('button,uni-button,[role=button],a,view'))"
+                + ".find(e=>visible(e)&&(e.textContent||'').replace(/\\s+/g,'')==='点击刷新');"
+                + "if(refresh)refresh.click();return JSON.stringify({status:'missing'});}"
                 + "const row=matches[0];row.scrollIntoView({block:'nearest'});row.click();"
                 + "const sell=Array.from(document.querySelectorAll('button,uni-button,[role=button]'))"
                 + ".find(e=>visible(e)&&(e.textContent||'').trim()==='卖出');"
@@ -508,8 +597,77 @@ final class AutomationCoordinator {
                 return;
             }
             updateState(accountIndex, itemName + "：已指定买家上架");
-            handler.postDelayed(() -> processEquipmentItem(
-                    accountIndex, view, items, itemIndex + 1, true, manual), 700L);
+            RuntimeState state = states[accountIndex];
+            state.equipmentListedInBatch++;
+            state.equipmentBatchNames.add(itemName);
+            int nextIndex = itemIndex + 1;
+            if (state.equipmentListedInBatch >= EQUIPMENT_ACTIVE_LIMIT
+                    && nextIndex < items.size()) {
+                state.equipmentBatchSeen = false;
+                state.equipmentBatchEmptyChecks = 0;
+                state.equipmentWaitStartedAt = System.currentTimeMillis();
+                updateState(accountIndex, "前5件已上架，等待买方完成后继续后续装备");
+                handler.postDelayed(() -> waitForEquipmentBatchClear(
+                        accountIndex, view, items, nextIndex, manual), 3_000L);
+            } else {
+                handler.postDelayed(() -> processEquipmentItem(
+                        accountIndex, view, items, nextIndex, true, manual), 700L);
+            }
+        });
+    }
+
+    private void waitForEquipmentBatchClear(int accountIndex, WebView view, List<String> items,
+                                            int nextIndex, boolean manual) {
+        RuntimeState state = states[accountIndex];
+        if (stopped || !state.busy) return;
+        if (System.currentTimeMillis() - state.equipmentWaitStartedAt
+                > EQUIPMENT_WAIT_TIMEOUT_MS) {
+            finish(accountIndex, "equipment_sell", "error",
+                    "等待前5件装备成交超时，已保留后续装备", manual);
+            return;
+        }
+        int price = equipmentPrice(accountIndex);
+        String names = new JSONArray(state.equipmentBatchNames).toString();
+        String script = "(function(){const names=new Set(" + names + "),price=" + price + ";"
+                + "const visible=e=>e&&e.getClientRects().length>0;"
+                + "const box=Array.from(document.querySelectorAll('.cont-box'))"
+                + ".find(e=>visible(e)&&(e.textContent||'').includes('价格(金币)'));"
+                + "if(!box)return JSON.stringify({status:'not_ready'});"
+                + "const rows=Array.from(box.querySelectorAll('.ul .li'));let count=0;"
+                + "for(const row of rows){const c=Array.from(row.children);if(c.length<3)continue;"
+                + "const n=(c[1].textContent||'').trim();"
+                + "const p=parseInt((c[2].textContent||'').replace(/[^0-9]/g,''),10);"
+                + "if(names.has(n)&&p===price)count++;}"
+                + "const refresh=Array.from(document.querySelectorAll('button,uni-button,[role=button],a,view'))"
+                + ".find(e=>visible(e)&&(e.textContent||'').replace(/\\s+/g,'')==='点击刷新');"
+                + "if(refresh)refresh.click();return JSON.stringify({status:'ok',count});})()";
+        view.evaluateJavascript(script, encoded -> {
+            JSONObject result = decodeObject(encoded);
+            if (result == null || !"ok".equals(result.optString("status"))) {
+                handler.postDelayed(() -> waitForEquipmentBatchClear(
+                        accountIndex, view, items, nextIndex, manual), EQUIPMENT_WAIT_INTERVAL_MS);
+                return;
+            }
+            int count = result.optInt("count", 0);
+            if (count > 0) {
+                state.equipmentBatchSeen = true;
+                state.equipmentBatchEmptyChecks = 0;
+                updateState(accountIndex, "前5件剩余" + count + "件待买方购买");
+            } else {
+                state.equipmentBatchEmptyChecks++;
+            }
+            if (count == 0 && (state.equipmentBatchSeen || state.equipmentBatchEmptyChecks >= 3)) {
+                state.equipmentListedInBatch = 0;
+                state.equipmentBatchNames.clear();
+                state.equipmentBatchSeen = false;
+                state.equipmentBatchEmptyChecks = 0;
+                updateState(accountIndex, "前5件已确认完成，开始上架后续装备");
+                handler.postDelayed(() -> processEquipmentItem(
+                        accountIndex, view, items, nextIndex, true, manual), 1_000L);
+                return;
+            }
+            handler.postDelayed(() -> waitForEquipmentBatchClear(
+                    accountIndex, view, items, nextIndex, manual), EQUIPMENT_WAIT_INTERVAL_MS);
         });
     }
 
@@ -525,7 +683,9 @@ final class AutomationCoordinator {
                 + "const matches=rows.filter(e=>{const c=Array.from(e.children);if(c.length<3)return false;"
                 + "const n=(c[1].textContent||'').trim();const p=parseInt((c[2].textContent||'').replace(/[^0-9]/g,''),10);"
                 + "return n===target&&p===price;});"
-                + "if(!matches.length)return JSON.stringify({status:'missing'});"
+                + "if(!matches.length){const refresh=Array.from(document.querySelectorAll('button,uni-button,[role=button],a,view'))"
+                + ".find(e=>visible(e)&&(e.textContent||'').replace(/\\s+/g,'')==='点击刷新');"
+                + "if(refresh)refresh.click();return JSON.stringify({status:'missing'});}"
                 + "if(matches.length>1)return JSON.stringify({status:'ambiguous',count:matches.length});"
                 + "matches[0].scrollIntoView({block:'nearest'});matches[0].click();"
                 + "const buy=Array.from(box.querySelectorAll('button,uni-button,[role=button]'))"
@@ -538,9 +698,17 @@ final class AutomationCoordinator {
             JSONObject result = decodeObject(encoded);
             String status = result == null ? "invalid" : result.optString("status");
             if ("missing".equals(status)) {
-                updateState(accountIndex, itemName + "：未找到指定单价的拍卖");
-                handler.postDelayed(() -> processEquipmentItem(
-                        accountIndex, view, items, itemIndex + 1, false, manual), 350L);
+                RuntimeState state = states[accountIndex];
+                if (System.currentTimeMillis() - state.equipmentWaitStartedAt
+                        > EQUIPMENT_WAIT_TIMEOUT_MS) {
+                    finish(accountIndex, "equipment_buy", "error",
+                            itemName + "：等待指定单价的拍卖超时", manual);
+                    return;
+                }
+                updateState(accountIndex, itemName + "：等待卖方上架");
+                handler.postDelayed(() -> openEquipmentBuyDialog(
+                        accountIndex, view, items, itemIndex, itemName, manual),
+                        EQUIPMENT_WAIT_INTERVAL_MS);
                 return;
             }
             if ("ambiguous".equals(status)) {
@@ -609,6 +777,8 @@ final class AutomationCoordinator {
                         itemName + "：购买弹窗未关闭，请手动检查", manual);
                 return;
             }
+            states[accountIndex].equipmentPurchasedNames.add(itemName);
+            states[accountIndex].equipmentWaitStartedAt = System.currentTimeMillis();
             handler.postDelayed(() -> processEquipmentItem(
                     accountIndex, view, items, itemIndex + 1, false, manual), 700L);
         });
@@ -630,6 +800,7 @@ final class AutomationCoordinator {
         state.status = "running";
         state.lastMessage = "正在打开道具交易所";
         state.updatedAt = System.currentTimeMillis();
+        state.orientationRecoveryClicked = false;
         host.onAutomationChanged();
         WebView view;
         try {
@@ -647,6 +818,8 @@ final class AutomationCoordinator {
                                    boolean manual, int attempt) {
         String script = "(function(){"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
+                + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'');"
+                + orientationRecoveryScript(accountIndex)
                 + "const text=(document.body?.innerText||'').replace(/\\s+/g,'');"
                 + "const hasBackpack=Array.from(document.querySelectorAll('.cont-box'))"
                 + ".some(e=>visible(e)&&/背包道具数/.test(e.textContent||''));"
@@ -665,6 +838,15 @@ final class AutomationCoordinator {
             if ("ready".equals(result)) {
                 handler.postDelayed(() -> processAuctionItem(
                         accountIndex, view, items, 0, manual), 400L);
+            } else if ("orientation_clicked".equals(result)) {
+                states[accountIndex].orientationRecoveryClicked = true;
+                updateState(accountIndex, "已点击横屏恢复，正在确认画面");
+                handler.postDelayed(() -> navigateToAuction(
+                        accountIndex, view, items, manual, attempt + 1), 1_800L);
+            } else if ("orientation_failed".equals(result)
+                    || "orientation_missing".equals(result)) {
+                finish(accountIndex, "auction", "error",
+                        "横屏提示未恢复，已停止继续点击", manual);
             } else if (result.endsWith("_clicked") && attempt < 9) {
                 long delay = "auction_clicked".equals(result) ? 3_000L : 1_500L;
                 handler.postDelayed(() -> navigateToAuction(
@@ -831,6 +1013,7 @@ final class AutomationCoordinator {
         state.status = "running";
         state.lastMessage = "正在打开中心城镇道具商店";
         state.updatedAt = System.currentTimeMillis();
+        state.orientationRecoveryClicked = false;
         host.onAutomationChanged();
         WebView view;
         try {
@@ -849,6 +1032,8 @@ final class AutomationCoordinator {
                                  boolean manual, int attempt) {
         String script = "(function(){"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
+                + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'');"
+                + orientationRecoveryScript(accountIndex)
                 + "const text=(document.body?.innerText||'').replace(/\\s+/g,'');"
                 + "const hasBackpack=!!document.querySelector('#backpack-items')"
                 + "||Array.from(document.querySelectorAll('.cont-box'))"
@@ -868,6 +1053,15 @@ final class AutomationCoordinator {
             if ("ready".equals(result)) {
                 handler.postDelayed(() -> processStoreItem(
                         accountIndex, view, items, 0, manual), 400L);
+            } else if ("orientation_clicked".equals(result)) {
+                states[accountIndex].orientationRecoveryClicked = true;
+                updateState(accountIndex, "已点击横屏恢复，正在确认画面");
+                handler.postDelayed(() -> navigateToStore(
+                        accountIndex, view, items, manual, attempt + 1), 1_800L);
+            } else if ("orientation_failed".equals(result)
+                    || "orientation_missing".equals(result)) {
+                finish(accountIndex, "store_sell", "error",
+                        "横屏提示未恢复，已停止继续点击", manual);
             } else if (result.endsWith("_clicked") && attempt < 9) {
                 long delay = "store_clicked".equals(result) ? 3_000L : 1_500L;
                 handler.postDelayed(() -> navigateToStore(
@@ -1007,6 +1201,144 @@ final class AutomationCoordinator {
             handler.postDelayed(() -> processStoreItem(
                     accountIndex, view, items, itemIndex, manual), 1_500L);
         });
+    }
+
+    private String orientationRecoveryScript(int accountIndex) {
+        boolean alreadyClicked = states[accountIndex].orientationRecoveryClicked;
+        return "const orientationText=(document.body?.innerText||'').replace(/\\s+/g,'');"
+                + "if(orientationText.includes('请将手机横屏使用')){"
+                + (alreadyClicked
+                ? "return 'orientation_failed';"
+                : "const fallback=Array.from(document.querySelectorAll('button,[role=button],uni-button,a,view,div'))"
+                + ".filter(visible).find(e=>{const t=clean(e);"
+                + "return t.includes('手机转不动')&&t.includes('点这里继续');});"
+                + "if(!fallback)return 'orientation_missing';fallback.click();return 'orientation_clicked';")
+                + "}";
+    }
+
+    private void returnToAfkForPainting(int accountIndex, WebView view, boolean manual) {
+        updateState(accountIndex, "正在返回挂机辅助并准备绘画小屋");
+        String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
+                + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'');"
+                + "const all=Array.from(document.querySelectorAll('[name],button,[role=button],uni-button,a,view,div'));"
+                + "const target=all.filter(visible).find(e=>(e.getAttribute('name')||'').trim()==='挂机辅助'"
+                + "||clean(e)==='挂机辅助');"
+                + "if(!target)return 'missing';target.click();return 'clicked';})()";
+        view.evaluateJavascript(script, encoded -> {
+            if (!"clicked".equals(decodeString(encoded))) {
+                finish(accountIndex, "equipment_buy", "error",
+                        "装备已穿戴，但未找到“挂机辅助”入口", manual);
+                return;
+            }
+            host.prepareAutomation(accountIndex, false);
+            states[accountIndex].paintingStarted = false;
+            states[accountIndex].paintingStartedAt = System.currentTimeMillis();
+            handler.postDelayed(() -> runPaintingDungeon(
+                    accountIndex, view, manual, 0), 4_000L);
+        });
+    }
+
+    private void runPaintingDungeon(int accountIndex, WebView view, boolean manual, int attempt) {
+        RuntimeState state = states[accountIndex];
+        if (stopped || !state.busy) return;
+        if (System.currentTimeMillis() - state.paintingStartedAt > PAINTING_TIMEOUT_MS) {
+            finish(accountIndex, "equipment_buy", "error", "绘画小屋执行超时", manual);
+            return;
+        }
+        String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
+                + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'');"
+                + "const controls=Array.from(document.querySelectorAll('button,[role=button],uni-button,view')).filter(visible);"
+                + "const stop=controls.find(e=>clean(e).includes('停止挂机'));"
+                + "const start=controls.find(e=>clean(e).includes('开始挂机'));"
+                + "if(" + state.paintingStarted + ")return stop?'running':(start?'completed':'waiting');"
+                + "if(stop){stop.click();return 'stopping_previous';}"
+                + "const select=Array.from(document.querySelectorAll('select')).find(s=>"
+                + "Array.from(s.options).some(o=>(o.textContent||'').includes('绘画小屋')));"
+                + "if(!select)return 'missing_controls';"
+                + "const option=Array.from(select.options).find(o=>(o.textContent||'').includes('绘画小屋'));"
+                + "select.value=option.value;select.selectedIndex=option.index;"
+                + "select.dispatchEvent(new Event('input',{bubbles:true}));"
+                + "select.dispatchEvent(new Event('change',{bubbles:true}));"
+                + "const manualButton=controls.find(e=>clean(e).includes('手动挂机'));"
+                + "if(manualButton)manualButton.click();return 'configured';})()";
+        view.evaluateJavascript(script, encoded -> {
+            String result = decodeString(encoded);
+            if ("completed".equals(result)) {
+                finish(accountIndex, "equipment_buy", "ok",
+                        "全部装备已购买并穿戴，绘画小屋副本已完成", manual);
+            } else if ("running".equals(result)) {
+                updateState(accountIndex, "绘画小屋执行中，等待“停止挂机”退出");
+                handler.postDelayed(() -> runPaintingDungeon(
+                        accountIndex, view, manual, 0), PAINTING_CHECK_INTERVAL_MS);
+            } else if ("configured".equals(result)) {
+                handler.postDelayed(() -> clickPaintingStart(
+                        accountIndex, view, manual, 0), 900L);
+            } else if ("stopping_previous".equals(result)) {
+                handler.postDelayed(() -> runPaintingDungeon(
+                        accountIndex, view, manual, attempt + 1), 1_500L);
+            } else if ("waiting".equals(result) && attempt < 12) {
+                handler.postDelayed(() -> runPaintingDungeon(
+                        accountIndex, view, manual, attempt + 1), 2_000L);
+            } else if ("missing_controls".equals(result) && attempt < 5) {
+                handler.postDelayed(() -> runPaintingDungeon(
+                        accountIndex, view, manual, attempt + 1), 2_000L);
+            } else {
+                finish(accountIndex, "equipment_buy", "error",
+                        "未找到绘画小屋挂机控件", manual);
+            }
+        });
+    }
+
+    private void clickPaintingStart(int accountIndex, WebView view, boolean manual, int attempt) {
+        String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
+                + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'');"
+                + "const controls=Array.from(document.querySelectorAll('button,[role=button],uni-button,view')).filter(visible);"
+                + "if(controls.some(e=>clean(e).includes('停止挂机')))return 'running';"
+                + "const start=controls.find(e=>clean(e).includes('开始挂机'));"
+                + "if(!start)return 'missing';start.click();return 'clicked';})()";
+        view.evaluateJavascript(script, encoded -> {
+            String result = decodeString(encoded);
+            if ("running".equals(result)) {
+                markPaintingStarted(accountIndex, view, manual);
+            } else if ("clicked".equals(result)) {
+                handler.postDelayed(() -> verifyPaintingStarted(
+                        accountIndex, view, manual, 0), 1_500L);
+            } else if (attempt < 4) {
+                handler.postDelayed(() -> clickPaintingStart(
+                        accountIndex, view, manual, attempt + 1), 700L);
+            } else {
+                finish(accountIndex, "equipment_buy", "error",
+                        "未找到绘画小屋“开始挂机”按钮", manual);
+            }
+        });
+    }
+
+    private void verifyPaintingStarted(int accountIndex, WebView view,
+                                       boolean manual, int attempt) {
+        String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
+                + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'');"
+                + "return Array.from(document.querySelectorAll('button,[role=button],uni-button,view'))"
+                + ".filter(visible).some(e=>clean(e).includes('停止挂机'))?'running':'waiting';})()";
+        view.evaluateJavascript(script, encoded -> {
+            if ("running".equals(decodeString(encoded))) {
+                markPaintingStarted(accountIndex, view, manual);
+            } else if (attempt < 6) {
+                handler.postDelayed(() -> verifyPaintingStarted(
+                        accountIndex, view, manual, attempt + 1), 1_500L);
+            } else {
+                finish(accountIndex, "equipment_buy", "error",
+                        "绘画小屋未进入“停止挂机”状态", manual);
+            }
+        });
+    }
+
+    private void markPaintingStarted(int accountIndex, WebView view, boolean manual) {
+        RuntimeState state = states[accountIndex];
+        state.paintingStarted = true;
+        state.paintingStartedAt = System.currentTimeMillis();
+        updateState(accountIndex, "绘画小屋已开始，正在监控副本完成");
+        handler.postDelayed(() -> runPaintingDungeon(
+                accountIndex, view, manual, 0), PAINTING_CHECK_INTERVAL_MS);
     }
 
     private void restoreAfkAfterOperation(int accountIndex, WebView view, boolean manual,
@@ -1226,8 +1558,8 @@ final class AutomationCoordinator {
                     throw new IllegalArgumentException("装备名称不能超过30个字符");
                 }
                 unique.add(safe);
-                if (unique.size() > 5) {
-                    throw new IllegalArgumentException("装备转移每次最多5件");
+                if (unique.size() > 10) {
+                    throw new IllegalArgumentException("装备转移最多10件，将自动分两批处理");
                 }
             }
         }
@@ -1300,5 +1632,14 @@ final class AutomationCoordinator {
         String monitorMessage = "等待首次30分钟检查";
         int lastBattleCount = -1;
         long lastBattleCheckAt;
+        boolean orientationRecoveryClicked;
+        int equipmentListedInBatch;
+        final Set<String> equipmentBatchNames = new LinkedHashSet<>();
+        boolean equipmentBatchSeen;
+        int equipmentBatchEmptyChecks;
+        long equipmentWaitStartedAt;
+        final Set<String> equipmentPurchasedNames = new LinkedHashSet<>();
+        boolean paintingStarted;
+        long paintingStartedAt;
     }
 }

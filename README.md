@@ -1,10 +1,18 @@
-# Play Keeper Android 正式版
+# Play Keeper Android
 
-这是针对小米 Civi 4 Pro / HyperOS 优化的多账号网页挂机 APP，固定打开：
+这是面向 Android 10 及以上系统的多账号网页挂机 APP，固定打开：
 
 `http://sgplay.cc/home.html#/`
 
-## v1.3.0-equipment-test 新增能力
+## v1.4.0-workflow-test 新增能力
+
+- 脚本检测“请将手机横屏使用”后，仅点击一次“手机转不动？点这里继续”；未恢复时立即中止脚本
+- 装备定向转移扩展为10件：卖方先一键脱装，前5件成交后再自动上架后5件
+- 买方会等待所有目标装备，全部购买后一键穿装，再进入“绘画小屋”监控副本完成
+- 拍卖道具增加三组快捷组合，仍保留最多10种自定义输入
+- Android 和远程页面同步新流程；发布包改为 Android 10+ 通用命名
+
+## v1.3.0-equipment-test 能力
 
 - 新增“装备定向转移”：卖方可按精确装备名、单价和指定买家ID上架，每次最多5件
 - 默认测试装备为菜鸟戒指、菜鸟宝石、菜鸟项链，默认单价920金币，全部可修改
@@ -99,9 +107,9 @@
 
 ## 当前安装包
 
-`dist/PlayKeeper-Civi4Pro-v1.3.0-equipment-test.apk`
+`dist/PlayKeeper-Android10Plus-v1.4.0-workflow-test.apk`
 
-为保留既有登录数据，v1.3.0-equipment-test 仍使用包名 `com.local.sgplaykeeper.test` 和已有升级签名，版本号为 `10`，可覆盖安装 v1.0.0–v1.2.0。
+为保留既有登录数据，v1.4.0-workflow-test 仍使用包名 `com.local.sgplaykeeper.test` 和已有升级签名，版本号为 `11`，可覆盖安装 v1.0.0–v1.3.0。
 
 ## 远程连接
 
@@ -117,7 +125,7 @@ v0.5 提供 Play Keeper 自有 WebView 的低帧率预览和单击，不是整�
 
 APP 会尝试从网页 DOM 自动识别登录用户名。若网站结构变化或用户名位于不可访问的跨域内容中，可在 Android 工具栏长按对应账号按钮手动设置显示名称。
 
-## 小米建议设置
+## Android 长时间运行建议
 
 1. 设置 → 应用设置 → 应用管理 → Play Keeper。
 2. 省电策略设为“无限制”。
@@ -137,7 +145,7 @@ APP 会尝试从网页 DOM 自动识别登录用户名。若网站结构变化�
 - 装备买方弹窗不显示卖家ID，因此脚本仅依赖指定买家可见性、装备名和特定单价识别；同名同价多条时会停止。
 - “该IP登录的账号数已达上限（4个）”是站点服务器限制。清理 APP/WebView 数据不会释放服务器名额；应先在已有账号内正常点击“退出”，等待服务器释放会话，仍未恢复时联系站点管理方。Play Keeper 不提供绕过限制的功能。
 
-详细步骤见 `docs/CIVI4_PRO_TEST_PLAN.md`。
+通用回归步骤见 `docs/ANDROID10_PLUS_TEST_PLAN.md`；早期 Civi 4 Pro 实测记录保留在 `docs/CIVI4_PRO_TEST_PLAN.md`。
 
 ## 开发文档
 
@@ -151,6 +159,8 @@ APP 会尝试从网页 DOM 自动识别登录用户名。若网站结构变化�
 - `docs/VPS_UPDATE_V1.1.md`：v1.1.0 拍卖/商店卖出拆分后的 Debian VPS 更新命令
 - `docs/VPS_UPDATE_V1.2.md`：v1.2.0 定时卖出、掉线标记与新控制台的 Debian VPS 更新命令
 - `docs/VPS_UPDATE_V1.3_TEST.md`：v1.3.0 装备转移测试版 VPS 更新与回滚步骤
+- `docs/VPS_UPDATE_V1.4_TEST.md`：v1.4.0 横屏恢复、10件装备与绘画小屋流程的 VPS 更新步骤
+- `docs/ANDROID10_PLUS_TEST_PLAN.md`：Android 10+ 通用回归测试矩阵
 - `docs/CIVI4_PRO_TEST_PLAN.md`：小米 Civi 4 Pro 回归测试方案
 - `CHANGELOG.md`：版本变更记录
 

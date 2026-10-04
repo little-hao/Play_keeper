@@ -86,7 +86,7 @@ const commandValidators = {
     return accountParameters(parameters)
       && Array.isArray(parameters.items)
       && parameters.items.length >= 1
-      && parameters.items.length <= 5
+      && parameters.items.length <= 10
       && parameters.items.every((item) => typeof item === "string"
         && item.trim().length >= 1 && item.trim().length <= 30)
       && Number.isInteger(parameters.price)
@@ -156,7 +156,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.3.0-equipment-test" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.4.0-workflow-test" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {

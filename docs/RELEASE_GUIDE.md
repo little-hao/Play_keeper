@@ -26,15 +26,15 @@ app/build/outputs/apk/debug/app-debug.apk
 
 ```groovy
 defaultConfig {
-    versionCode 10
-    versionName '1.3.0-equipment-test'
+    versionCode 11
+    versionName '1.4.0-workflow-test'
 }
 ```
 
 - `versionCode` 必须递增，否则 Android 不允许覆盖安装。
 - `versionName` 采用语义化版本，测试包可追加 `-test`。
 - 不要修改 `applicationId`，否则会安装成另一个 APP，无法继承 Profile 数据。
-- v1.3.0-equipment-test 的 Debug/Release 都保留 `applicationIdSuffix '.test'`，以覆盖历史版本并保留 WebView Profile。
+- v1.4.0-workflow-test 的 Debug/Release 都保留 `applicationIdSuffix '.test'`，以覆盖历史版本并保留 WebView Profile。
 
 ## 3. Debug 构建验证
 
@@ -104,7 +104,7 @@ keyPassword=***
 - 正式版发布后必须永久使用同一签名，才能覆盖升级并保留账号 Profile。
 - Release 构建启用前，应在 `app/build.gradle` 中通过环境变量或本地属性配置 signingConfig。
 
-## 6. Civi 4 Pro 发布前矩阵
+## 6. Android 10+ 发布前矩阵
 
 每个版本至少完成：
 

@@ -146,7 +146,7 @@ HTML `<select>` 是特殊情况：WebView 会把它渲染为 Android 原生弹�
 - `configure_store_sell` 当前只接受单项金币券及1–168小时定时间隔；VPS 无法借此请求卖出任意道具。
 - `run_auto_auction`、`run_store_sell` 和 `run_temple_guard` 只是要求 Android 开始一次检查；最终结果以 Android 脚本状态和操作日志为准。
 - Relay 不会生成或转发任意 JavaScript；自动化脚本固定编译在 APK 中。
-- `configure_equipment_transfer` 仅接受1–5个装备名、1–9999999单价和安全字符组成的玩家ID；卖方执行时玩家ID不得为空。
+- `configure_equipment_transfer` 仅接受1–10个装备名、1–9999999单价和安全字符组成的玩家ID；卖方执行时玩家ID不得为空。
 - `run_equipment_sell` 与 `run_equipment_buy` 只启动 Android 内置受限流程，VPS 不接收密码、任意选择器或脚本。
 
 ## 6. 服务器建议

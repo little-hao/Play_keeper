@@ -28,6 +28,13 @@ const previewProfiles = {
   "1280": { maxWidth: 1280, fps: 0.33, label: "高清" },
   "2560": { maxWidth: 2560, fps: 0.1, label: "超清" }
 };
+const auctionPresets = {
+  one: "曙光印记,进化宝石",
+  two: "强化丹A,强化丹B,天仙雨露,雨露结晶",
+  three: "黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石"
+};
+const defaultEquipmentItems = "柔情方巾·改,轻罗流萤衫·改,逢羡履·改,君我剑·改,佳人之恋·改,"
+  + "三生戒·改,比翼·改,相望镯·改,尾生之泪·改,龙神印记·庆";
 let socket;
 let manuallyClosed = false;
 let reconnectTimer;
@@ -254,6 +261,7 @@ function renderDevices() {
     const auctionEnabled = card.querySelector(".auction-enabled");
     const auctionHours = card.querySelector(".auction-hours");
     const auctionItemsInput = card.querySelector(".auction-items");
+    const auctionPreset = card.querySelector(".auction-preset");
     const auctionBuyer = card.querySelector(".auction-buyer");
     const storeSellEnabled = card.querySelector(".store-sell-enabled");
     const storeSellItem = card.querySelector(".store-sell-item");
@@ -266,14 +274,23 @@ function renderDevices() {
     auctionEnabled.checked = automation.auctionEnabled === true || automation.sellEnabled === true;
     auctionHours.value = String(Number.isInteger(automation.auctionIntervalHours)
       ? automation.auctionIntervalHours : (automation.sellIntervalHours ?? 12));
-    auctionItemsInput.value = auctionItems.join(",") || "进化宝石,曙光印记";
+    auctionItemsInput.value = auctionItems.join(",") || auctionPresets.one;
+    auctionPreset.value = Object.entries(auctionPresets)
+      .find(([, value]) => value === auctionItemsInput.value)?.[0] ?? "custom";
+    auctionPreset.addEventListener("change", () => {
+      if (auctionPreset.value !== "custom") auctionItemsInput.value = auctionPresets[auctionPreset.value];
+    });
+    auctionItemsInput.addEventListener("input", () => {
+      auctionPreset.value = Object.entries(auctionPresets)
+        .find(([, value]) => value === auctionItemsInput.value.trim())?.[0] ?? "custom";
+    });
     auctionBuyer.value = typeof automation.auctionBuyer === "string" && automation.auctionBuyer
       ? automation.auctionBuyer : (automation.sellBuyer || "hao");
     storeSellEnabled.checked = automation.storeSellEnabled === true;
     storeSellItem.value = "金币券";
     templeEnabled.checked = automation.templeEnabled === true;
     equipmentItemsInput.value = Array.isArray(automation.equipmentItems)
-      ? automation.equipmentItems.join(",") : "菜鸟戒指,菜鸟宝石,菜鸟项链";
+      ? automation.equipmentItems.join(",") : defaultEquipmentItems;
     equipmentPriceInput.value = String(Number.isInteger(automation.equipmentPrice)
       ? automation.equipmentPrice : 920);
     equipmentBuyerInput.value = typeof automation.equipmentBuyer === "string"
@@ -298,9 +315,9 @@ function renderDevices() {
         return addLog("拍卖间隔需为1–168小时");
       }
       if (!/^[A-Za-z0-9_.-]{1,30}$/.test(buyer)) return addLog("指定买家格式无效");
-      if (!equipmentItems.length || equipmentItems.length > 5
+      if (!equipmentItems.length || equipmentItems.length > 10
           || equipmentItems.some((item) => item.length > 30)) {
-        return addLog("装备名称需填写1–5种，每项不超过30字");
+        return addLog("装备名称需填写1–10种，每项不超过30字");
       }
       if (!Number.isInteger(equipmentPrice) || equipmentPrice < 1 || equipmentPrice > 9_999_999) {
         return addLog("装备单价需为1–9999999金币");

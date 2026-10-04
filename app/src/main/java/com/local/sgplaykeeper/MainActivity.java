@@ -535,6 +535,15 @@ public final class MainActivity extends Activity {
         auctionItems.setHint("进化宝石,曙光印记");
         auctionItems.setSingleLine(true);
         form.addView(auctionItems, formFieldParams());
+        Button auctionPresetOne = makeButton("组合1：曙光印记 + 进化宝石",
+                view -> auctionItems.setText(AutomationCoordinator.AUCTION_PRESET_ONE));
+        form.addView(auctionPresetOne, automationActionParams());
+        Button auctionPresetTwo = makeButton("组合2：强化丹/雨露类",
+                view -> auctionItems.setText(AutomationCoordinator.AUCTION_PRESET_TWO));
+        form.addView(auctionPresetTwo, automationActionParams());
+        Button auctionPresetThree = makeButton("组合3：黑暗系列",
+                view -> auctionItems.setText(AutomationCoordinator.AUCTION_PRESET_THREE));
+        form.addView(auctionPresetThree, automationActionParams());
 
         form.addView(formLabel("指定买家"));
         EditText buyer = new EditText(this);
@@ -568,10 +577,10 @@ public final class MainActivity extends Activity {
         templeEnabled.setChecked(automationCoordinator.isTempleEnabled(accountIndex));
         form.addView(templeEnabled);
 
-        form.addView(formLabel("装备定向转移（每次最多5件）"));
+        form.addView(formLabel("装备定向转移（最多10件，每5件自动分批）"));
         EditText equipmentItems = new EditText(this);
         equipmentItems.setSingleLine(true);
-        equipmentItems.setHint("菜鸟戒指,菜鸟宝石,菜鸟项链");
+        equipmentItems.setHint(AutomationCoordinator.DEFAULT_EQUIPMENT_ITEMS);
         equipmentItems.setText(automationCoordinator.equipmentItemsText(accountIndex));
         form.addView(equipmentItems, formFieldParams());
 
@@ -1272,8 +1281,8 @@ public final class MainActivity extends Activity {
             telemetry.put("device", device);
 
             JSONObject app = new JSONObject();
-            app.put("versionCode", 10);
-            app.put("versionName", "1.3.0-equipment-test");
+            app.put("versionCode", 11);
+            app.put("versionName", "1.4.0-workflow-test");
             app.put("activeAccount", activeAccount);
             app.put("blackScreen", blackMode);
             app.put("executionMode", blackMode

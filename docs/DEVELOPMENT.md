@@ -4,7 +4,7 @@
 
 ## 1. 项目目标
 
-Play Keeper 是一个面向小米 Civi 4 Pro / HyperOS 的轻量 Android WebView 容器，用于长期保持 `sgplay.cc` 网页运行。
+Play Keeper 是一个面向 Android 10 及以上系统的轻量 Android WebView 容器，用于长期保持 `sgplay.cc` 网页运行。
 
 当前目标：
 
@@ -35,7 +35,7 @@ Play Keeper 是一个面向小米 Civi 4 Pro / HyperOS 的轻量 Android WebView
 | minSdk | 26 |
 | AndroidX WebKit | 1.12.0 |
 | v1.2.0 兼容包名 | `com.local.sgplaykeeper.test` |
-| 版本 | versionCode 10 / versionName 1.3.0-equipment-test |
+| 版本 | versionCode 11 / versionName 1.4.0-workflow-test |
 
 AndroidX WebKit 选择 1.12.0 是为了在当前 compileSdk 35 构建环境中稳定使用 Multi-Profile API。升级 WebKit 前需要重新检查其 `minCompileSdk`、传递依赖和 Civi 4 Pro 的实际 WebView 功能支持。
 
@@ -307,14 +307,16 @@ Android 原生 `CookieManager.getInstance()` 在同一应用内默认共享 Cook
 - 配置后再寻找“开始挂机”并点击；任何控件不匹配都中止并上报错误。
 - 定时周期固定为 1h，支持 Android/远程网页手动立即检查。
 
-### 13.5 装备定向转移（v1.3 测试）
+### 13.5 装备定向转移（v1.4 工作流）
 
-- 配置按账号独立保存：1–5个完整装备名、1–9999999金币单价和最长30字符的指定买家ID。买家ID允许字母、数字、`@_.-`，不保存登录密码。
+- 配置按账号独立保存：1–10个完整装备名、1–9999999金币单价和最长30字符的指定买家ID。买家ID允许字母、数字、`@_.-`，不保存登录密码。
+- 卖方先经“宠物资料 → 一键脱装备”；脚本只把验证为上架成功的装备计入批次，每批5件。首批指定单价记录消失后才继续下一批。
 - 卖方流程仅操作右侧含“装备数：”的背包容器，按完整名称匹配。上架弹窗必须同时满足标题“上架装备拍卖”和装备名一致，然后才填入单价与玩家ID。
 - 输入使用原生 `HTMLInputElement.value` setter 并触发 `input/change`，兼容 Vue/uni-app 受控输入框。点击确认前再读回价格和买家；提交后必须看到弹窗关闭且背包同名行数减少。
 - 买方流程仅操作左侧含“价格(金币)”的拍卖列表，同时精确匹配装备名与单价。购买弹窗再校验“购买装备确认”、装备名和价格。
 - 因购买弹窗不显示卖家ID，如同一装备名+价格出现多条，脚本中止并要求人工核对，不选择第一条。
-- 上架或购买完成后共用 `restoreAfkAfterOperation()` 返回挂机辅助、恢复竖屏和圣兽云殿检查。任何结构、数量或复核失败都会中止当前任务。
+- 买方对未出现的装备持续等待并刷新，不直接跳过。全部购买成功后执行“一键穿装备 → 绘画小屋”，必须观测到“开始挂机 → 停止挂机 → 退出停止挂机”才标记完成。
+- 任何结构、数量或复核失败都会中止当前任务。横屏引导页恢复按钮最多点击一次。
 
 ## 14. 已知限制
 
@@ -322,7 +324,7 @@ Android 原生 `CookieManager.getInstance()` 在同一应用内默认共享 Cook
 - 同时打开 4 个账号会显著增加内存和耗电，应按 1、2、4 个账号逐步压力测试。
 - 页面异常检测包含主框架错误、超时及30分钟战斗场次停滞；停滞仅作远程提示，不自动重新登录。
 - APP 被系统结束后不能继续挂机；下次启动只能恢复登录状态和最后页面。
-- v1.3.0-equipment-test 为了覆盖安装历史版本并保留 WebView Profile，延续现有 Android Debug 证书。此方案仅适合当前个人 GitHub 分发，不适合公开应用商店。
+- v1.4.0-workflow-test 为了覆盖安装历史版本并保留 WebView Profile，延续现有 Android Debug 证书。此方案仅适合当前个人 GitHub 分发，不适合公开应用商店。
 - WebView 硬件渲染在部分 ROM 上可能导致 `draw(Canvas)` 截图空白，需以 Civi 4 Pro 实测为准。
 - v0.5 远程只支持单击，不支持拖动、多点触控、键盘、文件上传或声音。
 - Activity 不在运行时，当前版本不会额外启动前台服务维持远程在线。
@@ -337,6 +339,6 @@ Android 原生 `CookieManager.getInstance()` 在同一应用内默认共享 Cook
 2. 不把账号密码写入源码、配置、日志或仓库。
 3. 新增外部域名前，先确认用途，再最小化修改导航和明文网络白名单。
 4. WebView API 必须做系统功能检测，不能假设所有 ROM 支持。
-5. 每次修改都运行 `assembleDebug`、`lintDebug`、签名验证和 Civi 4 Pro 回归测试。
+5. 每次修改都运行 `assembleDebug`、`lintDebug`、签名验证和 Android 10+ 回归测试。
 6. 版本升级同步更新 `versionCode`、`versionName`、README 和 CHANGELOG。
 7. 修改远程协议后必须同时更新 Android、Relay、网页控制台并运行 `npm test`。
