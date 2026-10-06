@@ -63,9 +63,10 @@ final class AutomationCoordinator {
             + "三生戒·改,比翼·改,相望镯·改,尾生之泪·改,龙神印记·庆";
     private static final int DEFAULT_EQUIPMENT_PRICE = 920;
     private static final int EQUIPMENT_ACTIVE_LIMIT = 5;
-    private static final long EQUIPMENT_WAIT_INTERVAL_MS = 30_000L;
+    private static final long EQUIPMENT_WAIT_INTERVAL_MS = 10_000L;
     private static final int MANUAL_RECOVERY_ATTEMPTS = 20;
-    private static final long EQUIPMENT_BUYER_START_DELAY_MS = 60_000L;
+    private static final long EQUIPMENT_BUYER_START_DELAY_MS = 20_000L;
+    private static final long EQUIPMENT_FINAL_BATCH_GRACE_MS = 60_000L;
     private static final long EQUIPMENT_WAIT_TIMEOUT_MS = 24L * 60L * 60L * 1000L;
     private static final long DUNGEON_CHECK_INTERVAL_MS = 15_000L;
     private static final long DUNGEON_TIMEOUT_MS = 3L * 60L * 60L * 1000L;
@@ -78,6 +79,7 @@ final class AutomationCoordinator {
     private static final String PREF_SELL_ENABLED = "automation_sell_enabled_";
     private static final String PREF_SELL_ITEMS = "automation_sell_items_";
     private static final String PREF_SELL_BUYER = "automation_sell_buyer_";
+    private static final String PREF_AUCTION_PRICE = "automation_auction_price_";
     private static final String PREF_SELL_INTERVAL = "automation_sell_interval_";
     private static final String PREF_SELL_LAST = "automation_sell_last_";
     private static final String PREF_STORE_ITEMS = "automation_store_items_";
@@ -88,6 +90,7 @@ final class AutomationCoordinator {
     private static final String PREF_TEMPLE_LAST = "automation_temple_last_";
     private static final String PREF_WAREHOUSE_ENABLED = "automation_warehouse_enabled_";
     private static final String PREF_WAREHOUSE_ITEM = "automation_warehouse_item_";
+    private static final String PREF_WAREHOUSE_STORE_ALL = "automation_warehouse_store_all_";
     private static final String PREF_WAREHOUSE_LAST = "automation_warehouse_last_";
     private static final String PREF_DUNGEON_ITEMS = "automation_dungeon_items_";
     private static final String PREF_PRESTIGE_ENABLED = "automation_prestige_enabled_";
@@ -146,6 +149,10 @@ final class AutomationCoordinator {
         return preferences.getBoolean(PREF_WAREHOUSE_ENABLED + accountIndex, false);
     }
 
+    boolean isWarehouseStoreAll(int accountIndex) {
+        return preferences.getBoolean(PREF_WAREHOUSE_STORE_ALL + accountIndex, true);
+    }
+
     String warehouseItem(int accountIndex) {
         return warehouseItemsText(accountIndex);
     }
@@ -191,6 +198,11 @@ final class AutomationCoordinator {
         return (int) Math.max(1L, Math.min(168L, interval / (60L * 60L * 1000L)));
     }
 
+    int auctionPrice(int accountIndex) {
+        return Math.max(1, Math.min(9_999_999, preferences.getInt(
+                PREF_AUCTION_PRICE + accountIndex, DEFAULT_EQUIPMENT_PRICE)));
+    }
+
     String storeSellItemsText(int accountIndex) {
         List<String> items = parseAllowedItems(preferences.getString(
                 PREF_STORE_ITEMS + accountIndex, DEFAULT_STORE_ITEMS), ALLOWED_STORE_ITEMS);
@@ -220,6 +232,12 @@ final class AutomationCoordinator {
 
     void configureAuction(int accountIndex, boolean enabled, String itemText,
                           String buyer, int intervalHours) {
+        configureAuction(accountIndex, enabled, itemText, buyer, intervalHours,
+                auctionPrice(accountIndex));
+    }
+
+    void configureAuction(int accountIndex, boolean enabled, String itemText,
+                          String buyer, int intervalHours, int price) {
         requireAccount(accountIndex);
         List<String> items = parseAuctionItems(itemText);
         if (items.isEmpty()) {
@@ -230,10 +248,14 @@ final class AutomationCoordinator {
             throw new IllegalArgumentException("指定买家不能为空");
         }
         int safeHours = Math.max(1, Math.min(168, intervalHours));
+        if (price < 1 || price > 9_999_999) {
+            throw new IllegalArgumentException("拍卖单价需为1–9999999金币");
+        }
         preferences.edit()
                 .putBoolean(PREF_SELL_ENABLED + accountIndex, enabled)
                 .putString(PREF_SELL_ITEMS + accountIndex, String.join(",", items))
                 .putString(PREF_SELL_BUYER + accountIndex, safeBuyer)
+                .putInt(PREF_AUCTION_PRICE + accountIndex, price)
                 .putLong(PREF_SELL_INTERVAL + accountIndex,
                         safeHours * 60L * 60L * 1000L)
                 .apply();
@@ -261,6 +283,11 @@ final class AutomationCoordinator {
     }
 
     void configureWarehouse(int accountIndex, boolean enabled, String itemName) {
+        configureWarehouse(accountIndex, enabled, itemName, isWarehouseStoreAll(accountIndex));
+    }
+
+    void configureWarehouse(int accountIndex, boolean enabled, String itemName,
+                            boolean storeAll) {
         requireAccount(accountIndex);
         List<String> safeItems = parseAutomationItems(itemName, 10, "存仓道具");
         if (safeItems.isEmpty()) {
@@ -269,6 +296,7 @@ final class AutomationCoordinator {
         preferences.edit()
                 .putBoolean(PREF_WAREHOUSE_ENABLED + accountIndex, enabled)
                 .putString(PREF_WAREHOUSE_ITEM + accountIndex, String.join(",", safeItems))
+                .putBoolean(PREF_WAREHOUSE_STORE_ALL + accountIndex, storeAll)
                 .apply();
         host.onAutomationChanged();
     }
@@ -357,6 +385,24 @@ final class AutomationCoordinator {
         runPrestigeItems(accountIndex, true, false);
     }
 
+    void cancelCurrent(int accountIndex) {
+        requireAccount(accountIndex);
+        RuntimeState state = states[accountIndex];
+        if (!state.busy && !state.awaitingTempleConfirmation) {
+            host.showMessage(accountName(accountIndex) + "：当前没有正在运行的脚本");
+            return;
+        }
+        state.busy = false;
+        state.awaitingTempleConfirmation = false;
+        state.confirmationDeadlineAt = 0L;
+        state.status = "cancelled";
+        state.lastMessage = "已由用户中断脚本";
+        state.updatedAt = System.currentTimeMillis();
+        state.runGeneration++;
+        host.onAutomationChanged();
+        host.showMessage(accountName(accountIndex) + "：脚本已中断");
+    }
+
     void resolveTempleConfirmation(int accountIndex, boolean enterTemple) {
         requireAccount(accountIndex);
         RuntimeState state = states[accountIndex];
@@ -381,6 +427,7 @@ final class AutomationCoordinator {
         automation.put("auctionEnabled", isAuctionEnabled(accountIndex));
         automation.put("auctionItems", new JSONArray(auctionItems));
         automation.put("auctionBuyer", auctionBuyer(accountIndex));
+        automation.put("auctionPrice", auctionPrice(accountIndex));
         automation.put("auctionIntervalHours", auctionIntervalHours(accountIndex));
         automation.put("auctionLastRunAt", preferences.getLong(
                 PREF_SELL_LAST + accountIndex, 0L));
@@ -400,6 +447,7 @@ final class AutomationCoordinator {
         automation.put("templeLastCheckAt", preferences.getLong(
                 PREF_TEMPLE_LAST + accountIndex, 0L));
         automation.put("warehouseEnabled", isWarehouseEnabled(accountIndex));
+        automation.put("warehouseStoreAll", isWarehouseStoreAll(accountIndex));
         automation.put("warehouseItem", warehouseItemsText(accountIndex));
         automation.put("warehouseItems", new JSONArray(parseAutomationItems(
                 warehouseItemsText(accountIndex), 10, "存仓道具")));
@@ -509,6 +557,7 @@ final class AutomationCoordinator {
         state.lastMessage = selling ? "正在一键脱下装备" : "正在打开装备交易所购买";
         state.updatedAt = System.currentTimeMillis();
         state.orientationRecoveryClicked = false;
+        state.auctionListedCount = 0;
         state.equipmentListedInBatch = 0;
         state.equipmentBatchNames.clear();
         state.equipmentBatchSeen = false;
@@ -519,7 +568,10 @@ final class AutomationCoordinator {
         state.dungeonIndex = 0;
         state.dungeonStarted = false;
         state.dungeonStartedAt = 0L;
+        state.storagePreparedDungeonIndex = -1;
+        state.templeStoragePrepared = false;
         state.manualRun = manual;
+        state.runGeneration++;
         host.onAutomationChanged();
         WebView view;
         try {
@@ -534,8 +586,8 @@ final class AutomationCoordinator {
                     accountIndex, view, items, false, PetEquipmentNext.SELL_TO_EXCHANGE,
                     manual, 0), 1_800L);
         } else {
-            handler.postDelayed(() -> navigateToEquipmentExchange(
-                    accountIndex, view, items, false, manual, 0), 1_800L);
+                handler.postDelayed(() -> navigateToEquipmentExchange(
+                        accountIndex, view, items, 0, false, manual, 0), 1_800L);
         }
     }
 
@@ -579,7 +631,7 @@ final class AutomationCoordinator {
                 switch (next) {
                     case SELL_TO_EXCHANGE:
                         handler.postDelayed(() -> navigateToEquipmentExchange(
-                                accountIndex, view, items, true, manual, 0), 1_800L);
+                                accountIndex, view, items, 0, true, manual, 0), 1_800L);
                         break;
                     case SELLER_REEQUIP_TO_TEMPLE:
                         handler.postDelayed(() -> requestTempleConfirmation(
@@ -616,7 +668,8 @@ final class AutomationCoordinator {
     }
 
     private void navigateToEquipmentExchange(int accountIndex, WebView view, List<String> items,
-                                               boolean selling, boolean manual, int attempt) {
+                                               int startIndex, boolean selling, boolean manual,
+                                               int attempt) {
         String script = "(function(){"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
                 + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'');"
@@ -638,7 +691,7 @@ final class AutomationCoordinator {
             String result = decodeString(encoded);
             if ("ready".equals(result)) {
                 handler.postDelayed(() -> processEquipmentItem(
-                        accountIndex, view, items, 0, selling, manual), 500L);
+                        accountIndex, view, items, startIndex, selling, manual), 500L);
             } else if ("orientation_clicked".equals(result)
                     || "orientation_waiting".equals(result)) {
                 states[accountIndex].orientationRecoveryClicked = true;
@@ -646,7 +699,8 @@ final class AutomationCoordinator {
                 if (attempt < MANUAL_RECOVERY_ATTEMPTS) {
                     updateState(accountIndex, "正在等待桌面横屏画面稳定");
                     handler.postDelayed(() -> navigateToEquipmentExchange(
-                            accountIndex, view, items, selling, manual, attempt + 1), 1_500L);
+                            accountIndex, view, items, startIndex, selling, manual,
+                            attempt + 1), 1_500L);
                 } else {
                     finish(accountIndex, selling ? "equipment_sell" : "equipment_buy", "error",
                             "横屏提示30秒后仍未恢复，已暂停等待手动介入", manual);
@@ -654,15 +708,17 @@ final class AutomationCoordinator {
             } else if (result.endsWith("_clicked") && attempt < MANUAL_RECOVERY_ATTEMPTS) {
                 long delay = "exchange_clicked".equals(result) ? 2_500L : 1_500L;
                 handler.postDelayed(() -> navigateToEquipmentExchange(
-                        accountIndex, view, items, selling, manual, attempt + 1), delay);
+                        accountIndex, view, items, startIndex, selling, manual,
+                        attempt + 1), delay);
             } else if (attempt == 0) {
                 host.openHome(accountIndex);
                 handler.postDelayed(() -> navigateToEquipmentExchange(
-                        accountIndex, view, items, selling, manual, 1), 4_000L);
+                        accountIndex, view, items, startIndex, selling, manual, 1), 4_000L);
             } else if (attempt < MANUAL_RECOVERY_ATTEMPTS) {
                 updateState(accountIndex, "等待桌面主游戏或手动打开装备交易所（最多30秒）");
                 handler.postDelayed(() -> navigateToEquipmentExchange(
-                        accountIndex, view, items, selling, manual, attempt + 1), 1_500L);
+                        accountIndex, view, items, startIndex, selling, manual,
+                        attempt + 1), 1_500L);
             } else {
                 finish(accountIndex, selling ? "equipment_sell" : "equipment_buy", "error",
                         "30秒内未找到“中心城镇 → 装备交易所”，已保留桌面横屏现场", manual);
@@ -721,6 +777,13 @@ final class AutomationCoordinator {
                         accountIndex, view, items, itemIndex + 1, true, manual), 350L);
                 return;
             }
+            if ("not_ready".equals(status)) {
+                updateState(accountIndex, itemName + "：交易所页面已失效，正在重新进入");
+                host.openHome(accountIndex);
+                handler.postDelayed(() -> navigateToEquipmentExchange(
+                        accountIndex, view, items, itemIndex, true, manual, 0), 4_000L);
+                return;
+            }
             if (!"dialog".equals(status)) {
                 finish(accountIndex, "equipment_sell", "error",
                         itemName + "：无法打开上架弹窗（" + status + "）", manual);
@@ -735,6 +798,7 @@ final class AutomationCoordinator {
     private void fillAndConfirmEquipmentSell(int accountIndex, WebView view, List<String> items,
                                              int itemIndex, String itemName, int before,
                                              boolean manual, int attempt) {
+        if (stopped || !states[accountIndex].busy) return;
         int price = equipmentPrice(accountIndex);
         String buyer = equipmentBuyer(accountIndex);
         String script = "(function(){const target=" + JSONObject.quote(itemName)
@@ -813,7 +877,7 @@ final class AutomationCoordinator {
                 state.equipmentWaitStartedAt = System.currentTimeMillis();
                 if (!state.equipmentBuyerTriggered) {
                     updateState(accountIndex, "首批" + state.equipmentListedInBatch
-                            + "件已上架，1分钟后自动启动买方账号");
+                            + "件已上架，20秒后自动启动同设备买方账号");
                     handler.postDelayed(() -> startBuyerAndWaitForBatchClear(
                             accountIndex, view, items, nextIndex, manual),
                             EQUIPMENT_BUYER_START_DELAY_MS);
@@ -924,8 +988,16 @@ final class AutomationCoordinator {
                 state.equipmentBatchSeen = false;
                 state.equipmentBatchEmptyChecks = 0;
                 updateState(accountIndex, "前5件已确认成交，开始上架后续装备");
-                handler.postDelayed(() -> processEquipmentItem(
-                        accountIndex, view, items, nextIndex, true, manual), 1_000L);
+                handler.postDelayed(() -> navigateToEquipmentExchange(
+                        accountIndex, view, items, nextIndex, true, manual, 0), 1_000L);
+                return;
+            }
+            if (nextIndex >= items.size()
+                    && System.currentTimeMillis() - state.equipmentWaitStartedAt
+                    >= EQUIPMENT_FINAL_BATCH_GRACE_MS) {
+                updateState(accountIndex, "末批已等待60秒，正在穿回剩余装备");
+                handler.postDelayed(() -> preparePetEquipment(accountIndex, view, items, true,
+                        PetEquipmentNext.SELLER_REEQUIP_TO_TEMPLE, manual, 0), 500L);
                 return;
             }
             handler.postDelayed(() -> waitForEquipmentBatchClear(
@@ -941,6 +1013,11 @@ final class AutomationCoordinator {
                 + "const box=Array.from(document.querySelectorAll('.cont-box'))"
                 + ".find(e=>(e.textContent||'').includes('价格(金币)'));"
                 + "if(!box)return JSON.stringify({status:'not_ready'});"
+                + "const backpack=Array.from(document.querySelectorAll('.cont-box'))"
+                + ".find(e=>(e.textContent||'').includes('装备数：'));"
+                + "const owned=backpack?Array.from(backpack.querySelectorAll('.ul .li')).some(e=>{"
+                + "const c=Array.from(e.children);return c.length>=2&&(c[1].textContent||'').trim()===target;}):false;"
+                + "if(owned)return JSON.stringify({status:'owned'});"
                 + "const rows=Array.from(box.querySelectorAll('.ul .li'));"
                 + "const matches=rows.filter(e=>{const c=Array.from(e.children);if(c.length<3)return false;"
                 + "const n=(c[1].textContent||'').trim();const p=parseInt((c[2].textContent||'').replace(/[^0-9]/g,''),10);"
@@ -959,6 +1036,20 @@ final class AutomationCoordinator {
         view.evaluateJavascript(script, encoded -> {
             JSONObject result = decodeObject(encoded);
             String status = result == null ? "invalid" : result.optString("status");
+            if ("owned".equals(status)) {
+                states[accountIndex].equipmentPurchasedNames.add(itemName);
+                updateState(accountIndex, itemName + "：背包已拥有，跳过重复购买");
+                handler.postDelayed(() -> processEquipmentItem(
+                        accountIndex, view, items, itemIndex + 1, false, manual), 350L);
+                return;
+            }
+            if ("not_ready".equals(status)) {
+                updateState(accountIndex, itemName + "：正在重新进入装备交易所");
+                host.openHome(accountIndex);
+                handler.postDelayed(() -> navigateToEquipmentExchange(
+                        accountIndex, view, items, itemIndex, false, manual, 0), 4_000L);
+                return;
+            }
             if ("missing".equals(status)) {
                 RuntimeState state = states[accountIndex];
                 if (System.currentTimeMillis() - state.equipmentWaitStartedAt
@@ -990,6 +1081,7 @@ final class AutomationCoordinator {
 
     private void confirmEquipmentBuy(int accountIndex, WebView view, List<String> items,
                                      int itemIndex, String itemName, boolean manual, int attempt) {
+        if (stopped || !states[accountIndex].busy) return;
         int price = equipmentPrice(accountIndex);
         String script = "(function(){const target=" + JSONObject.quote(itemName)
                 + ",price=" + price + ";const modal=Array.from(document.querySelectorAll('.sell-modal'))"
@@ -1063,6 +1155,7 @@ final class AutomationCoordinator {
         state.lastMessage = "正在打开道具交易所";
         state.updatedAt = System.currentTimeMillis();
         state.orientationRecoveryClicked = false;
+        state.auctionListedCount = 0;
         state.manualRun = manual;
         host.onAutomationChanged();
         WebView view;
@@ -1131,6 +1224,13 @@ final class AutomationCoordinator {
     private void processAuctionItem(int accountIndex, WebView view, List<String> items,
                                     int itemIndex, boolean manual) {
         if (stopped || !states[accountIndex].busy) return;
+        if (states[accountIndex].auctionListedCount >= EQUIPMENT_ACTIVE_LIMIT) {
+            preferences.edit().putLong(PREF_SELL_LAST + accountIndex,
+                    System.currentTimeMillis()).apply();
+            finish(accountIndex, "auction", "ok",
+                    "已达到5条道具拍卖上限，本次脚本已停止", manual);
+            return;
+        }
         if (itemIndex >= items.size()) {
             preferences.edit().putLong(PREF_SELL_LAST + accountIndex,
                     System.currentTimeMillis()).apply();
@@ -1182,10 +1282,13 @@ final class AutomationCoordinator {
     private void fillAndConfirmSell(int accountIndex, WebView view, List<String> items,
                                     int itemIndex, String itemName, int quantity,
                                     boolean manual, int attempt) {
+        if (stopped || !states[accountIndex].busy) return;
         String buyer = auctionBuyer(accountIndex);
+        int configuredPrice = auctionPrice(accountIndex);
         String script = "(function(){"
                 + "const target=" + JSONObject.quote(itemName) + ",buyer="
-                + JSONObject.quote(buyer) + ",qty=" + quantity + ";"
+                + JSONObject.quote(buyer) + ",qty=" + quantity
+                + ",configuredPrice=" + configuredPrice + ";"
                 + "const modal=Array.from(document.querySelectorAll('.sell-modal'))"
                 + ".find(e=>e.getClientRects().length>0"
                 + "&&(e.querySelector('.modal-title')?.textContent||'').trim()==='上架拍卖');"
@@ -1209,15 +1312,14 @@ final class AutomationCoordinator {
                 + "e.dispatchEvent(new Event('input',{bubbles:true}));"
                 + "e.dispatchEvent(new Event('change',{bubbles:true}));};"
                 + "const get=e=>e.isContentEditable?e.textContent:e.value;"
-                + "const price=p?parseInt(p.value,10):0;"
-                + "if(p&&(!Number.isFinite(price)||price<=0))return JSON.stringify({status:'bad_price'});"
-                + "set(q,qty);set(b,buyer);"
+                + "if(!p)return JSON.stringify({status:'price_missing'});"
+                + "set(q,qty);set(p,configuredPrice);set(b,buyer);"
                 + "const confirm=Array.from(modal.querySelectorAll('button,uni-button,[role=button]'))"
                 + ".find(e=>(e.textContent||'').trim()==='\u786e\u8ba4\u4e0a\u67b6');"
                 + "if(!confirm)return JSON.stringify({status:'no_confirm'});"
-                + "if(parseInt(get(q),10)!==qty||get(b)!==buyer)"
+                + "if(parseInt(get(q),10)!==qty||parseInt(get(p),10)!==configuredPrice||get(b)!==buyer)"
                 + "return JSON.stringify({status:'verify_failed'});"
-                + "confirm.click();return JSON.stringify({status:'submitted',price});})()";
+                + "confirm.click();return JSON.stringify({status:'submitted',price:configuredPrice});})()";
         view.evaluateJavascript(script, encoded -> {
             JSONObject result = decodeObject(encoded);
             if (result == null || !"submitted".equals(result.optString("status"))) {
@@ -1233,7 +1335,9 @@ final class AutomationCoordinator {
                 return;
             }
             updateState(accountIndex, String.format(Locale.ROOT,
-                    "%s：已提交%d个，保留1个", itemName, quantity));
+                    "%s：已按%d金币提交%d个，保留1个",
+                    itemName, configuredPrice, quantity));
+            states[accountIndex].auctionListedCount++;
             handler.postDelayed(() -> verifySellAndContinue(accountIndex, view, items,
                     itemIndex, itemName, manual, 0), 3_000L);
         });
@@ -1279,6 +1383,7 @@ final class AutomationCoordinator {
         state.lastMessage = "正在打开道具交易所购买";
         state.updatedAt = System.currentTimeMillis();
         state.orientationRecoveryClicked = false;
+        state.auctionPurchasedCount = 0;
         state.manualRun = manual;
         host.onAutomationChanged();
         WebView view;
@@ -1342,13 +1447,13 @@ final class AutomationCoordinator {
     private void processAuctionBuyItem(int accountIndex, WebView view, List<String> items,
                                        int itemIndex, boolean manual) {
         if (stopped || !states[accountIndex].busy) return;
-        if (itemIndex >= items.size()) {
-            requestTempleConfirmation(accountIndex, "拍卖道具购买完成", manual);
+        if (states[accountIndex].auctionPurchasedCount >= 20) {
+            requestTempleConfirmation(accountIndex, "已购买20条920金币拍卖，达到单次安全上限", manual);
             return;
         }
-        String itemName = items.get(itemIndex);
-        updateState(accountIndex, "正在查找定向拍卖 " + itemName);
-        String script = "(function(){const target=" + JSONObject.quote(itemName) + ";"
+        int price = auctionPrice(accountIndex);
+        updateState(accountIndex, "正在查找全部" + price + "金币的定向拍卖");
+        String script = "(function(){const price=" + price + ";"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
                 + "const boxes=Array.from(document.querySelectorAll('.cont-box')).filter(visible);"
                 + "const box=boxes.find(e=>(e.textContent||'').includes('拍卖的道具')"
@@ -1356,30 +1461,28 @@ final class AutomationCoordinator {
                 + "if(!box)return JSON.stringify({status:'not_ready'});"
                 + "const rows=Array.from(box.querySelectorAll('.ul .li'));"
                 + "const matches=rows.filter(e=>{const cells=Array.from(e.children).map(c=>(c.textContent||'').trim());"
-                + "return cells.includes(target);});"
+                + "return cells.length>=3&&parseInt(cells[2].replace(/[^0-9]/g,''),10)===price;});"
                 + "if(!matches.length)return JSON.stringify({status:'missing'});"
-                + "if(matches.length!==1)return JSON.stringify({status:'ambiguous',count:matches.length});"
-                + "matches[0].scrollIntoView({block:'nearest'});matches[0].click();"
+                + "const row=matches[0],cells=Array.from(row.children).map(c=>(c.textContent||'').trim());"
+                + "const name=cells[1]||price+'金币道具';"
+                + "row.scrollIntoView({block:'nearest'});row.click();"
                 + "const buy=Array.from(document.querySelectorAll('button,uni-button,[role=button]'))"
                 + ".find(e=>visible(e)&&(e.textContent||'').trim()==='购买');"
                 + "if(!buy)return JSON.stringify({status:'no_buy'});buy.click();"
-                + "return JSON.stringify({status:'dialog'});})()";
+                + "return JSON.stringify({status:'dialog',name});})()";
         view.evaluateJavascript(script, encoded -> {
             JSONObject result = decodeObject(encoded);
             String status = result == null ? "invalid" : result.optString("status");
             if ("missing".equals(status)) {
-                updateState(accountIndex, itemName + "：未发现可购买的定向拍卖");
-                handler.postDelayed(() -> processAuctionBuyItem(
-                        accountIndex, view, items, itemIndex + 1, manual), 500L);
-            } else if ("ambiguous".equals(status)) {
-                finish(accountIndex, "auction_buy", "error",
-                        itemName + "：出现多条同名拍卖，已停止以避免误买", manual);
+                requestTempleConfirmation(accountIndex,
+                        "全部" + price + "金币定向拍卖已购买完成", manual);
             } else if ("dialog".equals(status)) {
+                String itemName = result.optString("name", price + "金币道具");
                 handler.postDelayed(() -> confirmAuctionBuy(
                         accountIndex, view, items, itemIndex, itemName, manual, 0), 700L);
             } else {
                 finish(accountIndex, "auction_buy", "error",
-                        itemName + "：无法打开购买弹窗（" + status + "）", manual);
+                        price + "金币道具：无法打开购买弹窗（" + status + "）", manual);
             }
         });
     }
@@ -1387,16 +1490,22 @@ final class AutomationCoordinator {
     private void confirmAuctionBuy(int accountIndex, WebView view, List<String> items,
                                    int itemIndex, String itemName, boolean manual,
                                    int attempt) {
-        String script = "(function(){const target=" + JSONObject.quote(itemName) + ";"
+        if (stopped || !states[accountIndex].busy) return;
+        int price = auctionPrice(accountIndex);
+        String script = "(function(){const target=" + JSONObject.quote(itemName)
+                + ",price=" + price + ";"
                 + "const modal=Array.from(document.querySelectorAll('.sell-modal,[role=dialog],.uni-popup__wrapper'))"
                 + ".find(e=>e.getClientRects().length>0&&(e.textContent||'').includes(target));"
                 + "if(!modal)return 'no_dialog';"
+                + "const text=(modal.textContent||'').replace(/\\s+/g,'');"
+                + "if(!text.includes(String(price)))return 'wrong_price';"
                 + "const confirm=Array.from(modal.querySelectorAll('button,uni-button,[role=button]'))"
                 + ".find(e=>/^(?:确认购买|购买)$/.test((e.textContent||'').trim()));"
                 + "if(!confirm)return 'no_confirm';confirm.click();return 'submitted';})()";
         view.evaluateJavascript(script, encoded -> {
             String status = decodeString(encoded);
             if ("submitted".equals(status)) {
+                states[accountIndex].auctionPurchasedCount++;
                 updateState(accountIndex, itemName + "：已提交购买");
                 handler.postDelayed(() -> verifyAuctionBuyAndContinue(
                         accountIndex, view, items, itemIndex, itemName, manual, 0), 2_000L);
@@ -1573,6 +1682,7 @@ final class AutomationCoordinator {
     private void fillAndConfirmStoreSell(int accountIndex, WebView view, List<String> items,
                                          int itemIndex, String itemName, int quantity,
                                          boolean manual, int attempt) {
+        if (stopped || !states[accountIndex].busy) return;
         String script = "(function(){"
                 + "const target=" + JSONObject.quote(itemName) + ",qty=" + quantity + ";"
                 + "const modal=Array.from(document.querySelectorAll('.sell-modal,[role=dialog],.uni-popup__wrapper'))"
@@ -1655,23 +1765,45 @@ final class AutomationCoordinator {
     private void verifyTargetEquipmentEquipped(int accountIndex, WebView view,
                                                List<String> items, boolean manual,
                                                int attempt) {
-        int requiredSlots = Math.min(10, states[accountIndex].equipmentPurchasedNames.size());
-        String script = "(function(){const slots=Array.from(document.querySelectorAll('.left-box .item'))"
+        int requiredSlots = Math.min(10, items.size());
+        String targets = new JSONArray(items).toString();
+        String script = "(function(){const targets=" + targets + ";"
+                + "const visible=e=>e&&e.getClientRects().length>0;"
+                + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'').trim();"
+                + "const close=Array.from(document.querySelectorAll('.close-btn')).find(visible);"
+                + "if(!close){const open=document.querySelector('[name=\"装备\"]');"
+                + "if(!visible(open))return JSON.stringify({status:'panel_missing'});"
+                + "open.click();return JSON.stringify({status:'panel_opened'});}"
+                + "const rows=Array.from(document.querySelectorAll('.item')).filter(visible);"
+                + "for(const target of targets){const row=rows.find(r=>Array.from(r.children)"
+                + ".some(c=>(c.textContent||'').trim()===target));if(!row)continue;"
+                + "row.click();const use=Array.from(document.querySelectorAll('button,uni-button,[role=button]'))"
+                + ".find(e=>visible(e)&&clean(e)==='使用装备');"
+                + "if(!use)return JSON.stringify({status:'use_missing',target});"
+                + "use.click();return JSON.stringify({status:'equipped_one',target});}"
+                + "close.click();const slots=Array.from(document.querySelectorAll('.left-box .item'))"
                 + ".filter(e=>/item(?:[1-9]|10)(?:\\s|$)/.test(e.className||''));"
-                + "let filled=0;for(const slot of slots){const nodes=[slot,...slot.querySelectorAll('*')];"
-                + "if(nodes.some(e=>{const bg=getComputedStyle(e).backgroundImage||'';"
-                + "return bg&&bg!=='none'&&!bg.includes('/PetInfo/zb04.png');}))filled++;}"
-                + "return JSON.stringify({status:slots.length?'ok':'missing',filled,total:slots.length});})()";
+                + "const filled=slots.filter(slot=>{const img=slot.querySelector('img[src]');"
+                + "return img&&img.src&&!img.src.includes('/PetInfo/zb04.png');}).length;"
+                + "return JSON.stringify({status:'checked',filled,total:slots.length});})()";
         view.evaluateJavascript(script, encoded -> {
             JSONObject result = decodeObject(encoded);
+            String status = result == null ? "invalid" : result.optString("status");
             int filled = result == null ? -1 : result.optInt("filled", -1);
-            if (filled >= requiredSlots && requiredSlots > 0) {
-                updateState(accountIndex, "已确认" + requiredSlots + "个目标装备槽位");
+            if ("equipped_one".equals(status)) {
+                updateState(accountIndex, "已补穿 " + result.optString("target"));
+                handler.postDelayed(() -> verifyTargetEquipmentEquipped(
+                        accountIndex, view, items, manual, attempt), 700L);
+            } else if ("checked".equals(status)
+                    && filled >= requiredSlots && requiredSlots > 0) {
+                updateState(accountIndex, "装备栏已打开复核，" + requiredSlots + "件目标装备均已穿戴");
                 handler.postDelayed(() -> returnToAfkForDungeons(
                         accountIndex, view, manual), 800L);
-            } else if (attempt < 5) {
+            } else if (attempt < MANUAL_RECOVERY_ATTEMPTS) {
+                updateState(accountIndex, "等待确认情改套装穿戴（剩余约"
+                        + (MANUAL_RECOVERY_ATTEMPTS - attempt) * 3 / 2 + "秒）");
                 handler.postDelayed(() -> verifyTargetEquipmentEquipped(
-                        accountIndex, view, items, manual, attempt + 1), 1_200L);
+                        accountIndex, view, items, manual, attempt + 1), 1_500L);
             } else {
                 finish(accountIndex, "equipment_buy", "error",
                         "已购买" + states[accountIndex].equipmentPurchasedNames.size()
@@ -1701,6 +1833,7 @@ final class AutomationCoordinator {
             state.dungeonIndex = 0;
             state.dungeonStarted = false;
             state.dungeonStartedAt = System.currentTimeMillis();
+            state.storagePreparedDungeonIndex = -1;
             state.skippedDungeons.clear();
             handler.postDelayed(() -> runCurrentDungeon(
                     accountIndex, view, manual, 0), 4_000L);
@@ -1721,6 +1854,15 @@ final class AutomationCoordinator {
             return;
         }
         String dungeon = dungeons.get(state.dungeonIndex);
+        if (!state.dungeonStarted && state.storagePreparedDungeonIndex != state.dungeonIndex) {
+            updateState(accountIndex, "进入" + dungeon + "前正在全选存仓");
+            storeAllBeforeHang(accountIndex, view, () -> {
+                state.storagePreparedDungeonIndex = state.dungeonIndex;
+                state.dungeonStartedAt = System.currentTimeMillis();
+                runCurrentDungeon(accountIndex, view, manual, 0);
+            }, manual, 0);
+            return;
+        }
         if (System.currentTimeMillis() - state.dungeonStartedAt > DUNGEON_TIMEOUT_MS) {
             finish(accountIndex, state.task, "error", dungeon + "执行超时", manual);
             return;
@@ -1881,6 +2023,7 @@ final class AutomationCoordinator {
             return;
         }
         updateState(accountIndex, completedMessage + "，正在进入圣兽云殿");
+        states[accountIndex].templeStoragePrepared = false;
         String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
                 + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'');"
                 + "const selects=Array.from(document.querySelectorAll('select'));"
@@ -1938,6 +2081,7 @@ final class AutomationCoordinator {
             state.dungeonIndex = 0;
             state.dungeonStarted = false;
             state.dungeonStartedAt = System.currentTimeMillis();
+            state.storagePreparedDungeonIndex = -1;
             state.skippedDungeons.clear();
             host.onAutomationChanged();
             host.prepareAutomation(accountIndex, false);
@@ -2120,6 +2264,7 @@ final class AutomationCoordinator {
     private void confirmPrestigeItem(int accountIndex, WebView view, boolean manual,
                                      List<String> items, int itemIndex, int usedCount,
                                      int quantity, int attempt) {
+        if (stopped || !states[accountIndex].busy) return;
         String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
                 + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'');"
                 + "const masks=Array.from(document.querySelectorAll('.modal-mask')).filter(visible);"
@@ -2206,19 +2351,23 @@ final class AutomationCoordinator {
 
     private void storeWarehouseItem(int accountIndex, WebView view,
                                     boolean manual, int attempt) {
+        if (stopped || !states[accountIndex].busy) return;
         List<String> items = parseAutomationItems(
                 warehouseItemsText(accountIndex), 10, "存仓道具");
         String itemLiterals = new JSONArray(items).toString();
+        boolean storeAll = isWarehouseStoreAll(accountIndex);
         String script = "(function(){const names=new Set(" + itemLiterals + ");"
+                + "const storeAll=" + storeAll + ";"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
                 + "const modal=Array.from(document.querySelectorAll('.bag-modal')).find(visible);"
                 + "if(!modal)return JSON.stringify({status:'modal_missing'});"
                 + "const cols=Array.from(modal.querySelectorAll('.bag-col'));"
                 + "if(!cols.length)return JSON.stringify({status:'loading'});"
                 + "const bag=cols[0];const rows=Array.from(bag.querySelectorAll('.bag-item'));"
-                + "const matches=rows.filter(row=>names.has((row.querySelector('.bag-item-name')?.textContent||'').trim()));"
+                + "const matches=storeAll?rows:rows.filter(row=>names.has((row.querySelector('.bag-item-name')?.textContent||'').trim()));"
                 + "if(!matches.length){const loading=(bag.textContent||'').includes('加载中');"
                 + "return JSON.stringify({status:loading?'loading':'absent'});}"
+                + "if(storeAll){const all=bag.querySelector('input[type=checkbox]');if(all&&!all.checked)all.click();}"
                 + "for(const row of matches){const cb=row.querySelector('input[type=checkbox]');"
                 + "if(cb&&!cb.checked)cb.click();}"
                 + "const button=modal.querySelector('.bag-btn.store');"
@@ -2253,12 +2402,15 @@ final class AutomationCoordinator {
         List<String> items = parseAutomationItems(
                 warehouseItemsText(accountIndex), 10, "存仓道具");
         String itemLiterals = new JSONArray(items).toString();
+        boolean storeAll = isWarehouseStoreAll(accountIndex);
         String script = "(function(){const names=new Set(" + itemLiterals + ");"
+                + "const storeAll=" + storeAll + ";"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
                 + "const modal=Array.from(document.querySelectorAll('.bag-modal')).find(visible);"
                 + "if(!modal)return 'modal_missing';const cols=Array.from(modal.querySelectorAll('.bag-col'));"
                 + "if(cols.length<2)return 'loading';"
-                + "const bagHas=Array.from(cols[0].querySelectorAll('.bag-item-name')).some(e=>names.has((e.textContent||'').trim()));"
+                + "const bagNames=Array.from(cols[0].querySelectorAll('.bag-item-name'));"
+                + "const bagHas=storeAll?bagNames.length>0:bagNames.some(e=>names.has((e.textContent||'').trim()));"
                 + "return bagHas?'waiting':'stored';})()";
         view.evaluateJavascript(script, encoded -> {
             String status = decodeString(encoded);
@@ -2348,6 +2500,7 @@ final class AutomationCoordinator {
             state.status = "running";
             state.lastMessage = "正在检查圣兽云殿挂机";
             state.updatedAt = System.currentTimeMillis();
+            state.templeStoragePrepared = false;
             host.onAutomationChanged();
             host.prepareAutomation(accountIndex, false);
         }
@@ -2356,6 +2509,14 @@ final class AutomationCoordinator {
             view = host.requireWebView(accountIndex);
         } catch (RuntimeException error) {
             finish(accountIndex, "temple", "error", "账号页面未就绪", manual);
+            return;
+        }
+        if (!state.templeStoragePrepared) {
+            updateState(accountIndex, "进入圣兽云殿前正在全选存仓");
+            storeAllBeforeHang(accountIndex, view, () -> {
+                state.templeStoragePrepared = true;
+                runTempleGuard(accountIndex, manual, true);
+            }, manual, 0);
             return;
         }
         String script = "(function(){"
@@ -2409,6 +2570,43 @@ final class AutomationCoordinator {
                 finish(accountIndex, "temple", "ok", "圣兽云殿正在挂机", manual);
             } else {
                 finish(accountIndex, "temple", "error", "未找到“开始挂机”按钮", manual);
+            }
+        });
+    }
+
+    private void storeAllBeforeHang(int accountIndex, WebView view, Runnable continuation,
+                                    boolean manual, int attempt) {
+        if (stopped || !states[accountIndex].busy) return;
+        String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
+                + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'').trim();"
+                + "const modal=Array.from(document.querySelectorAll('.bag-modal')).find(visible);"
+                + "if(!modal){const controls=Array.from(document.querySelectorAll('button,[role=button],uni-button,view,a')).filter(visible);"
+                + "const warehouse=controls.find(e=>clean(e)==='🏦仓库'||clean(e)==='仓库');"
+                + "if(!warehouse)return 'missing';warehouse.click();return 'opened';}"
+                + "const cols=Array.from(modal.querySelectorAll('.bag-col'));if(!cols.length)return 'loading';"
+                + "const bag=cols[0],rows=Array.from(bag.querySelectorAll('.bag-item'));"
+                + "if(!rows.length){const close=modal.querySelector('.task-close');if(close)close.click();return 'done';}"
+                + "const all=bag.querySelector('input[type=checkbox]');if(all&&!all.checked)all.click();"
+                + "for(const row of rows){const cb=row.querySelector('input[type=checkbox]');if(cb&&!cb.checked)cb.click();}"
+                + "const store=modal.querySelector('.bag-btn.store');if(!store||store.disabled)return 'selection_failed';"
+                + "store.click();return 'storing';})()";
+        view.evaluateJavascript(script, encoded -> {
+            String result = decodeString(encoded);
+            if ("done".equals(result)) {
+                updateState(accountIndex, "挂机前背包已全部存入仓库");
+                handler.postDelayed(continuation, 500L);
+            } else if (("opened".equals(result) || "storing".equals(result)
+                    || "loading".equals(result)) && attempt < 12) {
+                handler.postDelayed(() -> storeAllBeforeHang(accountIndex, view, continuation,
+                        manual, attempt + 1), "storing".equals(result) ? 1_200L : 700L);
+            } else if ("missing".equals(result) && attempt < 4) {
+                host.prepareAutomation(accountIndex, false);
+                handler.postDelayed(() -> storeAllBeforeHang(accountIndex, view, continuation,
+                        manual, attempt + 1), 1_500L);
+            } else {
+                closeWarehouseModal(view);
+                finish(accountIndex, states[accountIndex].task, "error",
+                        "挂机前全背包存仓失败（" + result + "），已停止以避免背包满格", manual);
             }
         });
     }
@@ -2599,5 +2797,10 @@ final class AutomationCoordinator {
         String confirmationCompletionMessage = "";
         long confirmationDeadlineAt;
         boolean manualRun;
+        int runGeneration;
+        int auctionListedCount;
+        int auctionPurchasedCount;
+        int storagePreparedDungeonIndex = -1;
+        boolean templeStoragePrepared;
     }
 }

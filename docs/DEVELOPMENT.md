@@ -35,7 +35,7 @@ Play Keeper 是一个面向 Android 10 及以上系统的轻量 Android WebView 
 | minSdk | 26 |
 | AndroidX WebKit | 1.12.0 |
 | 历史兼容包名 | `com.local.sgplaykeeper.test` |
-| 版本 | versionCode 13 / versionName 1.6.0 |
+| 版本 | versionCode 14 / versionName 1.7.0 |
 
 AndroidX WebKit 选择 1.12.0 是为了在当前 compileSdk 35 构建环境中稳定使用 Multi-Profile API。升级 WebKit 前需要重新检查其 `minCompileSdk`、传递依赖和 Civi 4 Pro 的实际 WebView 功能支持。
 
@@ -324,7 +324,7 @@ Android 原生 `CookieManager.getInstance()` 在同一应用内默认共享 Cook
 - 同时打开 4 个账号会显著增加内存和耗电，应按 1、2、4 个账号逐步压力测试。
 - 页面异常检测包含主框架错误、超时及30分钟战斗场次停滞；停滞仅作远程提示，不自动重新登录。
 - APP 被系统结束后不能继续挂机；下次启动只能恢复登录状态和最后页面。
-- v1.6.0 为了覆盖安装历史版本并保留 WebView Profile，延续现有 Android Debug 证书。此方案仅适合当前个人 GitHub 分发，不适合公开应用商店。
+- v1.7.0 为了覆盖安装历史版本并保留 WebView Profile，延续现有 Android Debug 证书。此方案仅适合当前个人 GitHub 分发，不适合公开应用商店。
 - WebView 硬件渲染在部分 ROM 上可能导致 `draw(Canvas)` 截图空白，需以 Civi 4 Pro 实测为准。
 - v0.5 远程只支持单击，不支持拖动、多点触控、键盘、文件上传或声音。
 - Activity 不在运行时，当前版本不会额外启动前台服务维持远程在线。

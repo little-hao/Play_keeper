@@ -263,10 +263,12 @@ function renderDevices() {
     const auctionItemsInput = card.querySelector(".auction-items");
     const auctionPreset = card.querySelector(".auction-preset");
     const auctionBuyer = card.querySelector(".auction-buyer");
+    const auctionPrice = card.querySelector(".auction-price");
     const storeSellEnabled = card.querySelector(".store-sell-enabled");
     const storeSellItem = card.querySelector(".store-sell-item");
     const templeEnabled = card.querySelector(".temple-enabled");
     const warehouseEnabled = card.querySelector(".warehouse-enabled");
+    const warehouseStoreAll = card.querySelector(".warehouse-store-all");
     const warehouseItem = card.querySelector(".warehouse-item");
     const dungeonItemsInput = card.querySelector(".dungeon-items");
     const prestigeEnabled = card.querySelector(".prestige-enabled");
@@ -291,10 +293,13 @@ function renderDevices() {
     });
     auctionBuyer.value = typeof automation.auctionBuyer === "string" && automation.auctionBuyer
       ? automation.auctionBuyer : (automation.sellBuyer || "hao");
+    auctionPrice.value = String(Number.isInteger(automation.auctionPrice)
+      ? automation.auctionPrice : 920);
     storeSellEnabled.checked = automation.storeSellEnabled === true;
     storeSellItem.value = "金币券";
     templeEnabled.checked = automation.templeEnabled === true;
     warehouseEnabled.checked = automation.warehouseEnabled === true;
+    warehouseStoreAll.checked = automation.warehouseStoreAll !== false;
     warehouseItem.value = typeof automation.warehouseItem === "string"
       && automation.warehouseItem.trim() ? automation.warehouseItem.trim() : "护宠仙石";
     dungeonItemsInput.value = Array.isArray(automation.dungeonItems)
@@ -324,6 +329,7 @@ function renderDevices() {
         .map((item) => item.trim()).filter(Boolean);
       const intervalHours = Number.parseInt(auctionHours.value, 10);
       const buyer = auctionBuyer.value.trim();
+      const itemAuctionPrice = Number.parseInt(auctionPrice.value, 10);
       const equipmentItems = equipmentItemsInput.value.split(/[,，\n]/)
         .map((item) => item.trim()).filter(Boolean);
       const equipmentPrice = Number.parseInt(equipmentPriceInput.value, 10);
@@ -341,6 +347,8 @@ function renderDevices() {
         return addLog("拍卖间隔需为1–168小时");
       }
       if (!/^[A-Za-z0-9_.-]{1,30}$/.test(buyer)) return addLog("指定买家格式无效");
+      if (!Number.isInteger(itemAuctionPrice) || itemAuctionPrice < 1
+          || itemAuctionPrice > 9_999_999) return addLog("拍卖单价无效");
       if (!equipmentItems.length || equipmentItems.length > 10
           || equipmentItems.some((item) => item.length > 30)) {
         return addLog("装备名称需填写1–10种，每项不超过30字");
@@ -368,6 +376,7 @@ function renderDevices() {
         enabled: auctionEnabled.checked,
         items,
         buyer,
+        price: itemAuctionPrice,
         intervalHours
       });
       sendCommand(device.deviceId, "configure_store_sell", {
@@ -383,6 +392,7 @@ function renderDevices() {
       sendCommand(device.deviceId, "configure_warehouse_sync", {
         accountIndex: activeAccountIndex,
         enabled: warehouseEnabled.checked,
+        storeAll: warehouseStoreAll.checked,
         items: warehouseItems
       });
       sendCommand(device.deviceId, "configure_dungeon_sequence", {
@@ -404,6 +414,9 @@ function renderDevices() {
       return true;
     };
     card.querySelector(".save-automation").addEventListener("click", saveAutomation);
+    card.querySelector(".cancel-automation").addEventListener("click", () => {
+      sendCommand(device.deviceId, "cancel_automation", { accountIndex: activeAccountIndex });
+    });
     card.querySelector(".run-auction").addEventListener("click", () => {
       if (saveAutomation()) sendCommand(device.deviceId, "run_auto_auction", { accountIndex: activeAccountIndex });
     });

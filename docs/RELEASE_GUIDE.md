@@ -26,15 +26,15 @@ app/build/outputs/apk/debug/app-debug.apk
 
 ```groovy
 defaultConfig {
-    versionCode 13
-    versionName '1.6.0'
+    versionCode 14
+    versionName '1.7.0'
 }
 ```
 
 - `versionCode` 必须递增，否则 Android 不允许覆盖安装。
 - `versionName` 采用语义化版本，测试包可追加 `-test`。
 - 不要修改 `applicationId`，否则会安装成另一个 APP，无法继承 Profile 数据。
-- v1.6.0 的 Debug/Release 都保留 `applicationIdSuffix '.test'`，以覆盖历史版本并保留 WebView Profile。
+- v1.7.0 的 Debug/Release 都保留 `applicationIdSuffix '.test'`，以覆盖历史版本并保留 WebView Profile。
 
 ## 3. Debug 构建验证
 

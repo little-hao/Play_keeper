@@ -62,6 +62,8 @@ const commandValidators = {
         && item.trim().length >= 1 && item.trim().length <= 30)
       && typeof parameters.buyer === "string"
       && /^[A-Za-z0-9_.-]{1,30}$/.test(parameters.buyer)
+      && (parameters.price === undefined || (Number.isInteger(parameters.price)
+        && parameters.price >= 1 && parameters.price <= 9_999_999))
       && Number.isInteger(parameters.intervalHours)
       && parameters.intervalHours >= 1
       && parameters.intervalHours <= 168;
@@ -85,6 +87,7 @@ const commandValidators = {
   configure_warehouse_sync(parameters) {
     return accountParameters(parameters)
       && typeof parameters.enabled === "boolean"
+      && (parameters.storeAll === undefined || typeof parameters.storeAll === "boolean")
       && (validItemList(parameters.items, 10)
         || validLegacyItem(parameters.item));
   },
@@ -114,6 +117,7 @@ const commandValidators = {
   },
   run_equipment_sell: accountParameters,
   run_equipment_buy: accountParameters,
+  cancel_automation: accountParameters,
   run_auction_buy: accountParameters,
   resolve_temple_confirmation(parameters) {
     return accountParameters(parameters) && typeof parameters.enterTemple === "boolean";
@@ -193,7 +197,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.6.0" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.7.0" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {

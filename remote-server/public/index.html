@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css?v=1.6.0">
+  <link rel="stylesheet" href="/styles.css?v=1.7.0">
 </head>
 <body>
   <main class="shell">
@@ -87,7 +87,10 @@
       <section class="automation-panel">
         <div class="section-title automation-title">
           <div><strong>自动化工具</strong><small class="automation-status">尚未运行</small></div>
-          <button class="save-automation primary">保存全部设置</button>
+          <div class="automation-actions">
+            <button class="cancel-automation secondary">中断脚本</button>
+            <button class="save-automation primary">保存全部设置</button>
+          </div>
         </div>
         <div class="automation-confirmation hidden">
           <p class="automation-confirmation-message"></p>
@@ -113,11 +116,12 @@
             <label>拍卖道具（逗号分隔）<input class="auction-items" type="text" value="曙光印记,进化宝石"></label>
             <label>执行间隔（小时）<input class="auction-hours" type="number" min="1" max="168" value="12"></label>
             <label>指定买家<input class="auction-buyer" type="text" maxlength="30" value="hao"></label>
+            <label>拍卖单价（金币）<input class="auction-price" type="number" min="1" max="9999999" value="920"></label>
             <label class="span-2">商店匹配<select class="store-sell-item"><option value="金币券">*金币券*（1W/5W/10W）</option></select></label>
           </div>
           <div class="automation-actions action-grid">
             <button class="run-auction secondary">拍卖道具</button>
-            <button class="run-auction-buy secondary">购买拍卖道具</button>
+            <button class="run-auction-buy secondary">购买全部920金币道具</button>
             <button class="run-store-sell secondary">卖出金币券</button>
           </div>
         </fieldset>
@@ -129,7 +133,7 @@
             <label>单价（金币）<input class="equipment-price" type="number" min="1" max="9999999" value="920"></label>
             <label>指定买家ID<input class="equipment-buyer" type="text" maxlength="30" placeholder="上架时必填"></label>
           </div>
-          <p class="automation-help">卖方首批最多上架5件，1分钟后自动启动同一 APP 内用户名匹配的买方账号；确认成交后再上架下一批。买方穿装后依次执行已解锁副本。</p>
+          <p class="automation-help">卖方首批最多上架5件，20秒后自动启动同一 APP 内用户名匹配的买方账号；确认成交后重新进入交易所上架下一批。跨设备时卖方不会无限等待本机买方。</p>
           <div class="automation-actions action-grid two-actions">
             <button class="run-equipment-sell secondary">卖方上架装备</button>
             <button class="run-equipment-buy secondary">买方购买装备</button>
@@ -140,6 +144,7 @@
           <div class="automation-grid">
             <label class="toggle-row"><input class="temple-enabled" type="checkbox"> 圣兽云殿守护（1h）</label>
             <label class="toggle-row"><input class="warehouse-enabled" type="checkbox"> 背包自动存仓（10min）</label>
+            <label class="toggle-row"><input class="warehouse-store-all" type="checkbox" checked> 全选背包存仓（挂机/副本前）</label>
             <label class="toggle-row"><input class="prestige-enabled" type="checkbox"> 圣殿挂机使用威望道具（1h）</label>
             <label class="span-2">存仓道具组合<input class="warehouse-item" type="text" value="护宠仙石"></label>
             <label class="span-2">副本挂机组合<input class="dungeon-items" type="text" value="绘画小屋,伊苏王的神墓,火龙王的宫殿,史芬克斯密穴"></label>
@@ -167,6 +172,6 @@
       <div id="selectOptions" class="select-options" role="radiogroup"></div>
     </section>
   </div>
-  <script type="module" src="/app.js?v=1.6.0"></script>
+  <script type="module" src="/app.js?v=1.7.0"></script>
 </body>
 </html>

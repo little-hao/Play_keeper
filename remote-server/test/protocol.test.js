@@ -270,6 +270,16 @@ test("device telemetry and browser command complete a round trip", async (contex
   assert.equal(templeConfirmation.command, "resolve_temple_confirmation");
   assert.equal(templeConfirmation.parameters.enterTemple, true);
 
+  const cancelPromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "cancel_automation",
+    parameters: { accountIndex: 2 }
+  }));
+  const cancel = await cancelPromise;
+  assert.equal(cancel.command, "cancel_automation");
+
   const automaticStopPromise = nextJson(device, "command.request");
   control.close();
   const automaticStop = await automaticStopPromise;
@@ -325,7 +335,7 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    ok: true, service: "play-keeper-relay", version: "1.6.0"
+    ok: true, service: "play-keeper-relay", version: "1.7.0"
   });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);
@@ -336,5 +346,8 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   assert.match(dashboardHtml, /卖出金币券/);
   assert.match(dashboardHtml, /背包自动存仓/);
   assert.match(dashboardHtml, /立即检查存仓/);
+  assert.match(dashboardHtml, /中断脚本/);
+  assert.match(dashboardHtml, /全选背包存仓/);
+  assert.match(dashboardHtml, /购买全部920金币道具/);
   assert.match(dashboard.headers.get("content-security-policy"), /object-src 'none'/);
 });

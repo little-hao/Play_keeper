@@ -601,6 +601,13 @@ public final class MainActivity extends Activity {
         buyer.setHint("hao");
         form.addView(buyer, formFieldParams());
 
+        form.addView(formLabel("拍卖单价（默认920金币）"));
+        EditText auctionPrice = new EditText(this);
+        auctionPrice.setSingleLine(true);
+        auctionPrice.setInputType(InputType.TYPE_CLASS_NUMBER);
+        auctionPrice.setText(String.valueOf(automationCoordinator.auctionPrice(accountIndex)));
+        form.addView(auctionPrice, formFieldParams());
+
         form.addView(formLabel("拍卖/金币券卖出间隔（小时，默认12）"));
         EditText hours = new EditText(this);
         hours.setSingleLine(true);
@@ -630,6 +637,11 @@ public final class MainActivity extends Activity {
         warehouseEnabled.setText("每10分钟检查背包并存入仓库");
         warehouseEnabled.setChecked(automationCoordinator.isWarehouseEnabled(accountIndex));
         form.addView(warehouseEnabled);
+
+        CheckBox warehouseStoreAll = new CheckBox(this);
+        warehouseStoreAll.setText("存仓时全选背包（挂机/副本前也执行）");
+        warehouseStoreAll.setChecked(automationCoordinator.isWarehouseStoreAll(accountIndex));
+        form.addView(warehouseStoreAll);
 
         form.addView(formLabel("自动存入仓库的道具组合（逗号分隔）"));
         EditText warehouseItem = new EditText(this);
@@ -679,8 +691,9 @@ public final class MainActivity extends Activity {
         equipmentBuyer.setText(automationCoordinator.equipmentBuyer(accountIndex));
         form.addView(equipmentBuyer, formFieldParams());
 
-        TextView equipmentNotice = formLabel("卖方首批最多上架5件，1分钟后会按用户名"
-                + "自动启动同一 APP 内的买方账号；确认成交后继续下一批。");
+        TextView equipmentNotice = formLabel("卖方首批最多上架5件，20秒后会按用户名"
+                + "自动启动同一 APP 内的买方账号；确认成交后重新进入交易所继续下一批。"
+                + "不同设备时不会无限等待本机买方。");
         equipmentNotice.setTextColor(Color.rgb(160, 166, 178));
         form.addView(equipmentNotice);
 
@@ -690,8 +703,9 @@ public final class MainActivity extends Activity {
         form.addView(notice);
 
         java.util.function.BooleanSupplier saveAll = () -> saveAutomationForm(
-                accountIndex, auctionEnabled, auctionItems, buyer, hours,
+                accountIndex, auctionEnabled, auctionItems, buyer, auctionPrice, hours,
                 storeEnabled, templeEnabled, warehouseEnabled, warehouseItem,
+                warehouseStoreAll,
                 dungeonItems, prestigeEnabled, prestigeItems, equipmentItems,
                 equipmentPrice, equipmentBuyer);
 
@@ -750,6 +764,10 @@ public final class MainActivity extends Activity {
         });
         form.addView(equipmentBuyNow, automationActionParams());
 
+        Button cancelAutomation = makeButton("中断当前脚本", view ->
+                automationCoordinator.cancelCurrent(accountIndex));
+        form.addView(cancelAutomation, automationActionParams());
+
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(accountDisplayName(accountIndex) + " · 一键脚本")
                 .setView(scroll)
@@ -768,24 +786,29 @@ public final class MainActivity extends Activity {
 
     private boolean saveAutomationForm(int accountIndex, CheckBox auctionEnabled,
                                        EditText auctionItems,
-                                       EditText buyer, EditText hours,
+                                       EditText buyer, EditText auctionPrice, EditText hours,
                                        CheckBox storeEnabled, CheckBox templeEnabled,
                                        CheckBox warehouseEnabled, EditText warehouseItem,
+                                       CheckBox warehouseStoreAll,
                                        EditText dungeonItems, CheckBox prestigeEnabled,
                                        EditText prestigeItems,
                                        EditText equipmentItems, EditText equipmentPrice,
                                        EditText equipmentBuyer) {
         try {
             int intervalHours = Integer.parseInt(hours.getText().toString().trim());
+            int itemAuctionPrice = Integer.parseInt(
+                    auctionPrice.getText().toString().trim());
             String auctionItemText = auctionItems.getText().toString();
             String storeItems = "金币券";
             automationCoordinator.configureAuction(accountIndex, auctionEnabled.isChecked(),
-                    auctionItemText, buyer.getText().toString(), intervalHours);
+                    auctionItemText, buyer.getText().toString(), intervalHours,
+                    itemAuctionPrice);
             automationCoordinator.configureStoreSell(accountIndex, storeEnabled.isChecked(),
                     storeItems, intervalHours);
             automationCoordinator.configureTemple(accountIndex, templeEnabled.isChecked());
             automationCoordinator.configureWarehouse(accountIndex,
-                    warehouseEnabled.isChecked(), warehouseItem.getText().toString());
+                    warehouseEnabled.isChecked(), warehouseItem.getText().toString(),
+                    warehouseStoreAll.isChecked());
             automationCoordinator.configureDungeonSequence(accountIndex,
                     dungeonItems.getText().toString());
             automationCoordinator.configurePrestige(accountIndex,
@@ -1046,7 +1069,8 @@ public final class MainActivity extends Activity {
                     automationCoordinator.configureAuction(index,
                             parameters.optBoolean("enabled", false), itemText.toString(),
                             parameters.optString("buyer", "hao"),
-                            parameters.optInt("intervalHours", 12));
+                            parameters.optInt("intervalHours", 12),
+                            parameters.optInt("price", 920));
                     success = true;
                     resultMessage = "定时拍卖设置已更新";
                     break;
@@ -1109,7 +1133,7 @@ public final class MainActivity extends Activity {
                     }
                     automationCoordinator.configureWarehouse(index,
                             parameters.optBoolean("enabled", false),
-                            itemText.toString());
+                            itemText.toString(), parameters.optBoolean("storeAll", true));
                     success = true;
                     resultMessage = "仓库自动存放设置已更新";
                     break;
@@ -1194,6 +1218,13 @@ public final class MainActivity extends Activity {
                     automationCoordinator.runEquipmentBuyNow(index);
                     success = true;
                     resultMessage = "已启动装备购买";
+                    break;
+                }
+                case "cancel_automation": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.cancelCurrent(index);
+                    success = true;
+                    resultMessage = "已中断当前脚本";
                     break;
                 }
                 case "configure_temple_guard": {
