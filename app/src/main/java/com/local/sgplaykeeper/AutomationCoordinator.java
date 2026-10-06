@@ -2367,12 +2367,14 @@ final class AutomationCoordinator {
                 + "const matches=storeAll?rows:rows.filter(row=>names.has((row.querySelector('.bag-item-name')?.textContent||'').trim()));"
                 + "if(!matches.length){const loading=(bag.textContent||'').includes('加载中');"
                 + "return JSON.stringify({status:loading?'loading':'absent'});}"
-                + "if(storeAll){const all=bag.querySelector('input[type=checkbox]');if(all&&!all.checked)all.click();}"
-                + "for(const row of matches){const cb=row.querySelector('input[type=checkbox]');"
-                + "if(cb&&!cb.checked)cb.click();}"
+                + "if(storeAll){const all=bag.querySelector('input[type=checkbox]');"
+                + "if(all&&!all.checked){all.click();return JSON.stringify({status:'selecting'});}}"
+                + "const unchecked=matches.map(row=>row.querySelector('input[type=checkbox]'))"
+                + ".find(cb=>cb&&!cb.checked);"
+                + "if(unchecked){unchecked.click();return JSON.stringify({status:'selecting'});}"
                 + "const button=modal.querySelector('.bag-btn.store');"
                 + "if(!button)return JSON.stringify({status:'button_missing'});"
-                + "if(button.disabled)return JSON.stringify({status:'selection_failed'});"
+                + "if(button.disabled)return JSON.stringify({status:'selection_pending'});"
                 + "button.click();return JSON.stringify({status:'store_clicked',count:matches.length});})()";
         view.evaluateJavascript(script, encoded -> {
             JSONObject result = decodeObject(encoded);
@@ -2386,10 +2388,17 @@ final class AutomationCoordinator {
                 closeWarehouseModal(view);
                 finishWarehouse(accountIndex, "ok",
                         "背包中没有存仓组合内的道具，无需存放", manual);
-            } else if (("loading".equals(status) || "modal_missing".equals(status))
-                    && attempt < 6) {
+            } else if (("loading".equals(status) || "modal_missing".equals(status)
+                    || "selecting".equals(status) || "selection_pending".equals(status))
+                    && attempt < 40) {
+                long delay = ("selecting".equals(status) || "selection_pending".equals(status))
+                        ? 350L : 800L;
                 handler.postDelayed(() -> storeWarehouseItem(
-                        accountIndex, view, manual, attempt + 1), 800L);
+                        accountIndex, view, manual, attempt + 1), delay);
+            } else if ("selection_pending".equals(status) || "selecting".equals(status)) {
+                closeWarehouseModal(view);
+                finishWarehouse(accountIndex, "ok",
+                        "存仓选择状态未及时刷新，已跳过本轮且不阻断挂机", manual);
             } else {
                 finishWarehouse(accountIndex, "error",
                         "仓库存放准备失败（" + status + "）", manual);
@@ -2586,9 +2595,12 @@ final class AutomationCoordinator {
                 + "const cols=Array.from(modal.querySelectorAll('.bag-col'));if(!cols.length)return 'loading';"
                 + "const bag=cols[0],rows=Array.from(bag.querySelectorAll('.bag-item'));"
                 + "if(!rows.length){const close=modal.querySelector('.task-close');if(close)close.click();return 'done';}"
-                + "const all=bag.querySelector('input[type=checkbox]');if(all&&!all.checked)all.click();"
-                + "for(const row of rows){const cb=row.querySelector('input[type=checkbox]');if(cb&&!cb.checked)cb.click();}"
-                + "const store=modal.querySelector('.bag-btn.store');if(!store||store.disabled)return 'selection_failed';"
+                + "const all=bag.querySelector('input[type=checkbox]');"
+                + "if(all&&!all.checked){all.click();return 'selecting';}"
+                + "const unchecked=rows.map(row=>row.querySelector('input[type=checkbox]')).find(cb=>cb&&!cb.checked);"
+                + "if(unchecked){unchecked.click();return 'selecting';}"
+                + "const store=modal.querySelector('.bag-btn.store');if(!store)return 'button_missing';"
+                + "if(store.disabled)return 'selection_pending';"
                 + "store.click();return 'storing';})()";
         view.evaluateJavascript(script, encoded -> {
             String result = decodeString(encoded);
@@ -2596,13 +2608,20 @@ final class AutomationCoordinator {
                 updateState(accountIndex, "挂机前背包已全部存入仓库");
                 handler.postDelayed(continuation, 500L);
             } else if (("opened".equals(result) || "storing".equals(result)
-                    || "loading".equals(result)) && attempt < 12) {
+                    || "loading".equals(result) || "selecting".equals(result)
+                    || "selection_pending".equals(result)) && attempt < 40) {
+                long delay = ("selecting".equals(result) || "selection_pending".equals(result))
+                        ? 350L : ("storing".equals(result) ? 1_200L : 700L);
                 handler.postDelayed(() -> storeAllBeforeHang(accountIndex, view, continuation,
-                        manual, attempt + 1), "storing".equals(result) ? 1_200L : 700L);
+                        manual, attempt + 1), delay);
             } else if ("missing".equals(result) && attempt < 4) {
                 host.prepareAutomation(accountIndex, false);
                 handler.postDelayed(() -> storeAllBeforeHang(accountIndex, view, continuation,
                         manual, attempt + 1), 1_500L);
+            } else if ("selection_pending".equals(result) || "selecting".equals(result)) {
+                closeWarehouseModal(view);
+                updateState(accountIndex, "存仓选择状态未及时刷新，已跳过本轮并继续挂机");
+                handler.postDelayed(continuation, 500L);
             } else {
                 closeWarehouseModal(view);
                 finish(accountIndex, states[accountIndex].task, "error",

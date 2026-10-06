@@ -4,6 +4,12 @@
 
 `http://sgplay.cc/home.html#/`
 
+## v1.7.1 存仓修复
+
+- 手机挂机辅助页中，点击“背包全选”后会等待网页框架更新勾选状态，再点击“存放”
+- 修复挂机/副本前存仓误报 `selection_failed`；页面长时不刷新时也不再阻断后续挂机
+- 本修复仅更新 Android APK，VPS 中继服务继续使用 v1.7.0
+
 ## v1.7.0 正式版新增能力
 
 - 新增脚本中断，已排队的上架、购买、商店卖出和道具使用回调在提交前再次检查运行状态
@@ -134,9 +140,9 @@
 
 ## 当前安装包
 
-`dist/PlayKeeper-Android10Plus-v1.7.0.apk`
+`dist/PlayKeeper-Android10Plus-v1.7.1.apk`
 
-为保留既有登录数据，v1.7.0 仍使用包名 `com.local.sgplaykeeper.test` 和已有升级签名，版本号为 `14`，可覆盖安装 v1.0.0–v1.6.0。
+为保留既有登录数据，v1.7.1 仍使用包名 `com.local.sgplaykeeper.test` 和已有升级签名，版本号为 `15`，可覆盖安装 v1.0.0–v1.7.0。
 
 ## 远程连接
 
