@@ -9,6 +9,7 @@ local.properties
 *.jks
 *.keystore
 dist/*.apk
+dist/*.tar.gz
 captures/
 externalNativeBuild/
 .cxx/

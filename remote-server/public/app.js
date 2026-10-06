@@ -266,6 +266,8 @@ function renderDevices() {
     const storeSellEnabled = card.querySelector(".store-sell-enabled");
     const storeSellItem = card.querySelector(".store-sell-item");
     const templeEnabled = card.querySelector(".temple-enabled");
+    const warehouseEnabled = card.querySelector(".warehouse-enabled");
+    const warehouseItem = card.querySelector(".warehouse-item");
     const equipmentItemsInput = card.querySelector(".equipment-items");
     const equipmentPriceInput = card.querySelector(".equipment-price");
     const equipmentBuyerInput = card.querySelector(".equipment-buyer");
@@ -289,6 +291,9 @@ function renderDevices() {
     storeSellEnabled.checked = automation.storeSellEnabled === true;
     storeSellItem.value = "金币券";
     templeEnabled.checked = automation.templeEnabled === true;
+    warehouseEnabled.checked = automation.warehouseEnabled === true;
+    warehouseItem.value = typeof automation.warehouseItem === "string"
+      && automation.warehouseItem.trim() ? automation.warehouseItem.trim() : "护宠仙石";
     equipmentItemsInput.value = Array.isArray(automation.equipmentItems)
       ? automation.equipmentItems.join(",") : defaultEquipmentItems;
     equipmentPriceInput.value = String(Number.isInteger(automation.equipmentPrice)
@@ -298,6 +303,13 @@ function renderDevices() {
     card.querySelector(".automation-status").textContent = automation.busy
       ? `运行中 · ${automation.lastMessage || "正在执行"}`
       : (automation.lastMessage || "尚未运行");
+    const confirmation = card.querySelector(".automation-confirmation");
+    if (automation.awaitingConfirmation === true) {
+      confirmation.classList.remove("hidden");
+      const seconds = Math.max(0, Math.ceil(((automation.confirmationDeadlineAt || Date.now()) - Date.now()) / 1000));
+      card.querySelector(".automation-confirmation-message").textContent =
+        `${automation.confirmationMessage || "是否进入圣兽云殿？"}（约${seconds}秒后自动进入）`;
+    }
 
     const saveAutomation = () => {
       const items = auctionItemsInput.value.split(/[,，\n]/)
@@ -308,6 +320,7 @@ function renderDevices() {
         .map((item) => item.trim()).filter(Boolean);
       const equipmentPrice = Number.parseInt(equipmentPriceInput.value, 10);
       const equipmentBuyer = equipmentBuyerInput.value.trim();
+      const warehouseItemName = warehouseItem.value.trim();
       if (!items.length || items.length > 10 || items.some((item) => item.length > 30)) {
         return addLog("拍卖道具需填写1–10种，每项不超过30字");
       }
@@ -324,6 +337,9 @@ function renderDevices() {
       }
       if (!/^[A-Za-z0-9@_.-]{0,30}$/.test(equipmentBuyer)) {
         return addLog("装备指定买家ID格式无效");
+      }
+      if (!warehouseItemName || warehouseItemName.length > 30 || /[\r\n\t]/.test(warehouseItemName)) {
+        return addLog("存仓道具需填写1–30个字符");
       }
       sendCommand(device.deviceId, "configure_auto_auction", {
         accountIndex: activeAccountIndex,
@@ -342,6 +358,11 @@ function renderDevices() {
         accountIndex: activeAccountIndex,
         enabled: templeEnabled.checked
       });
+      sendCommand(device.deviceId, "configure_warehouse_sync", {
+        accountIndex: activeAccountIndex,
+        enabled: warehouseEnabled.checked,
+        item: warehouseItemName
+      });
       sendCommand(device.deviceId, "configure_equipment_transfer", {
         accountIndex: activeAccountIndex,
         items: equipmentItems,
@@ -355,11 +376,23 @@ function renderDevices() {
     card.querySelector(".run-auction").addEventListener("click", () => {
       if (saveAutomation()) sendCommand(device.deviceId, "run_auto_auction", { accountIndex: activeAccountIndex });
     });
+    card.querySelector(".run-auction-buy").addEventListener("click", () => {
+      if (saveAutomation()) sendCommand(device.deviceId, "run_auction_buy", { accountIndex: activeAccountIndex });
+    });
     card.querySelector(".run-store-sell").addEventListener("click", () => {
       if (saveAutomation()) sendCommand(device.deviceId, "run_store_sell", { accountIndex: activeAccountIndex });
     });
+    card.querySelector(".run-warehouse").addEventListener("click", () => {
+      if (saveAutomation()) sendCommand(device.deviceId, "run_warehouse_sync", { accountIndex: activeAccountIndex });
+    });
     card.querySelector(".run-temple").addEventListener("click", () => {
       if (saveAutomation()) sendCommand(device.deviceId, "run_temple_guard", { accountIndex: activeAccountIndex });
+    });
+    card.querySelector(".confirm-temple").addEventListener("click", () => {
+      sendCommand(device.deviceId, "resolve_temple_confirmation", { accountIndex: activeAccountIndex, enterTemple: true });
+    });
+    card.querySelector(".decline-temple").addEventListener("click", () => {
+      sendCommand(device.deviceId, "resolve_temple_confirmation", { accountIndex: activeAccountIndex, enterTemple: false });
     });
     card.querySelector(".run-equipment-sell").addEventListener("click", () => {
       if (!equipmentBuyerInput.value.trim()) return addLog("上架装备前请填写指定买家ID");

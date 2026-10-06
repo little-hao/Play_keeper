@@ -432,6 +432,19 @@ public final class MainActivity extends Activity {
                     }
 
                     @Override
+                    public int findOpenedAccountByLabel(String accountLabel,
+                                                        int excludingAccountIndex) {
+                        if (accountLabel == null || accountLabel.isBlank()) return -1;
+                        for (int i = 0; i < MAX_ACCOUNTS; i++) {
+                            if (i == excludingAccountIndex || sessions[i] == null) continue;
+                            if (accountDisplayName(i).equalsIgnoreCase(accountLabel.trim())) {
+                                return i;
+                            }
+                        }
+                        return -1;
+                    }
+
+                    @Override
                     public void onAutomationChanged() {
                         pushTelemetry();
                     }
@@ -439,6 +452,12 @@ public final class MainActivity extends Activity {
                     @Override
                     public void showMessage(String message) {
                         showToast(message);
+                    }
+
+                    @Override
+                    public void requestTempleConfirmation(int accountIndex, String message,
+                                                          long deadlineAt) {
+                        showTempleConfirmationDialog(accountIndex, message, deadlineAt);
                     }
                 }, MAX_ACCOUNTS);
         automationCoordinator.start();
@@ -482,6 +501,24 @@ public final class MainActivity extends Activity {
                     }
                 });
         remoteConnectionManager.start(remoteConfigStore.load());
+    }
+
+    private void showTempleConfirmationDialog(int accountIndex, String message,
+                                              long deadlineAt) {
+        if (activityDestroyed || isFinishing()) return;
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(accountDisplayName(accountIndex) + " · 后续挂机")
+                .setMessage(message + "\n60秒内未选择将自动进入圣兽云殿。")
+                .setNegativeButton("保持当前页", (ignored, which) ->
+                        automationCoordinator.resolveTempleConfirmation(accountIndex, false))
+                .setPositiveButton("进入圣兽云殿", (ignored, which) ->
+                        automationCoordinator.resolveTempleConfirmation(accountIndex, true))
+                .create();
+        dialog.show();
+        long remaining = Math.max(0L, deadlineAt - System.currentTimeMillis());
+        mainHandler.postDelayed(() -> {
+            if (dialog.isShowing()) dialog.dismiss();
+        }, remaining + 500L);
     }
 
     private void updateRemoteButton() {
@@ -577,6 +614,18 @@ public final class MainActivity extends Activity {
         templeEnabled.setChecked(automationCoordinator.isTempleEnabled(accountIndex));
         form.addView(templeEnabled);
 
+        CheckBox warehouseEnabled = new CheckBox(this);
+        warehouseEnabled.setText("每10分钟检查背包并存入仓库");
+        warehouseEnabled.setChecked(automationCoordinator.isWarehouseEnabled(accountIndex));
+        form.addView(warehouseEnabled);
+
+        form.addView(formLabel("自动存入仓库的道具"));
+        EditText warehouseItem = new EditText(this);
+        warehouseItem.setSingleLine(true);
+        warehouseItem.setHint("护宠仙石");
+        warehouseItem.setText(automationCoordinator.warehouseItem(accountIndex));
+        form.addView(warehouseItem, formFieldParams());
+
         form.addView(formLabel("装备定向转移（最多10件，每5件自动分批）"));
         EditText equipmentItems = new EditText(this);
         equipmentItems.setSingleLine(true);
@@ -598,6 +647,11 @@ public final class MainActivity extends Activity {
         equipmentBuyer.setText(automationCoordinator.equipmentBuyer(accountIndex));
         form.addView(equipmentBuyer, formFieldParams());
 
+        TextView equipmentNotice = formLabel("卖方首批最多上架5件，1分钟后会按用户名"
+                + "自动启动同一 APP 内的买方账号；确认成交后继续下一批。");
+        equipmentNotice.setTextColor(Color.rgb(160, 166, 178));
+        form.addView(equipmentNotice);
+
         TextView notice = formLabel("脚本仅在 Play Keeper 前台或常亮黑屏模式运行；"
                 + "关屏或被 HyperOS 清理后无法保证定时执行。");
         notice.setTextColor(Color.rgb(160, 166, 178));
@@ -605,15 +659,26 @@ public final class MainActivity extends Activity {
 
         Button auctionNow = makeButton("保存并立即拍卖", view -> {
             if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                    buyer, hours, storeEnabled, templeEnabled, equipmentItems,
+                    buyer, hours, storeEnabled, templeEnabled, warehouseEnabled,
+                    warehouseItem, equipmentItems,
                     equipmentPrice, equipmentBuyer)) {
                 automationCoordinator.runAuctionNow(accountIndex);
             }
         });
         form.addView(auctionNow, automationActionParams());
+        Button auctionBuyNow = makeButton("保存并立即购买拍卖道具", view -> {
+            if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
+                    buyer, hours, storeEnabled, templeEnabled, warehouseEnabled,
+                    warehouseItem, equipmentItems,
+                    equipmentPrice, equipmentBuyer)) {
+                automationCoordinator.runAuctionBuyNow(accountIndex);
+            }
+        });
+        form.addView(auctionBuyNow, automationActionParams());
         Button storeSellNow = makeButton("保存并立即卖出金币券", view -> {
             if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                    buyer, hours, storeEnabled, templeEnabled, equipmentItems,
+                    buyer, hours, storeEnabled, templeEnabled, warehouseEnabled,
+                    warehouseItem, equipmentItems,
                     equipmentPrice, equipmentBuyer)) {
                 automationCoordinator.runStoreSellNow(accountIndex);
             }
@@ -621,16 +686,27 @@ public final class MainActivity extends Activity {
         form.addView(storeSellNow, automationActionParams());
         Button templeNow = makeButton("保存并立即检查圣殿挂机", view -> {
             if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                    buyer, hours, storeEnabled, templeEnabled, equipmentItems,
+                    buyer, hours, storeEnabled, templeEnabled, warehouseEnabled,
+                    warehouseItem, equipmentItems,
                     equipmentPrice, equipmentBuyer)) {
                 automationCoordinator.runTempleNow(accountIndex);
             }
         });
         form.addView(templeNow, automationActionParams());
 
+        Button warehouseNow = makeButton("保存并立即检查仓库存放", view -> {
+            if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
+                    buyer, hours, storeEnabled, templeEnabled, warehouseEnabled,
+                    warehouseItem, equipmentItems, equipmentPrice, equipmentBuyer)) {
+                automationCoordinator.runWarehouseNow(accountIndex);
+            }
+        });
+        form.addView(warehouseNow, automationActionParams());
+
         Button equipmentSellNow = makeButton("保存并立即上架装备", view -> {
             if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                    buyer, hours, storeEnabled, templeEnabled, equipmentItems,
+                    buyer, hours, storeEnabled, templeEnabled, warehouseEnabled,
+                    warehouseItem, equipmentItems,
                     equipmentPrice, equipmentBuyer)) {
                 automationCoordinator.runEquipmentSellNow(accountIndex);
             }
@@ -638,7 +714,8 @@ public final class MainActivity extends Activity {
         form.addView(equipmentSellNow, automationActionParams());
         Button equipmentBuyNow = makeButton("保存并立即购买装备", view -> {
             if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                    buyer, hours, storeEnabled, templeEnabled, equipmentItems,
+                    buyer, hours, storeEnabled, templeEnabled, warehouseEnabled,
+                    warehouseItem, equipmentItems,
                     equipmentPrice, equipmentBuyer)) {
                 automationCoordinator.runEquipmentBuyNow(accountIndex);
             }
@@ -654,7 +731,8 @@ public final class MainActivity extends Activity {
         dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
                 .setOnClickListener(view -> {
                     if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                            buyer, hours, storeEnabled, templeEnabled, equipmentItems,
+                            buyer, hours, storeEnabled, templeEnabled, warehouseEnabled,
+                            warehouseItem, equipmentItems,
                             equipmentPrice, equipmentBuyer)) {
                         dialog.dismiss();
                         showToast("脚本设置已保存");
@@ -667,6 +745,7 @@ public final class MainActivity extends Activity {
                                        EditText auctionItems,
                                        EditText buyer, EditText hours,
                                        CheckBox storeEnabled, CheckBox templeEnabled,
+                                       CheckBox warehouseEnabled, EditText warehouseItem,
                                        EditText equipmentItems, EditText equipmentPrice,
                                        EditText equipmentBuyer) {
         try {
@@ -678,6 +757,8 @@ public final class MainActivity extends Activity {
             automationCoordinator.configureStoreSell(accountIndex, storeEnabled.isChecked(),
                     storeItems, intervalHours);
             automationCoordinator.configureTemple(accountIndex, templeEnabled.isChecked());
+            automationCoordinator.configureWarehouse(accountIndex,
+                    warehouseEnabled.isChecked(), warehouseItem.getText().toString());
             int transferPrice = Integer.parseInt(equipmentPrice.getText().toString().trim());
             automationCoordinator.configureEquipmentTransfer(accountIndex,
                     equipmentItems.getText().toString(), transferPrice,
@@ -947,6 +1028,13 @@ public final class MainActivity extends Activity {
                     resultMessage = "已启动拍卖检查";
                     break;
                 }
+                case "run_auction_buy": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.runAuctionBuyNow(index);
+                    success = true;
+                    resultMessage = "已启动拍卖道具购买";
+                    break;
+                }
                 case "configure_store_sell": {
                     int index = requiredAccountIndex(parameters);
                     JSONArray itemArray = parameters.optJSONArray("items");
@@ -970,6 +1058,22 @@ public final class MainActivity extends Activity {
                     automationCoordinator.runStoreSellNow(index);
                     success = true;
                     resultMessage = "已启动道具商店卖出";
+                    break;
+                }
+                case "configure_warehouse_sync": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.configureWarehouse(index,
+                            parameters.optBoolean("enabled", false),
+                            parameters.optString("item", "护宠仙石"));
+                    success = true;
+                    resultMessage = "仓库自动存放设置已更新";
+                    break;
+                }
+                case "run_warehouse_sync": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.runWarehouseNow(index);
+                    success = true;
+                    resultMessage = "已启动仓库存放检查";
                     break;
                 }
                 case "configure_equipment_transfer": {
@@ -1017,6 +1121,15 @@ public final class MainActivity extends Activity {
                     automationCoordinator.runTempleNow(index);
                     success = true;
                     resultMessage = "已启动圣殿挂机检查";
+                    break;
+                }
+                case "resolve_temple_confirmation": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.resolveTempleConfirmation(index,
+                            parameters.optBoolean("enterTemple", true));
+                    success = true;
+                    resultMessage = parameters.optBoolean("enterTemple", true)
+                            ? "已确认进入圣兽云殿" : "已保持当前页";
                     break;
                 }
                 default:
@@ -1281,8 +1394,8 @@ public final class MainActivity extends Activity {
             telemetry.put("device", device);
 
             JSONObject app = new JSONObject();
-            app.put("versionCode", 11);
-            app.put("versionName", "1.4.0-workflow-test");
+            app.put("versionCode", 12);
+            app.put("versionName", "1.5.0");
             app.put("activeAccount", activeAccount);
             app.put("blackScreen", blackMode);
             app.put("executionMode", blackMode

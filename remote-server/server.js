@@ -82,6 +82,15 @@ const commandValidators = {
       && parameters.intervalHours <= 168;
   },
   run_store_sell: accountParameters,
+  configure_warehouse_sync(parameters) {
+    return accountParameters(parameters)
+      && typeof parameters.enabled === "boolean"
+      && typeof parameters.item === "string"
+      && parameters.item.trim().length >= 1
+      && parameters.item.trim().length <= 30
+      && !/[\r\n\t]/.test(parameters.item);
+  },
+  run_warehouse_sync: accountParameters,
   configure_equipment_transfer(parameters) {
     return accountParameters(parameters)
       && Array.isArray(parameters.items)
@@ -97,6 +106,10 @@ const commandValidators = {
   },
   run_equipment_sell: accountParameters,
   run_equipment_buy: accountParameters,
+  run_auction_buy: accountParameters,
+  resolve_temple_confirmation(parameters) {
+    return accountParameters(parameters) && typeof parameters.enterTemple === "boolean";
+  },
   configure_temple_guard(parameters) {
     return accountParameters(parameters) && typeof parameters.enabled === "boolean";
   },
@@ -156,7 +169,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.4.0-workflow-test" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.5.0" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {

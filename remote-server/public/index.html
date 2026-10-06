@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css?v=1.4.0-workflow-test">
+  <link rel="stylesheet" href="/styles.css?v=1.5.0">
 </head>
 <body>
   <main class="shell">
@@ -85,44 +85,69 @@
         <p class="preview-help">画面最高每秒更新一次。点击画面会在当前 WebView 的对应位置执行一次单击。</p>
       </section>
       <section class="automation-panel">
-        <div class="section-title">
-          <div><strong>一键脚本</strong><small class="automation-status">尚未运行</small></div>
+        <div class="section-title automation-title">
+          <div><strong>自动化工具</strong><small class="automation-status">尚未运行</small></div>
+          <button class="save-automation primary">保存全部设置</button>
         </div>
-        <div class="automation-grid">
-          <label class="toggle-row"><input class="auction-enabled" type="checkbox"> 定时拍卖（保留1个）</label>
-          <label class="toggle-row"><input class="store-sell-enabled" type="checkbox"> 定时卖出金币券</label>
-          <label>拍卖快捷组合
-            <select class="auction-preset">
-              <option value="custom">自定义</option>
-              <option value="one">组合1：曙光印记 + 进化宝石</option>
-              <option value="two">组合2：强化丹/雨露类</option>
-              <option value="three">组合3：黑暗系列</option>
-            </select>
-          </label>
-          <label>拍卖道具（逗号分隔，可修改）<input class="auction-items" type="text" value="曙光印记,进化宝石"></label>
-          <label>执行间隔（小时）<input class="auction-hours" type="number" min="1" max="168" value="12"></label>
-          <label>指定买家<input class="auction-buyer" type="text" maxlength="30" value="hao"></label>
-          <label>商店匹配<select class="store-sell-item"><option value="金币券">*金币券*（1W/5W/10W）</option></select></label>
-          <label class="toggle-row"><input class="temple-enabled" type="checkbox"> 圣兽云殿守护（1h）</label>
+        <div class="automation-confirmation hidden">
+          <p class="automation-confirmation-message"></p>
+          <div class="automation-actions">
+            <button class="confirm-temple primary">进入圣兽云殿</button>
+            <button class="decline-temple secondary">保持当前页</button>
+          </div>
         </div>
+        <fieldset class="automation-group trade-group">
+          <legend><span class="group-index">1</span> 道具拍卖与商店卖出</legend>
+          <p class="group-help">道具拍卖走道具交易所；金币券卖出走道具商店。</p>
+          <div class="automation-grid">
+            <label class="toggle-row"><input class="auction-enabled" type="checkbox"> 定时拍卖（保留1个）</label>
+            <label class="toggle-row"><input class="store-sell-enabled" type="checkbox"> 定时卖出金币券</label>
+            <label>拍卖快捷组合
+              <select class="auction-preset">
+                <option value="custom">自定义</option>
+                <option value="one">组合1：曙光印记 + 进化宝石</option>
+                <option value="two">组合2：强化丹/雨露类</option>
+                <option value="three">组合3：黑暗系列</option>
+              </select>
+            </label>
+            <label>拍卖道具（逗号分隔）<input class="auction-items" type="text" value="曙光印记,进化宝石"></label>
+            <label>执行间隔（小时）<input class="auction-hours" type="number" min="1" max="168" value="12"></label>
+            <label>指定买家<input class="auction-buyer" type="text" maxlength="30" value="hao"></label>
+            <label class="span-2">商店匹配<select class="store-sell-item"><option value="金币券">*金币券*（1W/5W/10W）</option></select></label>
+          </div>
+          <div class="automation-actions action-grid">
+            <button class="run-auction secondary">拍卖道具</button>
+            <button class="run-auction-buy secondary">购买拍卖道具</button>
+            <button class="run-store-sell secondary">卖出金币券</button>
+          </div>
+        </fieldset>
         <fieldset class="equipment-transfer">
-          <legend>装备定向转移（最多10件，每5件自动分批）</legend>
+          <legend><span class="group-index">2</span> 装备定向转移</legend>
+          <p class="group-help">装备交易所每批最多5件，可配置最多10件。</p>
           <div class="automation-grid">
             <label class="span-2">装备名称（逗号分隔）<input class="equipment-items" type="text" value="柔情方巾·改,轻罗流萤衫·改,逢羡履·改,君我剑·改,佳人之恋·改,三生戒·改,比翼·改,相望镯·改,尾生之泪·改,龙神印记·庆"></label>
             <label>单价（金币）<input class="equipment-price" type="number" min="1" max="9999999" value="920"></label>
             <label>指定买家ID<input class="equipment-buyer" type="text" maxlength="30" placeholder="上架时必填"></label>
           </div>
-          <p class="automation-help">卖方先一键脱装，每5件成交后再上架下一批；买方全部购买后一键穿装并执行绘画小屋。</p>
+          <p class="automation-help">卖方首批最多上架5件，1分钟后自动启动同一 APP 内用户名匹配的买方账号；确认成交后再上架下一批。买方穿装后依次执行已解锁副本。</p>
+          <div class="automation-actions action-grid two-actions">
+            <button class="run-equipment-sell secondary">卖方上架装备</button>
+            <button class="run-equipment-buy secondary">买方购买装备</button>
+          </div>
         </fieldset>
-        <div class="automation-actions">
-          <button class="save-automation primary">保存</button>
-          <button class="run-equipment-sell secondary">上架装备</button>
-          <button class="run-equipment-buy secondary">购买装备</button>
-          <button class="run-auction secondary">立即拍卖</button>
-          <button class="run-store-sell secondary">立即卖金币券</button>
-          <button class="run-temple secondary">立即恢复挂机</button>
-        </div>
-        <p class="automation-help">脚本会自动切横屏进入城镇，完成后返回竖屏挂机辅助；每30分钟检查战斗统计。</p>
+        <fieldset class="automation-group maintenance-group">
+          <legend><span class="group-index">3</span> 挂机守护与存仓</legend>
+          <div class="automation-grid">
+            <label class="toggle-row"><input class="temple-enabled" type="checkbox"> 圣兽云殿守护（1h）</label>
+            <label class="toggle-row"><input class="warehouse-enabled" type="checkbox"> 背包自动存仓（10min）</label>
+            <label class="span-2">存仓道具<input class="warehouse-item" type="text" maxlength="30" value="护宠仙石"></label>
+          </div>
+          <div class="automation-actions action-grid two-actions">
+            <button class="run-temple secondary">恢复圣兽云殿</button>
+            <button class="run-warehouse secondary">立即检查存仓</button>
+          </div>
+          <p class="automation-help">每30分钟检查战斗统计；长时间不增加时在账号按钮上标记掉线。</p>
+        </fieldset>
       </section>
       <p class="device-note"></p>
     </article>
@@ -137,6 +162,6 @@
       <div id="selectOptions" class="select-options" role="radiogroup"></div>
     </section>
   </div>
-  <script type="module" src="/app.js?v=1.4.0-workflow-test"></script>
+  <script type="module" src="/app.js?v=1.5.0"></script>
 </body>
 </html>

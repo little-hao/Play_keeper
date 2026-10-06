@@ -178,6 +178,27 @@ test("device telemetry and browser command complete a round trip", async (contex
   assert.equal(storeSell.command, "configure_store_sell");
   assert.deepEqual(storeSell.parameters.items, ["金币券"]);
 
+  const warehousePromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "configure_warehouse_sync",
+    parameters: { accountIndex: 2, enabled: true, item: "护宠仙石" }
+  }));
+  const warehouse = await warehousePromise;
+  assert.equal(warehouse.command, "configure_warehouse_sync");
+  assert.equal(warehouse.parameters.item, "护宠仙石");
+
+  const warehouseRunPromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "run_warehouse_sync",
+    parameters: { accountIndex: 2 }
+  }));
+  const warehouseRun = await warehouseRunPromise;
+  assert.equal(warehouseRun.command, "run_warehouse_sync");
+
   const equipmentPromise = nextJson(device, "command.request");
   control.send(JSON.stringify({
     type: "command.send",
@@ -196,6 +217,27 @@ test("device telemetry and browser command complete a round trip", async (contex
   assert.equal(equipment.parameters.price, 920);
   assert.equal(equipment.parameters.buyer, "buyer@id");
   assert.equal(equipment.parameters.items.length, 10);
+
+  const auctionBuyPromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "run_auction_buy",
+    parameters: { accountIndex: 2 }
+  }));
+  const auctionBuy = await auctionBuyPromise;
+  assert.equal(auctionBuy.command, "run_auction_buy");
+
+  const templeConfirmationPromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "resolve_temple_confirmation",
+    parameters: { accountIndex: 2, enterTemple: true }
+  }));
+  const templeConfirmation = await templeConfirmationPromise;
+  assert.equal(templeConfirmation.command, "resolve_temple_confirmation");
+  assert.equal(templeConfirmation.parameters.enterTemple, true);
 
   const automaticStopPromise = nextJson(device, "command.request");
   control.close();
@@ -252,14 +294,16 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    ok: true, service: "play-keeper-relay", version: "1.4.0-workflow-test"
+    ok: true, service: "play-keeper-relay", version: "1.5.0"
   });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);
   assert.equal(dashboard.status, 200);
   const dashboardHtml = await dashboard.text();
   assert.match(dashboardHtml, /Play Keeper 远程控制/);
-  assert.match(dashboardHtml, /立即拍卖/);
-  assert.match(dashboardHtml, /立即卖金币券/);
+  assert.match(dashboardHtml, /拍卖道具/);
+  assert.match(dashboardHtml, /卖出金币券/);
+  assert.match(dashboardHtml, /背包自动存仓/);
+  assert.match(dashboardHtml, /立即检查存仓/);
   assert.match(dashboard.headers.get("content-security-policy"), /object-src 'none'/);
 });

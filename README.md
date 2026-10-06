@@ -4,6 +4,15 @@
 
 `http://sgplay.cc/home.html#/`
 
+## v1.5.0 正式版新增能力
+
+- 道具拍卖、装备转移和金币券卖出严格分别进入道具交易所、装备交易所和道具商店
+- 装备卖方首批最多上架5件，等待1分钟后自动启动同一 APP 内用户名匹配的买方账号
+- 首批成交后卖方自动刷新装备交易所并继续上架剩余装备；买方忙碌或尚未打开时每轮刷新重试
+- 最后一批确认成交后，卖方一键穿回剩余装备，弹窗确认是否返回圣兽云殿，60秒无操作时自动进入
+- 新增拍卖道具购买、每10分钟指定道具存仓、四副本顺序执行与远程确认操作
+- 远程控制台与 Android 同步更新，保留手机窄屏自适应和低帧率预览
+
 ## v1.4.0-workflow-test 新增能力
 
 - 脚本检测“请将手机横屏使用”后，仅点击一次“手机转不动？点这里继续”；未恢复时立即中止脚本
@@ -107,9 +116,9 @@
 
 ## 当前安装包
 
-`dist/PlayKeeper-Android10Plus-v1.4.0-workflow-test.apk`
+`dist/PlayKeeper-Android10Plus-v1.5.0.apk`
 
-为保留既有登录数据，v1.4.0-workflow-test 仍使用包名 `com.local.sgplaykeeper.test` 和已有升级签名，版本号为 `11`，可覆盖安装 v1.0.0–v1.3.0。
+为保留既有登录数据，v1.5.0 仍使用包名 `com.local.sgplaykeeper.test` 和已有升级签名，版本号为 `12`，可覆盖安装 v1.0.0–v1.4.0。
 
 ## 远程连接
 
@@ -160,6 +169,7 @@ APP 会尝试从网页 DOM 自动识别登录用户名。若网站结构变化�
 - `docs/VPS_UPDATE_V1.2.md`：v1.2.0 定时卖出、掉线标记与新控制台的 Debian VPS 更新命令
 - `docs/VPS_UPDATE_V1.3_TEST.md`：v1.3.0 装备转移测试版 VPS 更新与回滚步骤
 - `docs/VPS_UPDATE_V1.4_TEST.md`：v1.4.0 横屏恢复、10件装备与绘画小屋流程的 VPS 更新步骤
+- `docs/VPS_UPDATE_V1.5.md`：v1.5.0 正式版 VPS 更新、健康检查与回滚步骤
 - `docs/ANDROID10_PLUS_TEST_PLAN.md`：Android 10+ 通用回归测试矩阵
 - `docs/CIVI4_PRO_TEST_PLAN.md`：小米 Civi 4 Pro 回归测试方案
 - `CHANGELOG.md`：版本变更记录
