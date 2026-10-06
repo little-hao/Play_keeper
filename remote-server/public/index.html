@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css?v=1.5.0">
+  <link rel="stylesheet" href="/styles.css?v=1.6.0">
 </head>
 <body>
   <main class="shell">
@@ -125,7 +125,7 @@
           <legend><span class="group-index">2</span> 装备定向转移</legend>
           <p class="group-help">装备交易所每批最多5件，可配置最多10件。</p>
           <div class="automation-grid">
-            <label class="span-2">装备名称（逗号分隔）<input class="equipment-items" type="text" value="柔情方巾·改,轻罗流萤衫·改,逢羡履·改,君我剑·改,佳人之恋·改,三生戒·改,比翼·改,相望镯·改,尾生之泪·改,龙神印记·庆"></label>
+            <label class="span-2">装备组合（逗号分隔，保存后按账号记忆）<input class="equipment-items" type="text" value="柔情方巾·改,轻罗流萤衫·改,逢羡履·改,君我剑·改,佳人之恋·改,三生戒·改,比翼·改,相望镯·改,尾生之泪·改,龙神印记·庆"></label>
             <label>单价（金币）<input class="equipment-price" type="number" min="1" max="9999999" value="920"></label>
             <label>指定买家ID<input class="equipment-buyer" type="text" maxlength="30" placeholder="上架时必填"></label>
           </div>
@@ -140,11 +140,16 @@
           <div class="automation-grid">
             <label class="toggle-row"><input class="temple-enabled" type="checkbox"> 圣兽云殿守护（1h）</label>
             <label class="toggle-row"><input class="warehouse-enabled" type="checkbox"> 背包自动存仓（10min）</label>
-            <label class="span-2">存仓道具<input class="warehouse-item" type="text" maxlength="30" value="护宠仙石"></label>
+            <label class="toggle-row"><input class="prestige-enabled" type="checkbox"> 圣殿挂机使用威望道具（1h）</label>
+            <label class="span-2">存仓道具组合<input class="warehouse-item" type="text" value="护宠仙石"></label>
+            <label class="span-2">副本挂机组合<input class="dungeon-items" type="text" value="绘画小屋,伊苏王的神墓,火龙王的宫殿,史芬克斯密穴"></label>
+            <label class="span-2">威望道具组合<input class="prestige-items" type="text" value="黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石"></label>
           </div>
-          <div class="automation-actions action-grid two-actions">
+          <div class="automation-actions action-grid">
             <button class="run-temple secondary">恢复圣兽云殿</button>
             <button class="run-warehouse secondary">立即检查存仓</button>
+            <button class="run-dungeons secondary">执行副本组合</button>
+            <button class="run-prestige secondary">检查威望道具</button>
           </div>
           <p class="automation-help">每30分钟检查战斗统计；长时间不增加时在账号按钮上标记掉线。</p>
         </fieldset>
@@ -162,6 +167,6 @@
       <div id="selectOptions" class="select-options" role="radiogroup"></div>
     </section>
   </div>
-  <script type="module" src="/app.js?v=1.5.0"></script>
+  <script type="module" src="/app.js?v=1.6.0"></script>
 </body>
 </html>

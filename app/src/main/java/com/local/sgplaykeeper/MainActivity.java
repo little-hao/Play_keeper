@@ -416,12 +416,24 @@ public final class MainActivity extends Activity {
 
                     @Override
                     public void prepareAutomation(int accountIndex, boolean landscape) {
+                        Session session = getOrCreateSession(accountIndex);
                         selectAccount(accountIndex, false);
-                        preferences.edit().putBoolean(
-                                landscapeModeKey(accountIndex), landscape).apply();
+                        boolean modeChanged = session.desktopMode != landscape;
+                        session.desktopMode = landscape;
+                        preferences.edit()
+                                .putBoolean(landscapeModeKey(accountIndex), landscape)
+                                .putBoolean(desktopModeKey(accountIndex), landscape)
+                                .apply();
+                        applyUserAgent(session);
                         applyPreferredOrientation(accountIndex);
                         updateToolbarState();
                         pushTelemetry();
+                        // Main-game automation depends on the fixed desktop layout.  Reload the
+                        // home page whenever the profile was still using the mobile user agent;
+                        // otherwise the site keeps the portrait-only overlay in the current DOM.
+                        if (landscape && modeChanged) {
+                            session.webView.loadUrl(START_URL);
+                        }
                     }
 
                     @Override
@@ -619,12 +631,32 @@ public final class MainActivity extends Activity {
         warehouseEnabled.setChecked(automationCoordinator.isWarehouseEnabled(accountIndex));
         form.addView(warehouseEnabled);
 
-        form.addView(formLabel("自动存入仓库的道具"));
+        form.addView(formLabel("自动存入仓库的道具组合（逗号分隔）"));
         EditText warehouseItem = new EditText(this);
         warehouseItem.setSingleLine(true);
-        warehouseItem.setHint("护宠仙石");
-        warehouseItem.setText(automationCoordinator.warehouseItem(accountIndex));
+        warehouseItem.setHint("护宠仙石,其他道具");
+        warehouseItem.setText(automationCoordinator.warehouseItemsText(accountIndex));
         form.addView(warehouseItem, formFieldParams());
+
+        form.addView(formLabel("副本挂机组合（按填写顺序执行）"));
+        EditText dungeonItems = new EditText(this);
+        dungeonItems.setSingleLine(true);
+        dungeonItems.setText(automationCoordinator.dungeonItemsText(accountIndex));
+        form.addView(dungeonItems, formFieldParams());
+        Button defaultDungeons = makeButton("恢复默认四副本组合",
+                view -> dungeonItems.setText(String.join(",",
+                        AutomationCoordinator.DEFAULT_DUNGEON_SEQUENCE)));
+        form.addView(defaultDungeons, automationActionParams());
+
+        CheckBox prestigeEnabled = new CheckBox(this);
+        prestigeEnabled.setText("圣兽云殿挂机时定时使用威望道具（每1小时）");
+        prestigeEnabled.setChecked(automationCoordinator.isPrestigeEnabled(accountIndex));
+        form.addView(prestigeEnabled);
+        form.addView(formLabel("威望道具组合（逗号分隔）"));
+        EditText prestigeItems = new EditText(this);
+        prestigeItems.setSingleLine(true);
+        prestigeItems.setText(automationCoordinator.prestigeItemsText(accountIndex));
+        form.addView(prestigeItems, formFieldParams());
 
         form.addView(formLabel("装备定向转移（最多10件，每5件自动分批）"));
         EditText equipmentItems = new EditText(this);
@@ -657,66 +689,62 @@ public final class MainActivity extends Activity {
         notice.setTextColor(Color.rgb(160, 166, 178));
         form.addView(notice);
 
+        java.util.function.BooleanSupplier saveAll = () -> saveAutomationForm(
+                accountIndex, auctionEnabled, auctionItems, buyer, hours,
+                storeEnabled, templeEnabled, warehouseEnabled, warehouseItem,
+                dungeonItems, prestigeEnabled, prestigeItems, equipmentItems,
+                equipmentPrice, equipmentBuyer);
+
         Button auctionNow = makeButton("保存并立即拍卖", view -> {
-            if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                    buyer, hours, storeEnabled, templeEnabled, warehouseEnabled,
-                    warehouseItem, equipmentItems,
-                    equipmentPrice, equipmentBuyer)) {
+            if (saveAll.getAsBoolean()) {
                 automationCoordinator.runAuctionNow(accountIndex);
             }
         });
         form.addView(auctionNow, automationActionParams());
         Button auctionBuyNow = makeButton("保存并立即购买拍卖道具", view -> {
-            if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                    buyer, hours, storeEnabled, templeEnabled, warehouseEnabled,
-                    warehouseItem, equipmentItems,
-                    equipmentPrice, equipmentBuyer)) {
+            if (saveAll.getAsBoolean()) {
                 automationCoordinator.runAuctionBuyNow(accountIndex);
             }
         });
         form.addView(auctionBuyNow, automationActionParams());
         Button storeSellNow = makeButton("保存并立即卖出金币券", view -> {
-            if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                    buyer, hours, storeEnabled, templeEnabled, warehouseEnabled,
-                    warehouseItem, equipmentItems,
-                    equipmentPrice, equipmentBuyer)) {
+            if (saveAll.getAsBoolean()) {
                 automationCoordinator.runStoreSellNow(accountIndex);
             }
         });
         form.addView(storeSellNow, automationActionParams());
         Button templeNow = makeButton("保存并立即检查圣殿挂机", view -> {
-            if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                    buyer, hours, storeEnabled, templeEnabled, warehouseEnabled,
-                    warehouseItem, equipmentItems,
-                    equipmentPrice, equipmentBuyer)) {
+            if (saveAll.getAsBoolean()) {
                 automationCoordinator.runTempleNow(accountIndex);
             }
         });
         form.addView(templeNow, automationActionParams());
 
         Button warehouseNow = makeButton("保存并立即检查仓库存放", view -> {
-            if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                    buyer, hours, storeEnabled, templeEnabled, warehouseEnabled,
-                    warehouseItem, equipmentItems, equipmentPrice, equipmentBuyer)) {
+            if (saveAll.getAsBoolean()) {
                 automationCoordinator.runWarehouseNow(accountIndex);
             }
         });
         form.addView(warehouseNow, automationActionParams());
 
+        Button dungeonNow = makeButton("保存并立即执行副本组合", view -> {
+            if (saveAll.getAsBoolean()) automationCoordinator.runDungeonNow(accountIndex);
+        });
+        form.addView(dungeonNow, automationActionParams());
+
+        Button prestigeNow = makeButton("保存并立即检查威望道具", view -> {
+            if (saveAll.getAsBoolean()) automationCoordinator.runPrestigeNow(accountIndex);
+        });
+        form.addView(prestigeNow, automationActionParams());
+
         Button equipmentSellNow = makeButton("保存并立即上架装备", view -> {
-            if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                    buyer, hours, storeEnabled, templeEnabled, warehouseEnabled,
-                    warehouseItem, equipmentItems,
-                    equipmentPrice, equipmentBuyer)) {
+            if (saveAll.getAsBoolean()) {
                 automationCoordinator.runEquipmentSellNow(accountIndex);
             }
         });
         form.addView(equipmentSellNow, automationActionParams());
         Button equipmentBuyNow = makeButton("保存并立即购买装备", view -> {
-            if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                    buyer, hours, storeEnabled, templeEnabled, warehouseEnabled,
-                    warehouseItem, equipmentItems,
-                    equipmentPrice, equipmentBuyer)) {
+            if (saveAll.getAsBoolean()) {
                 automationCoordinator.runEquipmentBuyNow(accountIndex);
             }
         });
@@ -730,10 +758,7 @@ public final class MainActivity extends Activity {
                 .create();
         dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
                 .setOnClickListener(view -> {
-                    if (saveAutomationForm(accountIndex, auctionEnabled, auctionItems,
-                            buyer, hours, storeEnabled, templeEnabled, warehouseEnabled,
-                            warehouseItem, equipmentItems,
-                            equipmentPrice, equipmentBuyer)) {
+                    if (saveAll.getAsBoolean()) {
                         dialog.dismiss();
                         showToast("脚本设置已保存");
                     }
@@ -746,6 +771,8 @@ public final class MainActivity extends Activity {
                                        EditText buyer, EditText hours,
                                        CheckBox storeEnabled, CheckBox templeEnabled,
                                        CheckBox warehouseEnabled, EditText warehouseItem,
+                                       EditText dungeonItems, CheckBox prestigeEnabled,
+                                       EditText prestigeItems,
                                        EditText equipmentItems, EditText equipmentPrice,
                                        EditText equipmentBuyer) {
         try {
@@ -759,6 +786,10 @@ public final class MainActivity extends Activity {
             automationCoordinator.configureTemple(accountIndex, templeEnabled.isChecked());
             automationCoordinator.configureWarehouse(accountIndex,
                     warehouseEnabled.isChecked(), warehouseItem.getText().toString());
+            automationCoordinator.configureDungeonSequence(accountIndex,
+                    dungeonItems.getText().toString());
+            automationCoordinator.configurePrestige(accountIndex,
+                    prestigeEnabled.isChecked(), prestigeItems.getText().toString());
             int transferPrice = Integer.parseInt(equipmentPrice.getText().toString().trim());
             automationCoordinator.configureEquipmentTransfer(accountIndex,
                     equipmentItems.getText().toString(), transferPrice,
@@ -1062,9 +1093,23 @@ public final class MainActivity extends Activity {
                 }
                 case "configure_warehouse_sync": {
                     int index = requiredAccountIndex(parameters);
+                    JSONArray itemArray = parameters.optJSONArray("items");
+                    StringBuilder itemText = new StringBuilder();
+                    if (itemArray != null) {
+                        for (int i = 0; i < itemArray.length(); i++) {
+                            if (i > 0) itemText.append(',');
+                            itemText.append(itemArray.optString(i));
+                        }
+                    } else {
+                        String legacyItem = parameters.optString("item", "").trim();
+                        if (legacyItem.isEmpty()) {
+                            throw new IllegalArgumentException("存仓道具列表无效");
+                        }
+                        itemText.append(legacyItem);
+                    }
                     automationCoordinator.configureWarehouse(index,
                             parameters.optBoolean("enabled", false),
-                            parameters.optString("item", "护宠仙石"));
+                            itemText.toString());
                     success = true;
                     resultMessage = "仓库自动存放设置已更新";
                     break;
@@ -1074,6 +1119,49 @@ public final class MainActivity extends Activity {
                     automationCoordinator.runWarehouseNow(index);
                     success = true;
                     resultMessage = "已启动仓库存放检查";
+                    break;
+                }
+                case "configure_dungeon_sequence": {
+                    int index = requiredAccountIndex(parameters);
+                    JSONArray itemArray = parameters.optJSONArray("items");
+                    if (itemArray == null) throw new IllegalArgumentException("副本列表无效");
+                    StringBuilder itemText = new StringBuilder();
+                    for (int i = 0; i < itemArray.length(); i++) {
+                        if (i > 0) itemText.append(',');
+                        itemText.append(itemArray.optString(i));
+                    }
+                    automationCoordinator.configureDungeonSequence(index, itemText.toString());
+                    success = true;
+                    resultMessage = "副本组合已更新";
+                    break;
+                }
+                case "run_dungeon_sequence": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.runDungeonNow(index);
+                    success = true;
+                    resultMessage = "已启动副本组合";
+                    break;
+                }
+                case "configure_prestige_items": {
+                    int index = requiredAccountIndex(parameters);
+                    JSONArray itemArray = parameters.optJSONArray("items");
+                    if (itemArray == null) throw new IllegalArgumentException("威望道具列表无效");
+                    StringBuilder itemText = new StringBuilder();
+                    for (int i = 0; i < itemArray.length(); i++) {
+                        if (i > 0) itemText.append(',');
+                        itemText.append(itemArray.optString(i));
+                    }
+                    automationCoordinator.configurePrestige(index,
+                            parameters.optBoolean("enabled", false), itemText.toString());
+                    success = true;
+                    resultMessage = "威望道具设置已更新";
+                    break;
+                }
+                case "run_prestige_items": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.runPrestigeNow(index);
+                    success = true;
+                    resultMessage = "已启动威望道具检查";
                     break;
                 }
                 case "configure_equipment_transfer": {

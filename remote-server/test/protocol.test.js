@@ -199,6 +199,37 @@ test("device telemetry and browser command complete a round trip", async (contex
   const warehouseRun = await warehouseRunPromise;
   assert.equal(warehouseRun.command, "run_warehouse_sync");
 
+  const warehouseComboPromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "configure_warehouse_sync",
+    parameters: { accountIndex: 2, enabled: true, items: ["护宠仙石", "雨露结晶"] }
+  }));
+  const warehouseCombo = await warehouseComboPromise;
+  assert.deepEqual(warehouseCombo.parameters.items, ["护宠仙石", "雨露结晶"]);
+
+  const dungeonPromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "configure_dungeon_sequence",
+    parameters: { accountIndex: 2, items: ["绘画小屋", "伊苏王的神墓"] }
+  }));
+  const dungeon = await dungeonPromise;
+  assert.deepEqual(dungeon.parameters.items, ["绘画小屋", "伊苏王的神墓"]);
+
+  const prestigePromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "configure_prestige_items",
+    parameters: { accountIndex: 2, enabled: true, items: ["黑暗徽章", "黑暗宝石"] }
+  }));
+  const prestige = await prestigePromise;
+  assert.equal(prestige.parameters.enabled, true);
+  assert.deepEqual(prestige.parameters.items, ["黑暗徽章", "黑暗宝石"]);
+
   const equipmentPromise = nextJson(device, "command.request");
   control.send(JSON.stringify({
     type: "command.send",
@@ -294,7 +325,7 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    ok: true, service: "play-keeper-relay", version: "1.5.0"
+    ok: true, service: "play-keeper-relay", version: "1.6.0"
   });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);

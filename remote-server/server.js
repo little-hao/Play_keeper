@@ -85,12 +85,20 @@ const commandValidators = {
   configure_warehouse_sync(parameters) {
     return accountParameters(parameters)
       && typeof parameters.enabled === "boolean"
-      && typeof parameters.item === "string"
-      && parameters.item.trim().length >= 1
-      && parameters.item.trim().length <= 30
-      && !/[\r\n\t]/.test(parameters.item);
+      && (validItemList(parameters.items, 10)
+        || validLegacyItem(parameters.item));
   },
   run_warehouse_sync: accountParameters,
+  configure_dungeon_sequence(parameters) {
+    return accountParameters(parameters) && validItemList(parameters.items, 20);
+  },
+  run_dungeon_sequence: accountParameters,
+  configure_prestige_items(parameters) {
+    return accountParameters(parameters)
+      && typeof parameters.enabled === "boolean"
+      && validItemList(parameters.items, 10);
+  },
+  run_prestige_items: accountParameters,
   configure_equipment_transfer(parameters) {
     return accountParameters(parameters)
       && Array.isArray(parameters.items)
@@ -115,6 +123,22 @@ const commandValidators = {
   },
   run_temple_guard: accountParameters
 };
+
+function validItemList(items, maximum) {
+  return Array.isArray(items)
+    && items.length >= 1
+    && items.length <= maximum
+    && items.every((item) => typeof item === "string"
+      && item.trim().length >= 1 && item.trim().length <= 30
+      && !/[\r\n\t]/.test(item));
+}
+
+function validLegacyItem(item) {
+  return typeof item === "string"
+    && item.trim().length >= 1
+    && item.trim().length <= 30
+    && !/[\r\n\t]/.test(item);
+}
 
 function finiteRange(value, minimum, maximum) {
   return typeof value === "number" && Number.isFinite(value)
@@ -169,7 +193,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.5.0" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.6.0" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {

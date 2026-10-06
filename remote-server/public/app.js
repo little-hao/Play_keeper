@@ -268,6 +268,9 @@ function renderDevices() {
     const templeEnabled = card.querySelector(".temple-enabled");
     const warehouseEnabled = card.querySelector(".warehouse-enabled");
     const warehouseItem = card.querySelector(".warehouse-item");
+    const dungeonItemsInput = card.querySelector(".dungeon-items");
+    const prestigeEnabled = card.querySelector(".prestige-enabled");
+    const prestigeItemsInput = card.querySelector(".prestige-items");
     const equipmentItemsInput = card.querySelector(".equipment-items");
     const equipmentPriceInput = card.querySelector(".equipment-price");
     const equipmentBuyerInput = card.querySelector(".equipment-buyer");
@@ -294,6 +297,11 @@ function renderDevices() {
     warehouseEnabled.checked = automation.warehouseEnabled === true;
     warehouseItem.value = typeof automation.warehouseItem === "string"
       && automation.warehouseItem.trim() ? automation.warehouseItem.trim() : "护宠仙石";
+    dungeonItemsInput.value = Array.isArray(automation.dungeonItems)
+      ? automation.dungeonItems.join(",") : "绘画小屋,伊苏王的神墓,火龙王的宫殿,史芬克斯密穴";
+    prestigeEnabled.checked = automation.prestigeEnabled === true;
+    prestigeItemsInput.value = Array.isArray(automation.prestigeItems)
+      ? automation.prestigeItems.join(",") : "黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石";
     equipmentItemsInput.value = Array.isArray(automation.equipmentItems)
       ? automation.equipmentItems.join(",") : defaultEquipmentItems;
     equipmentPriceInput.value = String(Number.isInteger(automation.equipmentPrice)
@@ -320,7 +328,12 @@ function renderDevices() {
         .map((item) => item.trim()).filter(Boolean);
       const equipmentPrice = Number.parseInt(equipmentPriceInput.value, 10);
       const equipmentBuyer = equipmentBuyerInput.value.trim();
-      const warehouseItemName = warehouseItem.value.trim();
+      const warehouseItems = warehouseItem.value.split(/[,，\n]/)
+        .map((item) => item.trim()).filter(Boolean);
+      const dungeonItems = dungeonItemsInput.value.split(/[,，\n]/)
+        .map((item) => item.trim()).filter(Boolean);
+      const prestigeItems = prestigeItemsInput.value.split(/[,，\n]/)
+        .map((item) => item.trim()).filter(Boolean);
       if (!items.length || items.length > 10 || items.some((item) => item.length > 30)) {
         return addLog("拍卖道具需填写1–10种，每项不超过30字");
       }
@@ -338,8 +351,17 @@ function renderDevices() {
       if (!/^[A-Za-z0-9@_.-]{0,30}$/.test(equipmentBuyer)) {
         return addLog("装备指定买家ID格式无效");
       }
-      if (!warehouseItemName || warehouseItemName.length > 30 || /[\r\n\t]/.test(warehouseItemName)) {
-        return addLog("存仓道具需填写1–30个字符");
+      if (!warehouseItems.length || warehouseItems.length > 10
+          || warehouseItems.some((item) => item.length > 30)) {
+        return addLog("存仓组合需填写1–10种，每项不超过30字");
+      }
+      if (!dungeonItems.length || dungeonItems.length > 20
+          || dungeonItems.some((item) => item.length > 30)) {
+        return addLog("副本组合需填写1–20项，每项不超过30字");
+      }
+      if (!prestigeItems.length || prestigeItems.length > 10
+          || prestigeItems.some((item) => item.length > 30)) {
+        return addLog("威望道具需填写1–10种，每项不超过30字");
       }
       sendCommand(device.deviceId, "configure_auto_auction", {
         accountIndex: activeAccountIndex,
@@ -361,7 +383,16 @@ function renderDevices() {
       sendCommand(device.deviceId, "configure_warehouse_sync", {
         accountIndex: activeAccountIndex,
         enabled: warehouseEnabled.checked,
-        item: warehouseItemName
+        items: warehouseItems
+      });
+      sendCommand(device.deviceId, "configure_dungeon_sequence", {
+        accountIndex: activeAccountIndex,
+        items: dungeonItems
+      });
+      sendCommand(device.deviceId, "configure_prestige_items", {
+        accountIndex: activeAccountIndex,
+        enabled: prestigeEnabled.checked,
+        items: prestigeItems
       });
       sendCommand(device.deviceId, "configure_equipment_transfer", {
         accountIndex: activeAccountIndex,
@@ -387,6 +418,12 @@ function renderDevices() {
     });
     card.querySelector(".run-temple").addEventListener("click", () => {
       if (saveAutomation()) sendCommand(device.deviceId, "run_temple_guard", { accountIndex: activeAccountIndex });
+    });
+    card.querySelector(".run-dungeons").addEventListener("click", () => {
+      if (saveAutomation()) sendCommand(device.deviceId, "run_dungeon_sequence", { accountIndex: activeAccountIndex });
+    });
+    card.querySelector(".run-prestige").addEventListener("click", () => {
+      if (saveAutomation()) sendCommand(device.deviceId, "run_prestige_items", { accountIndex: activeAccountIndex });
     });
     card.querySelector(".confirm-temple").addEventListener("click", () => {
       sendCommand(device.deviceId, "resolve_temple_confirmation", { accountIndex: activeAccountIndex, enterTemple: true });
