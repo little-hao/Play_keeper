@@ -63,6 +63,7 @@ import java.util.Locale;
 
 public final class MainActivity extends Activity {
     private static final String START_URL = "http://sgplay.cc/home.html#/";
+    private static final String AFK_URL = "http://sgplay.cc/AFK.html#/hang";
     private static final String PREFS = "sgplay_keeper";
     private static final String PREF_ACTIVE_ACCOUNT = "active_account";
     private static final String PREF_DESKTOP_PREFIX = "desktop_mode_";
@@ -412,6 +413,16 @@ public final class MainActivity extends Activity {
                     @Override
                     public void openHome(int accountIndex) {
                         getOrCreateSession(accountIndex).webView.loadUrl(START_URL);
+                    }
+
+                    @Override
+                    public void openAfk(int accountIndex) {
+                        getOrCreateSession(accountIndex).webView.loadUrl(AFK_URL);
+                    }
+
+                    @Override
+                    public void activateAccount(int accountIndex) {
+                        selectAccount(accountIndex, false);
                     }
 
                     @Override
