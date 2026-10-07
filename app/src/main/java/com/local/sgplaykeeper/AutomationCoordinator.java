@@ -988,8 +988,10 @@ final class AutomationCoordinator {
         view.evaluateJavascript(script, encoded -> {
             JSONObject result = decodeObject(encoded);
             if (result == null || !"ok".equals(result.optString("status"))) {
-                handler.postDelayed(() -> waitForEquipmentBatchClear(
-                        accountIndex, view, items, nextIndex, manual), EQUIPMENT_WAIT_INTERVAL_MS);
+                updateState(accountIndex, "卖方已离开装备交易所，正在自动返回并刷新成交状态");
+                host.activateAccount(accountIndex);
+                handler.postDelayed(() -> navigateToEquipmentExchangeForBatchWait(
+                        accountIndex, view, items, nextIndex, manual, 0), 500L);
                 return;
             }
             int count = result.optInt("count", 0);
@@ -1013,6 +1015,44 @@ final class AutomationCoordinator {
             }
             handler.postDelayed(() -> waitForEquipmentBatchClear(
                     accountIndex, view, items, nextIndex, manual), EQUIPMENT_WAIT_INTERVAL_MS);
+        });
+    }
+
+    private void navigateToEquipmentExchangeForBatchWait(int accountIndex, WebView view,
+                                                           List<String> items, int nextIndex,
+                                                           boolean manual, int attempt) {
+        RuntimeState state = states[accountIndex];
+        if (stopped || !state.busy || !"equipment_sell".equals(state.task)) return;
+        String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
+                + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'');"
+                + orientationRecoveryScript(accountIndex)
+                + "const box=Array.from(document.querySelectorAll('.cont-box'))"
+                + ".find(e=>visible(e)&&(e.textContent||'').includes('价格(金币)'));"
+                + "if(box)return 'ready';"
+                + robustNavigationScript("装备交易所", "exchange_clicked")
+                + "return 'missing';})()";
+        view.evaluateJavascript(script, encoded -> {
+            String result = decodeString(encoded);
+            if ("ready".equals(result)) {
+                updateState(accountIndex, "已自动返回装备交易所，继续刷新成交状态");
+                handler.postDelayed(() -> waitForEquipmentBatchClear(
+                        accountIndex, view, items, nextIndex, manual), 500L);
+            } else if ((result.endsWith("_clicked")
+                    || "orientation_clicked".equals(result)
+                    || "orientation_waiting".equals(result))
+                    && attempt < MANUAL_RECOVERY_ATTEMPTS) {
+                states[accountIndex].orientationRecoveryClicked =
+                        result.startsWith("orientation_");
+                handler.postDelayed(() -> navigateToEquipmentExchangeForBatchWait(
+                        accountIndex, view, items, nextIndex, manual, attempt + 1), 1_500L);
+            } else if (attempt == 0) {
+                host.openHome(accountIndex);
+                handler.postDelayed(() -> navigateToEquipmentExchangeForBatchWait(
+                        accountIndex, view, items, nextIndex, manual, 1), 4_000L);
+            } else {
+                finish(accountIndex, "equipment_sell", "error",
+                        "卖方无法自动返回装备交易所，后续装备仍保留在背包", manual);
+            }
         });
     }
 
@@ -1203,7 +1243,8 @@ final class AutomationCoordinator {
                 + "const text=(document.body?.innerText||'').replace(/\\s+/g,'');"
                 + "const hasBackpack=Array.from(document.querySelectorAll('.cont-box'))"
                 + ".some(e=>visible(e)&&/背包道具数/.test(e.textContent||''));"
-                + "if(hasBackpack&&text.includes('拍卖的道具'))return 'ready';"
+                + "const auctionTab=document.querySelector('[name=\"道具拍卖\"],.nav-box .btn1');"
+                + "if(hasBackpack&&visible(auctionTab))return 'ready';"
                 + robustNavigationScript("道具交易所", "auction_clicked")
                 + "return 'missing';})()";
         view.evaluateJavascript(script, encoded -> {
@@ -1420,8 +1461,10 @@ final class AutomationCoordinator {
         String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
                 + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'');"
                 + orientationRecoveryScript(accountIndex)
-                + "const text=(document.body?.innerText||'').replace(/\\s+/g,'');"
-                + "if(text.includes('拍卖的道具')&&text.includes('购买'))return 'ready';"
+                + "const boxes=Array.from(document.querySelectorAll('.cont-box')).filter(visible);"
+                + "const market=boxes.some(e=>(e.textContent||'').includes('价格(金币)'));"
+                + "const auctionTab=document.querySelector('[name=\"道具拍卖\"],.nav-box .btn1');"
+                + "if(market&&visible(auctionTab))return 'ready';"
                 + robustNavigationScript("道具交易所", "auction_clicked")
                 + "return 'missing';})()";
         view.evaluateJavascript(script, encoded -> {
@@ -1795,6 +1838,10 @@ final class AutomationCoordinator {
                         + JSONObject.quote(fallbackSelector) + ")).find(visible);"
                         + "if(classTarget){navClick(classTarget);return "
                         + JSONObject.quote(clickedResult) + ";}")
+                + ("装备交易所".equals(targetLabel)
+                ? "const mapSwitch=Array.from(document.querySelectorAll('[name^=\"切换地图\"]')).find(visible);"
+                        + "if(mapSwitch){navClick(mapSwitch);return 'map_clicked';}"
+                : "")
                 + "const town=navAll.find(e=>visible(e)&&navValue(e).includes('中心城镇'));"
                 + "if(town){navClick(town);return 'town_clicked';}"
                 + "const townByClass=Array.from(document.querySelectorAll('.nav-btn.bg2')).find(visible);"
@@ -2012,8 +2059,8 @@ final class AutomationCoordinator {
             String result = decodeString(encoded);
             if ("accepted".equals(result)) {
                 updateState(accountIndex, "已一键接受日常任务");
-                handler.postDelayed(() -> acceptDailyTasksBeforeDungeons(
-                        accountIndex, view, continuation, attempt + 1), 900L);
+                handler.postDelayed(() -> closeTaskModalAndContinue(
+                        view, continuation), 700L);
             } else if ("done".equals(result)) {
                 handler.postDelayed(continuation, 400L);
             } else if (("opened".equals(result) || "daily_clicked".equals(result)
@@ -2025,6 +2072,14 @@ final class AutomationCoordinator {
                 handler.postDelayed(continuation, 400L);
             }
         });
+    }
+
+    private void closeTaskModalAndContinue(WebView view, Runnable continuation) {
+        view.evaluateJavascript("(function(){const visible=e=>e&&e.getClientRects().length>0;"
+                + "const modal=Array.from(document.querySelectorAll('.task-modal,[role=dialog],.uni-popup__wrapper'))"
+                + ".find(e=>visible(e)&&(e.textContent||'').replace(/\\s+/g,'').includes('任务列表'));"
+                + "const close=modal?.querySelector('.task-close');if(close)close.click();return true;})()", null);
+        handler.postDelayed(continuation, 400L);
     }
 
     private void preparePrestigeBeforeDungeon(int accountIndex, WebView view,
