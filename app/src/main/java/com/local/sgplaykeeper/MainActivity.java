@@ -32,6 +32,7 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.webkit.CookieManager;
+import android.webkit.JsResult;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -120,6 +121,7 @@ public final class MainActivity extends Activity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Session[] sessions = new Session[MAX_ACCOUNTS];
     private final Button[] accountButtons = new Button[MAX_ACCOUNTS];
+    private final long[] dailyTaskConfirmationUntil = new long[MAX_ACCOUNTS];
 
     private FrameLayout root;
     private LinearLayout pageColumn;
@@ -465,6 +467,12 @@ public final class MainActivity extends Activity {
                             }
                         }
                         return -1;
+                    }
+
+                    @Override
+                    public void expectDailyTaskConfirmation(int accountIndex) {
+                        dailyTaskConfirmationUntil[accountIndex] =
+                                System.currentTimeMillis() + 10_000L;
                     }
 
                     @Override
@@ -1689,6 +1697,24 @@ public final class MainActivity extends Activity {
                 if (session.index == activeAccount) {
                     updateProgress(newProgress);
                 }
+            }
+
+            @Override
+            public boolean onJsConfirm(WebView currentView, String url,
+                                       String message, JsResult result) {
+                String host = url == null ? null : Uri.parse(url).getHost();
+                boolean expected = System.currentTimeMillis()
+                        <= dailyTaskConfirmationUntil[session.index]
+                        && "sgplay.cc".equalsIgnoreCase(host)
+                        && message != null
+                        && message.contains("一键接受")
+                        && message.contains("日常任务");
+                if (expected) {
+                    dailyTaskConfirmationUntil[session.index] = 0L;
+                    result.confirm();
+                    return true;
+                }
+                return super.onJsConfirm(currentView, url, message, result);
             }
         });
 

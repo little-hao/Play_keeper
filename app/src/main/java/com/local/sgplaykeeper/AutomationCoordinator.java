@@ -41,6 +41,8 @@ final class AutomationCoordinator {
 
         int findOpenedAccountByLabel(String accountLabel, int excludingAccountIndex);
 
+        void expectDailyTaskConfirmation(int accountIndex);
+
         void onAutomationChanged();
 
         void showMessage(String message);
@@ -2041,6 +2043,7 @@ final class AutomationCoordinator {
 
     private void acceptDailyTasksBeforeDungeons(int accountIndex, WebView view,
                                                   Runnable continuation, int attempt) {
+        host.expectDailyTaskConfirmation(accountIndex);
         String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
                 + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'').trim();"
                 + "const modal=Array.from(document.querySelectorAll('.task-modal,[role=dialog],.uni-popup__wrapper'))"
