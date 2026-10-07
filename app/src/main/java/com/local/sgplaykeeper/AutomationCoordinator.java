@@ -1562,7 +1562,7 @@ final class AutomationCoordinator {
         List<String> items = parseAllowedItems(
                 storeSellItemsText(accountIndex), ALLOWED_STORE_ITEMS);
         if (items.isEmpty()) {
-            finish(accountIndex, "store_sell", "error", "商店卖出道具列表为空", manual);
+            failStoreSell(accountIndex, manual, "商店卖出道具列表为空", completion);
             return;
         }
         state.busy = true;
@@ -1576,7 +1576,7 @@ final class AutomationCoordinator {
         try {
             view = host.requireWebView(accountIndex);
         } catch (RuntimeException error) {
-            finish(accountIndex, "store_sell", "error", "账号页面未就绪", manual);
+            failStoreSell(accountIndex, manual, "账号页面未就绪", completion);
             return;
         }
         state.storeSoldNames.clear();
@@ -1612,8 +1612,8 @@ final class AutomationCoordinator {
                     handler.postDelayed(() -> navigateToStore(
                             accountIndex, view, items, manual, attempt + 1, completion), 1_500L);
                 } else {
-                    finish(accountIndex, "store_sell", "error",
-                            "横屏提示30秒后仍未恢复，已暂停等待手动介入", manual);
+                    failStoreSell(accountIndex, manual,
+                            "横屏提示30秒后仍未恢复", completion);
                 }
             } else if (result.endsWith("_clicked") && attempt < MANUAL_RECOVERY_ATTEMPTS) {
                 long delay = "store_clicked".equals(result) ? 3_000L : 1_500L;
@@ -1624,8 +1624,8 @@ final class AutomationCoordinator {
                 handler.postDelayed(() -> navigateToStore(
                         accountIndex, view, items, manual, 1, completion), 4_000L);
             } else {
-                finish(accountIndex, "store_sell", "error",
-                        "未找到“中心城镇 → 道具商店”入口", manual);
+                failStoreSell(accountIndex, manual,
+                        "未找到“中心城镇 → 道具商店”入口", completion);
             }
         });
     }
@@ -1681,8 +1681,8 @@ final class AutomationCoordinator {
                 return;
             }
             if (!"dialog".equals(status)) {
-                finish(accountIndex, "store_sell", "error",
-                        itemName + "：道具商店页面结构不匹配，未卖出", manual);
+                failStoreSell(accountIndex, manual,
+                        itemName + "：道具商店页面结构不匹配，未卖出", completion);
                 return;
             }
             int quantity = result.optInt("quantity", 0);
@@ -1727,8 +1727,8 @@ final class AutomationCoordinator {
                             itemIndex, itemName, quantity, manual, attempt + 1, completion), 600L);
                     return;
                 }
-                finish(accountIndex, "store_sell", "error",
-                        itemName + "：卖出前复核失败（" + reason + "）", manual);
+                failStoreSell(accountIndex, manual,
+                        itemName + "：卖出前复核失败（" + reason + "）", completion);
                 return;
             }
             updateState(accountIndex, String.format(Locale.ROOT,
@@ -1753,8 +1753,8 @@ final class AutomationCoordinator {
                             items, itemIndex, itemName, manual, attempt + 1, completion), 2_000L);
                     return;
                 }
-                finish(accountIndex, "store_sell", "error",
-                        itemName + "：卖出对话框未关闭，请手动检查", manual);
+                failStoreSell(accountIndex, manual,
+                        itemName + "：卖出对话框未关闭，请手动检查", completion);
                 return;
             }
             handler.postDelayed(() -> processStoreItem(
@@ -1779,6 +1779,10 @@ final class AutomationCoordinator {
         JSONArray labels = new JSONArray();
         labels.put(targetLabel);
         if ("道具交易所".equals(targetLabel)) labels.put("交易所");
+        String fallbackSelector = "";
+        if ("道具商店".equals(targetLabel)) fallbackSelector = ".btn6";
+        if ("道具交易所".equals(targetLabel)) fallbackSelector = ".btn2";
+        if ("装备交易所".equals(targetLabel)) fallbackSelector = ".btn20";
         return "const navAll=Array.from(document.querySelectorAll('button,[role=button],uni-button,a,view,div,span,img,[name],[aria-label],[title],[alt]'));"
                 + "const navValue=e=>[(e.getAttribute('name')||''),(e.getAttribute('aria-label')||''),"
                 + "(e.getAttribute('title')||''),(e.getAttribute('alt')||''),clean(e)].map(v=>v.replace(/\\s+/g,'').trim());"
@@ -1786,10 +1790,29 @@ final class AutomationCoordinator {
                 + "const labels=" + labels + ";"
                 + "const target=navAll.find(e=>visible(e)&&navValue(e).some(v=>labels.includes(v)));"
                 + "if(target){navClick(target);return " + JSONObject.quote(clickedResult) + ";}"
+                + (fallbackSelector.isEmpty() ? "" :
+                "const classTarget=Array.from(document.querySelectorAll("
+                        + JSONObject.quote(fallbackSelector) + ")).find(visible);"
+                        + "if(classTarget){navClick(classTarget);return "
+                        + JSONObject.quote(clickedResult) + ";}")
                 + "const town=navAll.find(e=>visible(e)&&navValue(e).includes('中心城镇'));"
                 + "if(town){navClick(town);return 'town_clicked';}"
+                + "const townByClass=Array.from(document.querySelectorAll('.nav-btn.bg2')).find(visible);"
+                + "if(townByClass){navClick(townByClass);return 'town_clicked';}"
                 + "const game=navAll.find(e=>visible(e)&&navValue(e).includes('进入主游戏'));"
                 + "if(game){navClick(game);return 'game_clicked';}";
+    }
+
+    private void failStoreSell(int accountIndex, boolean manual,
+                               String message, Runnable completion) {
+        if (completion == null) {
+            finish(accountIndex, "store_sell", "error", message, manual);
+            return;
+        }
+        RuntimeState state = states[accountIndex];
+        state.busy = false;
+        updateState(accountIndex, message + "，已跳过金币券预处理并继续装备购买");
+        handler.postDelayed(completion, 500L);
     }
 
     private void verifyTargetEquipmentEquipped(int accountIndex, WebView view,
