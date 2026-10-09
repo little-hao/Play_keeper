@@ -215,7 +215,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.10.1" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.10.2" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css?v=1.10.1">
+  <link rel="stylesheet" href="/styles.css?v=1.10.2">
 </head>
 <body>
   <main class="shell">
@@ -73,6 +73,16 @@
           <label>完成报告邮箱<input id="planReportEmail" type="email" value="konghao0920@gmail.com"></label>
           <label class="toggle-row"><input id="planScheduleEnabled" type="checkbox"> 每天定时运行</label>
           <label>运行时间（北京时间）<input id="planScheduleTime" type="time" value="04:00"></label>
+        </div>
+        <div class="quick-account-actions">
+          <label>小号道具拍卖
+            <select id="quickAuctionAccount"></select>
+          </label>
+          <button id="quickAuctionToMain" class="secondary">拍卖组合道具到 hao</button>
+          <button id="quickMainBuy" class="secondary">hao 购买全部920金币道具</button>
+          <label>挂机账号<select id="quickHangAccount"></select></label>
+          <label>挂机副本<input id="quickHangMap" value="圣兽云殿" maxlength="30"></label>
+          <button id="quickStartHang" class="secondary">该账号开始挂机</button>
         </div>
         <div class="plan-progress"><span id="dailyPlanProgress"></span></div>
         <div class="automation-actions action-grid">
@@ -228,6 +238,6 @@
       <div id="selectOptions" class="select-options" role="radiogroup"></div>
     </section>
   </div>
-  <script type="module" src="/app.js?v=1.10.1"></script>
+  <script type="module" src="/app.js?v=1.10.2"></script>
 </body>
 </html>

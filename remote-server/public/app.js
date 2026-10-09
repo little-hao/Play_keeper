@@ -33,6 +33,12 @@ const elements = {
   planScheduleTime: document.querySelector("#planScheduleTime"),
   savePlanSchedule: document.querySelector("#savePlanSchedule"),
   planScheduleStatus: document.querySelector("#planScheduleStatus"),
+  quickAuctionAccount: document.querySelector("#quickAuctionAccount"),
+  quickAuctionToMain: document.querySelector("#quickAuctionToMain"),
+  quickMainBuy: document.querySelector("#quickMainBuy"),
+  quickHangAccount: document.querySelector("#quickHangAccount"),
+  quickHangMap: document.querySelector("#quickHangMap"),
+  quickStartHang: document.querySelector("#quickStartHang"),
   keepPlayerDevice: document.querySelector("#keepPlayerDevice"),
   startKeepPlayer: document.querySelector("#startKeepPlayer"),
   exitKeepPlayer: document.querySelector("#exitKeepPlayer"),
@@ -113,6 +119,47 @@ elements.exitKeepPlayer.addEventListener("click", () => runKeepPlayerCommand("ke
 elements.refreshAllInventory.addEventListener("click", () => {
   for (const deviceId of devices.keys()) sendCommand(deviceId, "request_status", {});
   addLog("已刷新全部设备状态；可在账号行单独刷新背包数量");
+});
+elements.quickAuctionToMain.addEventListener("click", () => {
+  const target = accountTarget(elements.quickAuctionAccount.value);
+  if (!target) return addLog(`账号 ${elements.quickAuctionAccount.value || "--"} 当前不在线`);
+  const items = planResourceItems();
+  if (!items) return;
+  const returnMap = elements.planReturnMap.value.trim() || "圣兽云殿";
+  sendCommand(target.deviceId, "configure_auto_auction", { accountIndex: target.accountIndex,
+    enabled: false, items, buyer: "hao", price: 920, intervalHours: 24 });
+  sendCommand(target.deviceId, "configure_return_hang", {
+    accountIndex: target.accountIndex, map: returnMap });
+  sendCommand(target.deviceId, "switch_account", { accountIndex: target.accountIndex });
+  setTimeout(() => sendCommand(target.deviceId, "run_auto_auction",
+    { accountIndex: target.accountIndex }), 700);
+  addLog(`${target.label} 已启动组合道具拍卖，指定买家 hao`);
+});
+elements.quickMainBuy.addEventListener("click", () => {
+  const target = accountTarget("hao");
+  if (!target) return addLog("主号 hao 当前不在线");
+  const items = planResourceItems();
+  if (!items) return;
+  const returnMap = elements.planReturnMap.value.trim() || "圣兽云殿";
+  sendCommand(target.deviceId, "configure_auto_auction", { accountIndex: target.accountIndex,
+    enabled: false, items, buyer: "hao", price: 920, intervalHours: 24 });
+  sendCommand(target.deviceId, "configure_return_hang", {
+    accountIndex: target.accountIndex, map: returnMap });
+  sendCommand(target.deviceId, "switch_account", { accountIndex: target.accountIndex });
+  setTimeout(() => sendCommand(target.deviceId, "run_auction_buy",
+    { accountIndex: target.accountIndex }), 700);
+  addLog("hao 已启动全部920金币组合道具购买");
+});
+elements.quickStartHang.addEventListener("click", () => {
+  const target = accountTarget(elements.quickHangAccount.value);
+  if (!target) return addLog(`账号 ${elements.quickHangAccount.value || "--"} 当前不在线`);
+  const map = elements.quickHangMap.value.trim() || "圣兽云殿";
+  sendCommand(target.deviceId, "configure_return_hang", {
+    accountIndex: target.accountIndex, map });
+  sendCommand(target.deviceId, "switch_account", { accountIndex: target.accountIndex });
+  setTimeout(() => sendCommand(target.deviceId, "run_temple_guard",
+    { accountIndex: target.accountIndex }), 700);
+  addLog(`${target.label} 已启动${map}挂机`);
 });
 elements.selectOverlay.addEventListener("click", (event) => {
   if (event.target === elements.selectOverlay) closeSelectDialog();
@@ -331,6 +378,51 @@ function renderGlobalControls() {
   const disabled = devices.size === 0;
   elements.startKeepPlayer.disabled = disabled;
   elements.exitKeepPlayer.disabled = disabled;
+  renderQuickAccountControls();
+}
+
+function accountTarget(label) {
+  for (const device of devices.values()) {
+    const accounts = Array.isArray(device.telemetry?.accounts) ? device.telemetry.accounts : [];
+    const account = accounts.find((entry) => entry?.label === label && Number.isInteger(entry?.index));
+    if (account) return { deviceId: device.deviceId, accountIndex: account.index, label };
+  }
+  return null;
+}
+
+function renderQuickAccountControls() {
+  const auctionSelected = elements.quickAuctionAccount.value || "hao1";
+  const hangSelected = elements.quickHangAccount.value || "hao";
+  elements.quickAuctionAccount.replaceChildren();
+  elements.quickHangAccount.replaceChildren();
+  for (const label of ["hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7"]) {
+    const option = document.createElement("option");
+    option.value = label;
+    option.textContent = accountTarget(label) ? label : `${label}（离线）`;
+    elements.quickAuctionAccount.append(option);
+  }
+  for (const label of ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7"]) {
+    const option = document.createElement("option");
+    option.value = label;
+    option.textContent = accountTarget(label) ? label : `${label}（离线）`;
+    elements.quickHangAccount.append(option);
+  }
+  elements.quickAuctionAccount.value = auctionSelected;
+  elements.quickHangAccount.value = hangSelected;
+  const disabled = devices.size === 0;
+  elements.quickAuctionToMain.disabled = disabled;
+  elements.quickMainBuy.disabled = disabled;
+  elements.quickStartHang.disabled = disabled;
+}
+
+function planResourceItems() {
+  const items = elements.planResourceItems.value.split(/[,，\n]/)
+    .map((item) => item.trim()).filter(Boolean);
+  if (!items.length || items.length > 10) {
+    addLog("道具组合需填写1–10项");
+    return null;
+  }
+  return items;
 }
 
 function renderGlobalDailyMonitor() {

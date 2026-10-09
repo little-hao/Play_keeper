@@ -1440,14 +1440,18 @@ final class AutomationCoordinator {
         if (states[accountIndex].auctionListedCount >= EQUIPMENT_ACTIVE_LIMIT) {
             preferences.edit().putLong(PREF_SELL_LAST + accountIndex,
                     System.currentTimeMillis()).apply();
-            finish(accountIndex, "auction", "ok",
-                    "已达到5条道具拍卖上限，本次脚本已停止", manual);
+            completeAuctionAndReturn(accountIndex, manual,
+                    "已达到5条道具拍卖上限");
             return;
         }
         if (itemIndex >= items.size()) {
             preferences.edit().putLong(PREF_SELL_LAST + accountIndex,
                     System.currentTimeMillis()).apply();
-            requestTempleConfirmation(accountIndex, "拍卖检查完成", manual);
+            String completed = states[accountIndex].auctionListedCount == 0
+                    ? "组合道具数量均小于等于1，已跳过道具拍卖"
+                    : "拍卖检查完成，已上架"
+                    + states[accountIndex].auctionListedCount + "条";
+            completeAuctionAndReturn(accountIndex, manual, completed);
             return;
         }
         String itemName = items.get(itemIndex);
@@ -1490,6 +1494,15 @@ final class AutomationCoordinator {
             handler.postDelayed(() -> fillAndConfirmSell(accountIndex, view, items,
                     itemIndex, itemName, quantity, manual, 0), 900L);
         });
+    }
+
+    private void completeAuctionAndReturn(int accountIndex, boolean manual,
+                                          String completedMessage) {
+        if (manual) {
+            requestTempleConfirmation(accountIndex, completedMessage, true);
+        } else {
+            restoreAfkAndRunTemple(accountIndex, false, completedMessage);
+        }
     }
 
     private void fillAndConfirmSell(int accountIndex, WebView view, List<String> items,
@@ -1657,8 +1670,8 @@ final class AutomationCoordinator {
                                        int itemIndex, boolean manual) {
         if (stopped || !states[accountIndex].busy) return;
         if (states[accountIndex].auctionPurchasedCount >= 40) {
-            requestTempleConfirmation(accountIndex, "已购买40条" + auctionPrice(accountIndex)
-                    + "金币组合内拍卖，达到单次安全上限", manual);
+            completeAuctionBuyAndReturn(accountIndex, manual, "已购买40条"
+                    + auctionPrice(accountIndex) + "金币组合内拍卖，达到单次安全上限");
             return;
         }
         int price = auctionPrice(accountIndex);
@@ -1677,21 +1690,23 @@ final class AutomationCoordinator {
                 + "if(!matches.length)return JSON.stringify({status:'missing'});"
                 + "const row=matches[0],cells=Array.from(row.children).map(c=>(c.textContent||'').trim());"
                 + "const name=cells[1]||price+'金币道具';"
+                + "const quantity=parseInt((cells[3]||'').replace(/[^0-9]/g,''),10);"
                 + "row.scrollIntoView({block:'nearest'});row.click();"
                 + "const buy=Array.from(document.querySelectorAll('button,uni-button,[role=button]'))"
                 + ".find(e=>visible(e)&&(e.textContent||'').trim()==='购买');"
                 + "if(!buy)return JSON.stringify({status:'no_buy'});buy.click();"
-                + "return JSON.stringify({status:'dialog',name});})()";
+                + "return JSON.stringify({status:'dialog',name,quantity:Number.isFinite(quantity)&&quantity>0?quantity:1});})()";
         view.evaluateJavascript(script, encoded -> {
             JSONObject result = decodeObject(encoded);
             String status = result == null ? "invalid" : result.optString("status");
             if ("missing".equals(status)) {
-                requestTempleConfirmation(accountIndex,
-                        "全部" + price + "金币定向拍卖已购买完成", manual);
+                completeAuctionBuyAndReturn(accountIndex, manual,
+                        "全部" + price + "金币定向拍卖已购买完成");
             } else if ("dialog".equals(status)) {
                 String itemName = result.optString("name", price + "金币道具");
+                int quantity = Math.max(1, result.optInt("quantity", 1));
                 handler.postDelayed(() -> confirmAuctionBuy(
-                        accountIndex, view, items, itemIndex, itemName, manual, 0), 700L);
+                        accountIndex, view, items, itemIndex, itemName, quantity, manual, 0), 700L);
             } else {
                 finish(accountIndex, "auction_buy", "error",
                         price + "金币道具：无法打开购买弹窗（" + status + "）", manual);
@@ -1700,17 +1715,26 @@ final class AutomationCoordinator {
     }
 
     private void confirmAuctionBuy(int accountIndex, WebView view, List<String> items,
-                                   int itemIndex, String itemName, boolean manual,
+                                   int itemIndex, String itemName, int quantity, boolean manual,
                                    int attempt) {
         if (stopped || !states[accountIndex].busy) return;
         int price = auctionPrice(accountIndex);
         String script = "(function(){const target=" + JSONObject.quote(itemName)
-                + ",price=" + price + ";"
+                + ",price=" + price + ",quantity=" + quantity + ";"
                 + "const modal=Array.from(document.querySelectorAll('.sell-modal,[role=dialog],.uni-popup__wrapper'))"
                 + ".find(e=>e.getClientRects().length>0&&(e.textContent||'').includes(target));"
                 + "if(!modal)return 'no_dialog';"
                 + "const text=(modal.textContent||'').replace(/\\s+/g,'');"
                 + "if(!text.includes(String(price)))return 'wrong_price';"
+                + "const inputs=Array.from(modal.querySelectorAll('input')).filter(e=>e.type!=='hidden'&&!e.disabled);"
+                + "const context=e=>{let p=e.parentElement,s='';for(let i=0;p&&i<3;i++,p=p.parentElement)s+=' '+(p.textContent||'');"
+                + "return `${e.name||''} ${e.id||''} ${e.placeholder||''} ${s}`;};"
+                + "const q=inputs.find(e=>/数量|quantity/i.test(context(e)))||inputs.find(e=>e.type==='number');"
+                + "if(!q)return 'quantity_missing';"
+                + "const d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');"
+                + "d.set.call(q,String(quantity));q.dispatchEvent(new Event('input',{bubbles:true}));"
+                + "q.dispatchEvent(new Event('change',{bubbles:true}));"
+                + "if(parseInt(q.value,10)!==quantity)return 'quantity_verify_failed';"
                 + "const confirm=Array.from(modal.querySelectorAll('button,uni-button,[role=button]'))"
                 + ".find(e=>/^(?:确认购买|购买)$/.test((e.textContent||'').trim()));"
                 + "if(!confirm)return 'no_confirm';confirm.click();return 'submitted';})()";
@@ -1718,17 +1742,27 @@ final class AutomationCoordinator {
             String status = decodeString(encoded);
             if ("submitted".equals(status)) {
                 states[accountIndex].auctionPurchasedCount++;
-                updateState(accountIndex, itemName + "：已提交购买");
+                updateState(accountIndex, itemName + "：已一次购买该行全部" + quantity + "个");
                 handler.postDelayed(() -> verifyAuctionBuyAndContinue(
                         accountIndex, view, items, itemIndex, itemName, manual, 0), 2_000L);
             } else if ("no_dialog".equals(status) && attempt < 4) {
                 handler.postDelayed(() -> confirmAuctionBuy(
-                        accountIndex, view, items, itemIndex, itemName, manual, attempt + 1), 500L);
+                        accountIndex, view, items, itemIndex, itemName, quantity, manual,
+                        attempt + 1), 500L);
             } else {
                 finish(accountIndex, "auction_buy", "error",
                         itemName + "：购买前复核失败（" + status + "）", manual);
             }
         });
+    }
+
+    private void completeAuctionBuyAndReturn(int accountIndex, boolean manual,
+                                             String completedMessage) {
+        if (manual) {
+            requestTempleConfirmation(accountIndex, completedMessage, true);
+        } else {
+            restoreAfkAndRunTemple(accountIndex, false, completedMessage);
+        }
     }
 
     private void verifyAuctionBuyAndContinue(int accountIndex, WebView view, List<String> items,
@@ -2992,6 +3026,9 @@ final class AutomationCoordinator {
             state.templeStoragePrepared = false;
             host.onAutomationChanged();
             host.prepareAutomation(accountIndex, false);
+            host.openAfk(accountIndex);
+            handler.postDelayed(() -> runTempleGuard(accountIndex, manual, true), 4_000L);
+            return;
         }
         WebView view;
         try {

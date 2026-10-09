@@ -102,7 +102,7 @@ test("offers 60 seconds for manual intervention before an error stops the chain"
   assert.match(plan.snapshot().error, /60秒人工介入/);
 });
 
-test("releases a cross-device seller to the return map after equipment arrives", () => {
+test("releases every seller to the return map after equipment arrives", () => {
   const actions = [];
   const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => 1_000 });
   plan.start(route());
@@ -112,10 +112,24 @@ test("releases a cross-device seller to the return map after equipment arrives",
   plan.onTelemetry(d1, telemetry(0, {
     task: "equipment_buy", status: "running", equipmentTransferLastRunAt: 2_000
   }));
-  const release = actions.slice(-4).map((action) => action.command);
+  const release = actions.slice(-3).map((action) => action.command);
   assert.deepEqual(release,
-    ["cancel_automation", "configure_return_hang", "switch_account", "run_temple_guard"]);
+    ["cancel_automation", "configure_return_hang", "run_temple_guard"]);
   assert.equal(actions.at(-1).accountLabel, "hao");
+
+  actions.length = 0;
+  const sameDeviceRoute = route().map((entry, index) => ({ ...entry, deviceId: d1,
+    accountIndex: index === 1 ? 1 : entry.accountIndex }));
+  const sameDevicePlan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => 1_000 });
+  sameDevicePlan.start(sameDeviceRoute);
+  sameDevicePlan.onTelemetry(d1, { accounts: [
+    { index: 0, automation: { task: "equipment_sell", status: "running", equipmentListedInBatch: 5 } }
+  ] });
+  sameDevicePlan.onTelemetry(d1, { accounts: [
+    { index: 1, automation: { task: "equipment_buy", status: "running", equipmentTransferLastRunAt: 2_000 } }
+  ] });
+  assert.deepEqual(actions.slice(-3).map((action) => action.command),
+    ["cancel_automation", "configure_return_hang", "run_temple_guard"]);
 });
 
 test("rejects a route with an offline account", () => {

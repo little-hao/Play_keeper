@@ -212,13 +212,12 @@ export class EightAccountPlan {
   }
 
   #releaseCrossDeviceSellerAfterTransfer(leg, buyerAutomation) {
-    if (this.state.sellerReleased || leg.seller.deviceId === leg.buyer.deviceId) return;
+    if (this.state.sellerReleased) return;
     if (Number(buyerAutomation.equipmentTransferLastRunAt) < this.state.phaseStartedAt) return;
     this.state.sellerReleased = true;
     this.#command(leg.seller, "cancel_automation", { accountIndex: leg.seller.accountIndex });
     this.#command(leg.seller, "configure_return_hang", {
       accountIndex: leg.seller.accountIndex, map: this.state.returnMap });
-    this.#command(leg.seller, "switch_account", { accountIndex: leg.seller.accountIndex });
     this.#command(leg.seller, "run_temple_guard", { accountIndex: leg.seller.accountIndex });
   }
 

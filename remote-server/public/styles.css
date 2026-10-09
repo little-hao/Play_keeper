@@ -56,6 +56,10 @@ small { color: var(--muted); }
 .plan-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 10px 0; }
 .plan-settings label { margin: 0; }
 .plan-settings .span-2 { grid-column: span 2; }
+.quick-account-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; gap: 8px; margin: 12px 0; padding: 11px; background: #0d1118; border: 1px solid var(--line); border-radius: 10px; }
+.quick-account-actions label { margin: 0; }
+.quick-account-actions input, .quick-account-actions select { display: block; width: 100%; margin-top: 4px; padding: 10px; color: #f3f6fa; background: #090c12; border: 1px solid #343b48; border-radius: 9px; }
+.quick-account-actions button { width: 100%; }
 .daily-plan-panel .automation-actions small { align-self: center; }
 .plan-intervention { margin-top: 10px; padding: 10px; color: #ffe1aa; background: #422d0c; border: 1px solid #9d7027; border-radius: 9px; font-size: 13px; }
 .device-card { padding: 16px; }
@@ -145,7 +149,7 @@ small { color: var(--muted); }
   .device-heading strong { overflow-wrap: anywhere; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .account-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .global-control-row, .plan-settings { grid-template-columns: 1fr; }
+  .global-control-row, .plan-settings, .quick-account-actions { grid-template-columns: 1fr; }
   .plan-settings .span-2 { grid-column: span 1; }
   .button-grid { grid-template-columns: repeat(3, 1fr); }
   .daily-monitor-row { grid-template-columns: 1fr 1.4fr auto; }

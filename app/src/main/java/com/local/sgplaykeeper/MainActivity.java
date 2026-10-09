@@ -543,7 +543,7 @@ public final class MainActivity extends Activity {
                 .setMessage(message + "\n30秒内未选择将自动进入设定的挂机副本。")
                 .setNegativeButton("保持当前页", (ignored, which) ->
                         automationCoordinator.resolveTempleConfirmation(accountIndex, false))
-                .setPositiveButton("进入圣兽云殿", (ignored, which) ->
+                .setPositiveButton("进入设定挂机副本", (ignored, which) ->
                         automationCoordinator.resolveTempleConfirmation(accountIndex, true))
                 .create();
         dialog.show();
