@@ -4,6 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
+import { EightAccountPlan, resolveEightAccountRoute } from "./eight-account-plan.js";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const publicDirectory = path.join(currentDirectory, "public");
@@ -26,6 +27,8 @@ const commandValidators = {
   },
   enter_black_screen: emptyParameters,
   exit_black_screen: emptyParameters,
+  keep_player_start: emptyParameters,
+  keep_player_exit: emptyParameters,
   request_status: emptyParameters,
   preview_start(parameters) {
     return accountParameters(parameters)
@@ -102,6 +105,10 @@ const commandValidators = {
       && validItemList(parameters.items, 10);
   },
   run_prestige_items: accountParameters,
+  configure_inventory_monitor(parameters) {
+    return accountParameters(parameters) && validItemList(parameters.items, 20);
+  },
+  run_inventory_snapshot: accountParameters,
   configure_equipment_transfer(parameters) {
     return accountParameters(parameters)
       && Array.isArray(parameters.items)
@@ -197,7 +204,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.7.0" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.9.3" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -243,6 +250,38 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
   const controlServer = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
   const devices = new Map();
   const controllers = new Set();
+
+  function dispatchDeviceCommand(deviceId, command, parameters) {
+    const validator = commandValidators[command];
+    if (!validator || !validator(parameters)) throw new Error("计划生成了无效命令");
+    const target = devices.get(deviceId);
+    if (!target) throw new Error(`设备 ${deviceId} 当前不在线`);
+    const now = Date.now();
+    const commandId = crypto.randomUUID();
+    sendJson(target.socket, {
+      type: "command.request",
+      commandId,
+      command,
+      parameters,
+      issuedAt: now,
+      expiresAt: now + 30_000
+    });
+    return commandId;
+  }
+
+  const eightAccountPlan = new EightAccountPlan({
+    emitAction(action) {
+      const commandId = dispatchDeviceCommand(
+        action.deviceId, action.command, action.parameters);
+      broadcast({
+        type: "plan.command",
+        plan: "eight_account_daily",
+        commandId,
+        ...action,
+        timestamp: Date.now()
+      });
+    }
+  });
 
   function deviceSummary(entry) {
     return {
@@ -312,6 +351,11 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
           timestamp: Number(message.timestamp) || Date.now(),
           payload: entry.telemetry
         });
+        const before = JSON.stringify(eightAccountPlan.snapshot());
+        const after = eightAccountPlan.onTelemetry(entry.deviceId, entry.telemetry);
+        if (JSON.stringify(after) !== before) {
+          broadcast({ type: "plan.update", plan: "eight_account_daily", payload: after });
+        }
       } else if (message.type === "command.result" && typeof message.commandId === "string") {
         broadcast({
           type: "command.result",
@@ -353,6 +397,11 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
       if (socket.deviceId && devices.get(socket.deviceId)?.socket === socket) {
         devices.delete(socket.deviceId);
         broadcast({ type: "device.offline", deviceId: socket.deviceId, timestamp: Date.now() });
+        const before = JSON.stringify(eightAccountPlan.snapshot());
+        const after = eightAccountPlan.onDeviceOffline(socket.deviceId);
+        if (JSON.stringify(after) !== before) {
+          broadcast({ type: "plan.update", plan: "eight_account_daily", payload: after });
+        }
       }
     });
     socket.on("error", (error) => logger.warn?.("Device socket error", error.message));
@@ -380,9 +429,33 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
         controllers.add(socket);
         sendJson(socket, { type: "control.accepted", serverTime: Date.now() });
         broadcastSnapshot(socket);
+        sendJson(socket, {
+          type: "plan.update",
+          plan: "eight_account_daily",
+          payload: eightAccountPlan.snapshot()
+        });
         return;
       }
 
+      if (message.type === "plan.start") {
+        try {
+          const route = resolveEightAccountRoute([...devices.values()].map(deviceSummary));
+          const payload = eightAccountPlan.start(route);
+          broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
+        } catch (error) {
+          sendJson(socket, { type: "plan.error", message: String(error?.message || error) });
+        }
+        return;
+      }
+      if (message.type === "plan.cancel") {
+        try {
+          const payload = eightAccountPlan.cancel("用户从监控页面中断");
+          broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
+        } catch (error) {
+          sendJson(socket, { type: "plan.error", message: String(error?.message || error) });
+        }
+        return;
+      }
       if (message.type !== "command.send") return;
       const validator = commandValidators[message.command];
       const parameters = message.parameters ?? {};
@@ -399,15 +472,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
       if (!target) return sendJson(socket, { type: "command.error", message: "设备当前不在线" });
       if (message.command === "preview_start") socket.previewDevices.add(target.deviceId);
       if (message.command === "preview_stop") socket.previewDevices.delete(target.deviceId);
-      const commandId = crypto.randomUUID();
-      sendJson(target.socket, {
-        type: "command.request",
-        commandId,
-        command: message.command,
-        parameters,
-        issuedAt: now,
-        expiresAt: now + 30_000
-      });
+      const commandId = dispatchDeviceCommand(target.deviceId, message.command, parameters);
       sendJson(socket, { type: "command.queued", commandId, deviceId: target.deviceId });
     });
 

@@ -2,6 +2,7 @@ package com.local.sgplaykeeper;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -1043,6 +1044,22 @@ public final class MainActivity extends Activity {
                     success = true;
                     resultMessage = "黑屏保护已关闭";
                     break;
+                case "keep_player_start": {
+                    exitBlackMode();
+                    ActivityManager manager = (ActivityManager) getSystemService(
+                            Context.ACTIVITY_SERVICE);
+                    manager.moveTaskToFront(getTaskId(), 0);
+                    success = true;
+                    resultMessage = "Play Keeper 已切回前台";
+                    break;
+                }
+                case "keep_player_exit":
+                    stopPreview();
+                    success = moveTaskToBack(true);
+                    resultMessage = success
+                            ? "Play Keeper 已退出前台，远程连接保持在线"
+                            : "Play Keeper 无法退出前台";
+                    break;
                 case "request_status":
                     for (Session session : sessions) {
                         if (session != null) {
@@ -1205,6 +1222,27 @@ public final class MainActivity extends Activity {
                     automationCoordinator.runPrestigeNow(index);
                     success = true;
                     resultMessage = "已启动威望道具检查";
+                    break;
+                }
+                case "configure_inventory_monitor": {
+                    int index = requiredAccountIndex(parameters);
+                    JSONArray itemArray = parameters.optJSONArray("items");
+                    if (itemArray == null) throw new IllegalArgumentException("监控道具列表无效");
+                    StringBuilder itemText = new StringBuilder();
+                    for (int i = 0; i < itemArray.length(); i++) {
+                        if (i > 0) itemText.append(',');
+                        itemText.append(itemArray.optString(i));
+                    }
+                    automationCoordinator.configureInventoryMonitor(index, itemText.toString());
+                    success = true;
+                    resultMessage = "每日背包监控设置已更新";
+                    break;
+                }
+                case "run_inventory_snapshot": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.runInventorySnapshotNow(index);
+                    success = true;
+                    resultMessage = "已启动背包物资刷新";
                     break;
                 }
                 case "configure_equipment_transfer": {
@@ -1532,8 +1570,8 @@ public final class MainActivity extends Activity {
             telemetry.put("device", device);
 
             JSONObject app = new JSONObject();
-            app.put("versionCode", 12);
-            app.put("versionName", "1.5.0");
+            app.put("versionCode", BuildConfig.VERSION_CODE);
+            app.put("versionName", BuildConfig.VERSION_NAME);
             app.put("activeAccount", activeAccount);
             app.put("blackScreen", blackMode);
             app.put("executionMode", blackMode

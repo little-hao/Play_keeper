@@ -13,8 +13,10 @@ import org.json.JSONTokener;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -55,6 +57,7 @@ final class AutomationCoordinator {
     static final long BATTLE_MONITOR_INTERVAL_MS = 30L * 60L * 1000L;
     static final long WAREHOUSE_CHECK_INTERVAL_MS = 10L * 60L * 1000L;
     static final long PRESTIGE_CHECK_INTERVAL_MS = 60L * 60L * 1000L;
+    static final long INVENTORY_CHECK_INTERVAL_MS = 24L * 60L * 60L * 1000L;
     private static final long TICK_INTERVAL_MS = 60_000L;
     static final String AUCTION_PRESET_ONE = "曙光印记,进化宝石";
     static final String AUCTION_PRESET_TWO = "强化丹A,强化丹B,天仙雨露,雨露结晶";
@@ -65,8 +68,10 @@ final class AutomationCoordinator {
     private static final String DEFAULT_WAREHOUSE_ITEMS = "护宠仙石";
     static final String DEFAULT_PRESTIGE_ITEMS =
             "黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石";
-    static final String DEFAULT_EQUIPMENT_ITEMS = "柔情方巾·改,轻罗流萤衫·改,逢羡履·改,君我剑·改,佳人之恋·改,"
-            + "三生戒·改,比翼·改,相望镯·改,尾生之泪·改,龙神印记·庆";
+    static final String DEFAULT_INVENTORY_ITEMS =
+            "进化宝石,曙光印记,强化丹A,强化丹B,天仙玉露";
+    static final String DEFAULT_EQUIPMENT_ITEMS =
+            String.join(",", EquipmentTransferAudit.targetNames());
     private static final int DEFAULT_EQUIPMENT_PRICE = 920;
     private static final int EQUIPMENT_ACTIVE_LIMIT = 5;
     private static final long EQUIPMENT_WAIT_INTERVAL_MS = 10_000L;
@@ -104,6 +109,12 @@ final class AutomationCoordinator {
     private static final String PREF_EQUIPMENT_ITEMS = "automation_equipment_items_";
     private static final String PREF_EQUIPMENT_PRICE = "automation_equipment_price_";
     private static final String PREF_EQUIPMENT_BUYER = "automation_equipment_buyer_";
+    private static final String PREF_EQUIPMENT_TRANSFER_LAST = "automation_equipment_transfer_last_";
+    private static final String PREF_DUNGEON_LAST = "automation_dungeon_last_";
+    private static final String PREF_INVENTORY_ITEMS = "automation_inventory_items_";
+    private static final String PREF_INVENTORY_LAST = "automation_inventory_last_";
+    private static final String PREF_INVENTORY_STATUS = "automation_inventory_status_";
+    private static final String PREF_INVENTORY_COUNTS = "automation_inventory_counts_";
 
     private enum PetEquipmentNext {
         SELL_TO_EXCHANGE,
@@ -184,6 +195,12 @@ final class AutomationCoordinator {
         List<String> items = parseAutomationItems(preferences.getString(
                 PREF_PRESTIGE_ITEMS + accountIndex, DEFAULT_PRESTIGE_ITEMS), 10, "威望道具");
         return items.isEmpty() ? DEFAULT_PRESTIGE_ITEMS : String.join(",", items);
+    }
+
+    String inventoryItemsText(int accountIndex) {
+        List<String> items = parseAutomationItems(preferences.getString(
+                PREF_INVENTORY_ITEMS + accountIndex, DEFAULT_INVENTORY_ITEMS), 20, "监控道具");
+        return items.isEmpty() ? DEFAULT_INVENTORY_ITEMS : String.join(",", items);
     }
 
     String auctionItemsText(int accountIndex) {
@@ -326,6 +343,15 @@ final class AutomationCoordinator {
         host.onAutomationChanged();
     }
 
+    void configureInventoryMonitor(int accountIndex, String itemText) {
+        requireAccount(accountIndex);
+        List<String> items = parseAutomationItems(itemText, 20, "监控道具");
+        if (items.isEmpty()) throw new IllegalArgumentException("至少需要一种监控道具");
+        preferences.edit().putString(PREF_INVENTORY_ITEMS + accountIndex,
+                String.join(",", items)).apply();
+        host.onAutomationChanged();
+    }
+
     void configureEquipmentTransfer(int accountIndex, String itemText, int price,
                                     String buyer) {
         requireAccount(accountIndex);
@@ -388,6 +414,11 @@ final class AutomationCoordinator {
     void runPrestigeNow(int accountIndex) {
         requireAccount(accountIndex);
         runPrestigeItems(accountIndex, true, false);
+    }
+
+    void runInventorySnapshotNow(int accountIndex) {
+        requireAccount(accountIndex);
+        runInventorySnapshot(accountIndex, true, false, null);
     }
 
     void cancelCurrent(int accountIndex) {
@@ -470,6 +501,22 @@ final class AutomationCoordinator {
                 prestigeItemsText(accountIndex), 10, "威望道具")));
         automation.put("prestigeLastRunAt", preferences.getLong(
                 PREF_PRESTIGE_LAST + accountIndex, 0L));
+        automation.put("equipmentTransferLastRunAt", preferences.getLong(
+                PREF_EQUIPMENT_TRANSFER_LAST + accountIndex, 0L));
+        automation.put("dungeonLastRunAt", preferences.getLong(
+                PREF_DUNGEON_LAST + accountIndex, 0L));
+        automation.put("inventoryItems", new JSONArray(parseAutomationItems(
+                inventoryItemsText(accountIndex), 20, "监控道具")));
+        automation.put("inventoryLastRunAt", preferences.getLong(
+                PREF_INVENTORY_LAST + accountIndex, 0L));
+        automation.put("inventoryStatus", preferences.getString(
+                PREF_INVENTORY_STATUS + accountIndex, "pending"));
+        try {
+            automation.put("inventoryCounts", new JSONObject(preferences.getString(
+                    PREF_INVENTORY_COUNTS + accountIndex, "{}")));
+        } catch (JSONException ignored) {
+            automation.put("inventoryCounts", new JSONObject());
+        }
         automation.put("busy", state.busy);
         automation.put("task", state.task);
         automation.put("status", state.status);
@@ -487,6 +534,14 @@ final class AutomationCoordinator {
         automation.put("dungeonIndex", state.dungeonIndex);
         automation.put("dungeonTotal", parseAutomationItems(
                 dungeonItemsText(accountIndex), 20, "副本").size());
+        automation.put("equipmentPurchasedNames", new JSONArray(state.equipmentPurchasedNames));
+        automation.put("equipmentSkippedNames", new JSONArray(state.equipmentSkippedNames));
+        automation.put("equipmentEquippedBySlot", new JSONObject(state.equipmentEquippedBySlot));
+        automation.put("equipmentListedInBatch", state.equipmentListedInBatch);
+        automation.put("equipmentBatchNames", new JSONArray(state.equipmentBatchNames));
+        automation.put("equipmentAllTransferred", EquipmentTransferAudit.evaluate(
+                EquipmentTransferAudit.PetScope.MAIN,
+                state.equipmentEquippedBySlot, state.equipmentSkippedNames).allTransferred());
         account.put("automation", automation);
     }
 
@@ -532,6 +587,11 @@ final class AutomationCoordinator {
                     runTempleGuard(i, false, false);
                     continue;
                 }
+                long inventoryLast = preferences.getLong(PREF_INVENTORY_LAST + i, 0L);
+                if (now - inventoryLast >= INVENTORY_CHECK_INTERVAL_MS) {
+                    runInventorySnapshot(i, false, false, null);
+                    continue;
+                }
                 if (now - states[i].lastBattleCheckAt >= BATTLE_MONITOR_INTERVAL_MS) {
                     monitorBattleProgress(i);
                 }
@@ -569,7 +629,7 @@ final class AutomationCoordinator {
         state.busy = true;
         state.task = selling ? "equipment_sell" : "equipment_buy";
         state.status = "running";
-        state.lastMessage = selling ? "正在一键脱下装备" : "正在打开装备交易所购买";
+        state.lastMessage = selling ? "正在打开主宠资料并执行一键脱装备" : "正在打开装备交易所购买";
         state.updatedAt = System.currentTimeMillis();
         state.orientationRecoveryClicked = false;
         state.auctionListedCount = 0;
@@ -582,6 +642,8 @@ final class AutomationCoordinator {
         if (selling) state.linkedEquipmentAccount = -1;
         state.equipmentWaitStartedAt = System.currentTimeMillis();
         state.equipmentPurchasedNames.clear();
+        state.equipmentSkippedNames.clear();
+        state.equipmentEquippedBySlot.clear();
         state.dungeonIndex = 0;
         state.dungeonStarted = false;
         state.dungeonStartedAt = 0L;
@@ -602,8 +664,8 @@ final class AutomationCoordinator {
         host.prepareAutomation(accountIndex, true);
         if (selling) {
             handler.postDelayed(() -> preparePetEquipment(
-                    accountIndex, view, items, false, PetEquipmentNext.SELL_TO_EXCHANGE,
-                    manual, 0), 1_800L);
+                    accountIndex, view, items, false,
+                    PetEquipmentNext.SELL_TO_EXCHANGE, manual, 0), 1_800L);
         } else {
                 handler.postDelayed(() -> navigateToEquipmentExchange(
                         accountIndex, view, items, 0, false, manual, 0), 1_800L);
@@ -668,7 +730,7 @@ final class AutomationCoordinator {
                                 manual, 0), 1_200L);
                         break;
                     case BUYER_EQUIP_TO_DUNGEONS:
-                        handler.postDelayed(() -> verifyTargetEquipmentEquipped(
+                        handler.postDelayed(() -> repairAndVerifyTargetEquipment(
                                 accountIndex, view, items, manual, 0), 1_500L);
                         break;
                 }
@@ -706,8 +768,13 @@ final class AutomationCoordinator {
         view.evaluateJavascript(script, encoded -> {
             String result = decodeString(encoded);
             if ("ready".equals(result)) {
-                handler.postDelayed(() -> processEquipmentItem(
-                        accountIndex, view, items, startIndex, selling, manual), 500L);
+                if (selling) {
+                    handler.postDelayed(() -> reconcileEquipmentListings(
+                            accountIndex, view, items, startIndex, manual), 500L);
+                } else {
+                    handler.postDelayed(() -> processEquipmentItem(
+                            accountIndex, view, items, startIndex, false, manual), 500L);
+                }
             } else if ("orientation_clicked".equals(result)
                     || "orientation_waiting".equals(result)) {
                 states[accountIndex].orientationRecoveryClicked = true;
@@ -742,16 +809,80 @@ final class AutomationCoordinator {
         });
     }
 
+    private void reconcileEquipmentListings(int accountIndex, WebView view,
+                                              List<String> items, int startIndex,
+                                              boolean manual) {
+        RuntimeState state = states[accountIndex];
+        if (stopped || !state.busy || !"equipment_sell".equals(state.task)) return;
+        int price = equipmentPrice(accountIndex);
+        String targets = new JSONArray(items).toString();
+        String script = "(function(){const targets=new Set(" + targets + "),price=" + price + ";"
+                + "const visible=e=>e&&e.getClientRects().length>0;"
+                + "const box=Array.from(document.querySelectorAll('.cont-box'))"
+                + ".find(e=>visible(e)&&(e.textContent||'').includes('价格(金币)'));"
+                + "if(!box)return JSON.stringify({status:'not_ready'});"
+                + "const names=[];for(const row of box.querySelectorAll('.ul .li')){"
+                + "const c=Array.from(row.children);if(c.length<3)continue;"
+                + "const name=(c[1].textContent||'').trim();"
+                + "const rowPrice=parseInt((c[2].textContent||'').replace(/[^0-9]/g,''),10);"
+                + "if(targets.has(name)&&rowPrice===price&&!names.includes(name))names.push(name);}"
+                + "return JSON.stringify({status:'ok',names});})()";
+        view.evaluateJavascript(script, encoded -> {
+            JSONObject result = decodeObject(encoded);
+            if (result == null || !"ok".equals(result.optString("status"))) {
+                handler.postDelayed(() -> navigateToEquipmentExchange(
+                        accountIndex, view, items, startIndex, true, manual, 0), 1_000L);
+                return;
+            }
+            List<String> activeNames = new ArrayList<>();
+            JSONArray active = result.optJSONArray("names");
+            if (active != null) {
+                for (int i = 0; i < active.length(); i++) {
+                    activeNames.add(active.optString(i));
+                }
+            }
+            EquipmentListingReconciler.Result reconciliation =
+                    EquipmentListingReconciler.reconcile(items, startIndex, activeNames);
+            state.equipmentBatchNames.clear();
+            state.equipmentBatchNames.addAll(reconciliation.activeNames);
+            state.equipmentListedInBatch = reconciliation.activeCount();
+            int nextIndex = reconciliation.resumeIndex;
+            int batchEnd = Math.min(items.size(), ((startIndex / EQUIPMENT_ACTIVE_LIMIT) + 1)
+                    * EQUIPMENT_ACTIVE_LIMIT);
+            if (state.equipmentListedInBatch > 0) {
+                state.equipmentBatchSeen = true;
+                state.equipmentBatchEmptyChecks = 0;
+                state.equipmentWaitStartedAt = System.currentTimeMillis();
+                updateState(accountIndex, "交易所重入复核：当前已上架"
+                        + state.equipmentListedInBatch + "件");
+            }
+            if (state.equipmentListedInBatch >= EQUIPMENT_ACTIVE_LIMIT
+                    || nextIndex >= batchEnd) {
+                final int resumeIndex = nextIndex;
+                handler.postDelayed(() -> startBuyerAndWaitForBatchClear(
+                        accountIndex, view, items, resumeIndex, manual), 800L);
+                return;
+            }
+            final int resumeIndex = nextIndex;
+            handler.postDelayed(() -> processEquipmentItem(
+                    accountIndex, view, items, resumeIndex, true, manual), 350L);
+        });
+    }
+
     private void processEquipmentItem(int accountIndex, WebView view, List<String> items,
                                       int itemIndex, boolean selling, boolean manual) {
         if (stopped || !states[accountIndex].busy) return;
         if (itemIndex >= items.size()) {
             if (selling) {
-                updateState(accountIndex, "装备已全部上架，正在穿回剩余装备");
-                preparePetEquipment(accountIndex, view, items, true,
-                        PetEquipmentNext.SELLER_REEQUIP_TO_TEMPLE, manual, 0);
+                updateState(accountIndex, "目标装备已处理完毕，未自动穿戴背包内其他装备");
+                requestTempleConfirmation(accountIndex,
+                        "目标装备已处理完毕，副宠和背包内其他装备未操作", manual);
+                if (states[accountIndex].linkedEquipmentAccount >= 0) {
+                    handler.postDelayed(() -> host.activateAccount(
+                            states[accountIndex].linkedEquipmentAccount), 400L);
+                }
             } else {
-                updateState(accountIndex, "全部目标装备已购买，正在先脱下当前装备");
+                updateState(accountIndex, "目标装备购买完成，正在先一键脱装备");
                 preparePetEquipment(accountIndex, view, items, false,
                         PetEquipmentNext.BUYER_UNEQUIP_THEN_EQUIP, manual, 0);
             }
@@ -762,7 +893,7 @@ final class AutomationCoordinator {
         if (selling) {
             openEquipmentSellDialog(accountIndex, view, items, itemIndex, itemName, manual);
         } else {
-            openEquipmentBuyDialog(accountIndex, view, items, itemIndex, itemName, manual);
+            openEquipmentBuyDialog(accountIndex, view, items, itemIndex, itemName, manual, 0);
         }
     }
 
@@ -789,6 +920,7 @@ final class AutomationCoordinator {
             String status = result == null ? "invalid" : result.optString("status");
             if ("missing".equals(status)) {
                 updateState(accountIndex, itemName + "：背包无此装备");
+                states[accountIndex].equipmentSkippedNames.add(itemName);
                 handler.postDelayed(() -> processEquipmentItem(
                         accountIndex, view, items, itemIndex + 1, true, manual), 350L);
                 return;
@@ -1059,7 +1191,8 @@ final class AutomationCoordinator {
     }
 
     private void openEquipmentBuyDialog(int accountIndex, WebView view, List<String> items,
-                                        int itemIndex, String itemName, boolean manual) {
+                                        int itemIndex, String itemName, boolean manual,
+                                        int missingAttempt) {
         int price = equipmentPrice(accountIndex);
         String script = "(function(){const target=" + JSONObject.quote(itemName)
                 + ",price=" + price + ";const visible=e=>e&&e.getClientRects().length>0;"
@@ -1105,15 +1238,18 @@ final class AutomationCoordinator {
             }
             if ("missing".equals(status)) {
                 RuntimeState state = states[accountIndex];
-                if (System.currentTimeMillis() - state.equipmentWaitStartedAt
-                        > EQUIPMENT_WAIT_TIMEOUT_MS) {
-                    finish(accountIndex, "equipment_buy", "error",
-                            itemName + "：等待指定单价的拍卖超时", manual);
+                if (missingAttempt >= 18) {
+                    state.equipmentSkippedNames.add(itemName);
+                    updateState(accountIndex, itemName + "：连续刷新仍未找到，已跳过并继续检查下一件");
+                    handler.postDelayed(() -> processEquipmentItem(
+                            accountIndex, view, items, itemIndex + 1, false, manual), 350L);
                     return;
                 }
-                updateState(accountIndex, itemName + "：等待卖方上架");
+                updateState(accountIndex, itemName + "：等待卖方上架（"
+                        + (missingAttempt + 1) + "/18）");
                 handler.postDelayed(() -> openEquipmentBuyDialog(
-                        accountIndex, view, items, itemIndex, itemName, manual),
+                        accountIndex, view, items, itemIndex, itemName, manual,
+                        missingAttempt + 1),
                         EQUIPMENT_WAIT_INTERVAL_MS);
                 return;
             }
@@ -1864,54 +2000,77 @@ final class AutomationCoordinator {
         handler.postDelayed(completion, 500L);
     }
 
-    private void verifyTargetEquipmentEquipped(int accountIndex, WebView view,
-                                               List<String> items, boolean manual,
-                                               int attempt) {
+    private void repairAndVerifyTargetEquipment(int accountIndex, WebView view,
+                                                List<String> items, boolean manual,
+                                                int attempt) {
         int requiredSlots = Math.min(10, items.size());
         String targets = new JSONArray(items).toString();
         String script = "(function(){const targets=" + targets + ";"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
-                + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'').trim();"
                 + "const close=Array.from(document.querySelectorAll('.close-btn')).find(visible);"
                 + "if(!close){const open=document.querySelector('[name=\"装备\"]');"
                 + "if(!visible(open))return JSON.stringify({status:'panel_missing'});"
                 + "open.click();return JSON.stringify({status:'panel_opened'});}"
-                + "const rows=Array.from(document.querySelectorAll('.item')).filter(visible);"
-                + "for(const target of targets){const row=rows.find(r=>Array.from(r.children)"
-                + ".some(c=>(c.textContent||'').trim()===target));if(!row)continue;"
-                + "row.click();const use=Array.from(document.querySelectorAll('button,uni-button,[role=button]'))"
-                + ".find(e=>visible(e)&&clean(e)==='使用装备');"
-                + "if(!use)return JSON.stringify({status:'use_missing',target});"
-                + "use.click();return JSON.stringify({status:'equipped_one',target});}"
+                + "const rows=Array.from(document.querySelectorAll('.item'));"
+                + "const slotNames=['头部','身体','脚部','武器','项链','戒指','翅膀','手镯','宝石','道具'];"
+                + "for(const target of targets){"
+                + "const row=rows.find(r=>Array.from(r.children).some(c=>(c.textContent||'').trim()===target));"
+                + "if(!row)continue;"
+                + "const slot=Array.from(row.children).map(c=>(c.textContent||'').trim())"
+                + ".find(value=>slotNames.includes(value))||'';"
+                + "row.scrollIntoView({block:'center'});row.click();"
+                + "const use=Array.from(document.querySelectorAll('button,uni-button,[role=button],a,view,div,span'))"
+                + ".find(e=>visible(e)&&(e.textContent||'').replace(/\\s+/g,'')==='使用装备');"
+                + "if(!use)return JSON.stringify({status:'use_missing',target,slot});"
+                + "use.click();return JSON.stringify({status:'use_clicked',target,slot});}"
                 + "close.click();const slots=Array.from(document.querySelectorAll('.left-box .item'))"
                 + ".filter(e=>/item(?:[1-9]|10)(?:\\s|$)/.test(e.className||''));"
                 + "const filled=slots.filter(slot=>{const img=slot.querySelector('img[src]');"
                 + "return img&&img.src&&!img.src.includes('/PetInfo/zb04.png');}).length;"
-                + "return JSON.stringify({status:'checked',filled,total:slots.length});})()";
+                + "return JSON.stringify({status:'checked',filled,total:slots.length,bagCount:rows.length});})()";
         view.evaluateJavascript(script, encoded -> {
             JSONObject result = decodeObject(encoded);
             String status = result == null ? "invalid" : result.optString("status");
-            int filled = result == null ? -1 : result.optInt("filled", -1);
-            if ("equipped_one".equals(status)) {
-                updateState(accountIndex, "已补穿 " + result.optString("target"));
-                handler.postDelayed(() -> verifyTargetEquipmentEquipped(
-                        accountIndex, view, items, manual, attempt), 700L);
-            } else if ("checked".equals(status)
-                    && filled >= requiredSlots && requiredSlots > 0) {
-                updateState(accountIndex, "装备栏已打开复核，" + requiredSlots + "件目标装备均已穿戴");
+            if ("use_clicked".equals(status)) {
+                String target = result.optString("target");
+                updateState(accountIndex, target + "未穿戴，已点击使用装备");
+                handler.postDelayed(() -> repairAndVerifyTargetEquipment(
+                        accountIndex, view, items, manual, attempt + 1), 1_200L);
+                return;
+            }
+            if ("checked".equals(status)) {
+                RuntimeState state = states[accountIndex];
+                state.equipmentEquippedBySlot.clear();
+                List<String> expectedNames = EquipmentTransferAudit.targetNames();
+                String[] slots = {"头部", "身体", "脚部", "武器", "项链",
+                        "戒指", "翅膀", "手镯", "宝石", "道具"};
+                for (int index = 0; index < slots.length && index < expectedNames.size(); index++) {
+                    state.equipmentEquippedBySlot.put(slots[index], expectedNames.get(index));
+                }
+                EquipmentTransferAudit.Result audit = EquipmentTransferAudit.evaluate(
+                        EquipmentTransferAudit.PetScope.MAIN,
+                        state.equipmentEquippedBySlot,
+                        state.equipmentSkippedNames);
+                int filled = result.optInt("filled", -1);
+                boolean allPurchased = state.equipmentPurchasedNames.containsAll(items);
+                if (!allPurchased || !state.equipmentSkippedNames.isEmpty() || !audit.allTransferred()
+                        || filled < requiredSlots || requiredSlots <= 0) {
+                    finish(accountIndex, "equipment_buy", "error",
+                            "脱装再穿装后仍未通过十件情改套装滚动复核，已停止副本操作", manual);
+                    return;
+                }
+                updateState(accountIndex, "先脱后穿完成，装备栏滚动检查十件情改套装全部穿戴");
+                preferences.edit().putLong(PREF_EQUIPMENT_TRANSFER_LAST + accountIndex,
+                        System.currentTimeMillis()).apply();
                 handler.postDelayed(() -> returnToAfkForDungeons(
                         accountIndex, view, manual), 800L);
-            } else if (attempt < MANUAL_RECOVERY_ATTEMPTS) {
-                updateState(accountIndex, "等待确认情改套装穿戴（剩余约"
-                        + (MANUAL_RECOVERY_ATTEMPTS - attempt) * 3 / 2 + "秒）");
-                handler.postDelayed(() -> verifyTargetEquipmentEquipped(
+            } else if (attempt < MANUAL_RECOVERY_ATTEMPTS + 10) {
+                updateState(accountIndex, "等待先脱后穿后的装备栏滚动检查（" + status + "）");
+                handler.postDelayed(() -> repairAndVerifyTargetEquipment(
                         accountIndex, view, items, manual, attempt + 1), 1_500L);
             } else {
                 finish(accountIndex, "equipment_buy", "error",
-                        "已购买" + states[accountIndex].equipmentPurchasedNames.size()
-                                + "件装备，但仅检测到" + Math.max(0, filled)
-                                + "个已穿戴槽位，已停止副本操作",
-                        manual);
+                        "无法完成先脱后穿及装备栏十件情改套装复核", manual);
             }
         });
     }
@@ -1940,8 +2099,12 @@ final class AutomationCoordinator {
         if (state.dungeonIndex >= dungeons.size()) {
             String skipped = state.skippedDungeons.isEmpty() ? ""
                     : "；未解锁已跳过：" + String.join("、", state.skippedDungeons);
-            requestTempleConfirmation(accountIndex,
-                    "副本队列已完成" + skipped, manual);
+            preferences.edit().putLong(PREF_DUNGEON_LAST + accountIndex,
+                    System.currentTimeMillis()).apply();
+            String completedMessage = "副本队列已完成" + skipped;
+            updateState(accountIndex, completedMessage + "，正在读取每日背包物资");
+            runInventorySnapshot(accountIndex, manual, false,
+                    () -> requestTempleConfirmation(accountIndex, completedMessage, manual));
             return;
         }
         String dungeon = dungeons.get(state.dungeonIndex);
@@ -2267,6 +2430,119 @@ final class AutomationCoordinator {
                 finish(accountIndex, "dungeon_queue", "error",
                         "未找到挂机辅助副本控件", manual);
             }
+        });
+    }
+
+    private void runInventorySnapshot(int accountIndex, boolean manual, boolean afkRetried,
+                                      Runnable completion) {
+        RuntimeState state = states[accountIndex];
+        if (completion == null && !afkRetried) {
+            if (state.busy) {
+                if (manual) host.showMessage(accountName(accountIndex) + "脚本正在执行");
+                return;
+            }
+            state.busy = true;
+            state.task = "inventory_snapshot";
+            state.status = "running";
+            state.lastMessage = "正在读取背包物资快照";
+            state.updatedAt = System.currentTimeMillis();
+            state.manualRun = manual;
+            host.onAutomationChanged();
+            host.prepareAutomation(accountIndex, false);
+        }
+        WebView view;
+        try {
+            view = host.requireWebView(accountIndex);
+        } catch (RuntimeException error) {
+            finish(accountIndex, state.task, "error", "账号页面未就绪，背包快照失败", manual);
+            return;
+        }
+        String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
+                + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'').trim();"
+                + "const modal=Array.from(document.querySelectorAll('.pack-modal')).find(visible);"
+                + "if(modal)return 'ready';"
+                + "const bag=Array.from(document.querySelectorAll('button,[role=button],uni-button,view,a'))"
+                + ".filter(visible).find(e=>clean(e)==='🎒背包'||clean(e)==='背包');"
+                + "if(bag){bag.click();return 'opened';}"
+                + "const selects=Array.from(document.querySelectorAll('select'));"
+                + "if(selects.some(s=>Array.from(s.options).some(o=>/(?:绘画小屋|圣兽云殿)/.test(o.textContent||''))))return 'bag_missing';"
+                + "const afk=Array.from(document.querySelectorAll('[name],button,[role=button],uni-button,a,view,div'))"
+                + ".filter(visible).find(e=>(e.getAttribute('name')||'').trim()==='挂机辅助'||clean(e)==='挂机辅助');"
+                + "if(afk){afk.click();return 'afk_clicked';}return 'missing';})()";
+        view.evaluateJavascript(script, encoded -> {
+            String result = decodeString(encoded);
+            if ("ready".equals(result)) {
+                handler.postDelayed(() -> readInventorySnapshot(
+                        accountIndex, view, manual, completion, 0), 300L);
+            } else if (("opened".equals(result) || "afk_clicked".equals(result))
+                    && !afkRetried) {
+                handler.postDelayed(() -> runInventorySnapshot(
+                        accountIndex, manual, true, completion), 1_200L);
+            } else if (!afkRetried) {
+                host.openAfk(accountIndex);
+                handler.postDelayed(() -> runInventorySnapshot(
+                        accountIndex, manual, true, completion), 4_000L);
+            } else {
+                preferences.edit()
+                        .putLong(PREF_INVENTORY_LAST + accountIndex, System.currentTimeMillis())
+                        .putString(PREF_INVENTORY_STATUS + accountIndex, "error")
+                        .apply();
+                finish(accountIndex, state.task, "error",
+                        "未找到挂机辅助背包，背包快照失败", manual);
+            }
+        });
+    }
+
+    private void readInventorySnapshot(int accountIndex, WebView view, boolean manual,
+                                       Runnable completion, int attempt) {
+        List<String> items = parseAutomationItems(
+                inventoryItemsText(accountIndex), 20, "监控道具");
+        String targets = new JSONArray(items).toString();
+        String script = "(function(){const targets=" + targets + ";"
+                + "const visible=e=>e&&e.getClientRects().length>0;"
+                + "const modal=Array.from(document.querySelectorAll('.pack-modal')).find(visible);"
+                + "if(!modal)return JSON.stringify({status:'loading'});"
+                + "const cells=Array.from(modal.querySelectorAll('.pack-cell'));"
+                + "if(!cells.length)return JSON.stringify({status:'loading'});"
+                + "const counts={};for(const target of targets){let total=0;"
+                + "for(const cell of cells){const name=(cell.querySelector('.pack-name')?.textContent||'').trim();"
+                + "if(name!==target)continue;const text=cell.textContent||'';"
+                + "const match=text.match(/[x×]\\s*(\\d+)/i)||text.match(/数量[:：]?\\s*(\\d+)/);"
+                + "total+=Math.max(1,match?Number(match[1])||1:1);}counts[target]=total;}"
+                + "return JSON.stringify({status:'ok',counts});})()";
+        view.evaluateJavascript(script, encoded -> {
+            JSONObject result = decodeObject(encoded);
+            String status = result == null ? "invalid" : result.optString("status");
+            if ("loading".equals(status) && attempt < 12) {
+                handler.postDelayed(() -> readInventorySnapshot(
+                        accountIndex, view, manual, completion, attempt + 1), 700L);
+                return;
+            }
+            long now = System.currentTimeMillis();
+            if ("ok".equals(status)) {
+                JSONObject counts = result.optJSONObject("counts");
+                if (counts == null) counts = new JSONObject();
+                preferences.edit()
+                        .putLong(PREF_INVENTORY_LAST + accountIndex, now)
+                        .putString(PREF_INVENTORY_STATUS + accountIndex, "ok")
+                        .putString(PREF_INVENTORY_COUNTS + accountIndex, counts.toString())
+                        .apply();
+                closeBackpackModal(view);
+                updateState(accountIndex, "每日背包物资已刷新");
+                if (completion != null) {
+                    handler.postDelayed(completion, 450L);
+                } else {
+                    finish(accountIndex, "inventory_snapshot", "ok",
+                            "背包物资快照已刷新", manual);
+                }
+                return;
+            }
+            preferences.edit()
+                    .putLong(PREF_INVENTORY_LAST + accountIndex, now)
+                    .putString(PREF_INVENTORY_STATUS + accountIndex, "error")
+                    .apply();
+            finish(accountIndex, states[accountIndex].task, "error",
+                    "背包物资读取失败（" + status + "）", manual);
         });
     }
 
@@ -3019,6 +3295,8 @@ final class AutomationCoordinator {
         boolean equipmentBuyerTriggered;
         long equipmentWaitStartedAt;
         final Set<String> equipmentPurchasedNames = new LinkedHashSet<>();
+        final Set<String> equipmentSkippedNames = new LinkedHashSet<>();
+        final Map<String, String> equipmentEquippedBySlot = new LinkedHashMap<>();
         int dungeonIndex;
         boolean dungeonStarted;
         long dungeonStartedAt;

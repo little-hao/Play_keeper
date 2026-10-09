@@ -230,6 +230,30 @@ test("device telemetry and browser command complete a round trip", async (contex
   assert.equal(prestige.parameters.enabled, true);
   assert.deepEqual(prestige.parameters.items, ["黑暗徽章", "黑暗宝石"]);
 
+  const inventoryPromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "configure_inventory_monitor",
+    parameters: {
+      accountIndex: 2,
+      items: ["进化宝石", "曙光印记", "强化丹A", "强化丹B", "天仙玉露"]
+    }
+  }));
+  const inventory = await inventoryPromise;
+  assert.equal(inventory.command, "configure_inventory_monitor");
+  assert.equal(inventory.parameters.items.at(-1), "天仙玉露");
+
+  const keepPlayerStartPromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "keep_player_start",
+    parameters: {}
+  }));
+  const keepPlayerStart = await keepPlayerStartPromise;
+  assert.equal(keepPlayerStart.command, "keep_player_start");
+
   const equipmentPromise = nextJson(device, "command.request");
   control.send(JSON.stringify({
     type: "command.send",
@@ -335,7 +359,7 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    ok: true, service: "play-keeper-relay", version: "1.7.0"
+    ok: true, service: "play-keeper-relay", version: "1.9.3"
   });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);
@@ -349,5 +373,8 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   assert.match(dashboardHtml, /中断脚本/);
   assert.match(dashboardHtml, /全选背包存仓/);
   assert.match(dashboardHtml, /购买全部920金币道具/);
+  assert.match(dashboardHtml, /今日装备、副本与背包监控/);
+  assert.match(dashboardHtml, /启动 KeepPlayer/);
+  assert.match(dashboardHtml, /天仙玉露/);
   assert.match(dashboard.headers.get("content-security-policy"), /object-src 'none'/);
 });

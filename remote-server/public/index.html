@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css?v=1.7.0">
+  <link rel="stylesheet" href="/styles.css?v=1.9.3">
 </head>
 <body>
   <main class="shell">
@@ -34,6 +34,19 @@
         <button id="refreshStatus" class="secondary">刷新状态</button>
         <button id="disconnectButton" class="secondary">断开</button>
       </div>
+      <section class="panel daily-plan-panel">
+        <div class="section-title">
+          <div><p class="eyebrow">8 ACCOUNT RELAY</p><h2>每日装备与副本计划</h2></div>
+          <strong id="dailyPlanStatus" class="state offline">未运行</strong>
+        </div>
+        <p id="dailyPlanDetail">路线：hao → hao1 → hao2 → hao3 → hao4 → hao5 → hao6 → hao7 → hao</p>
+        <div class="plan-progress"><span id="dailyPlanProgress"></span></div>
+        <div class="automation-actions two-actions">
+          <button id="startDailyPlan" class="primary">启动八账号计划</button>
+          <button id="cancelDailyPlan" class="secondary" disabled>中断计划</button>
+        </div>
+        <p class="automation-help">只处理当前主宠的十件情改装备；每棒验收成功后运行四个副本并恢复圣兽云殿。</p>
+      </section>
       <div id="deviceList" class="device-list"></div>
       <section class="panel log-panel">
         <div class="section-title"><h2>操作记录</h2><button id="clearLog" class="text-button">清空</button></div>
@@ -62,7 +75,13 @@
         <button data-command="set_orientation" data-orientation="portrait">竖屏</button>
         <button data-command="enter_black_screen">黑屏</button>
         <button data-command="exit_black_screen">退出黑屏</button>
+        <button data-command="keep_player_start">启动 KeepPlayer</button>
+        <button data-command="keep_player_exit" class="danger-action">退出 KeepPlayer</button>
       </div>
+      <section class="daily-monitor-panel">
+        <div class="section-title"><strong>今日装备、副本与背包监控</strong><small>每天自动刷新一次，也可手动刷新</small></div>
+        <div class="daily-monitor-list"></div>
+      </section>
       <section class="preview-panel">
         <div class="preview-heading">
           <div><strong>手机页面</strong><small class="preview-status">按需加载，不在服务器保存</small></div>
@@ -149,12 +168,14 @@
             <label class="span-2">存仓道具组合<input class="warehouse-item" type="text" value="护宠仙石"></label>
             <label class="span-2">副本挂机组合<input class="dungeon-items" type="text" value="绘画小屋,伊苏王的神墓,火龙王的宫殿,史芬克斯密穴"></label>
             <label class="span-2">威望道具组合<input class="prestige-items" type="text" value="黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石"></label>
+            <label class="span-2">每日背包监控道具<input class="inventory-items" type="text" value="进化宝石,曙光印记,强化丹A,强化丹B,天仙玉露"></label>
           </div>
           <div class="automation-actions action-grid">
             <button class="run-temple secondary">恢复圣兽云殿</button>
             <button class="run-warehouse secondary">立即检查存仓</button>
             <button class="run-dungeons secondary">执行副本组合</button>
             <button class="run-prestige secondary">检查威望道具</button>
+            <button class="run-inventory secondary">刷新背包监控</button>
           </div>
           <p class="automation-help">每30分钟检查战斗统计；长时间不增加时在账号按钮上标记掉线。</p>
         </fieldset>
@@ -172,6 +193,6 @@
       <div id="selectOptions" class="select-options" role="radiogroup"></div>
     </section>
   </div>
-  <script type="module" src="/app.js?v=1.7.0"></script>
+  <script type="module" src="/app.js?v=1.9.3"></script>
 </body>
 </html>
