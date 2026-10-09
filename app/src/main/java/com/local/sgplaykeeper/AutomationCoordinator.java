@@ -1656,13 +1656,15 @@ final class AutomationCoordinator {
     private void processAuctionBuyItem(int accountIndex, WebView view, List<String> items,
                                        int itemIndex, boolean manual) {
         if (stopped || !states[accountIndex].busy) return;
-        if (states[accountIndex].auctionPurchasedCount >= 20) {
-            requestTempleConfirmation(accountIndex, "已购买20条920金币拍卖，达到单次安全上限", manual);
+        if (states[accountIndex].auctionPurchasedCount >= 40) {
+            requestTempleConfirmation(accountIndex, "已购买40条" + auctionPrice(accountIndex)
+                    + "金币组合内拍卖，达到单次安全上限", manual);
             return;
         }
         int price = auctionPrice(accountIndex);
         updateState(accountIndex, "正在查找全部" + price + "金币的定向拍卖");
-        String script = "(function(){const price=" + price + ";"
+        String script = "(function(){const price=" + price + ",targets=new Set("
+                + new JSONArray(items).toString() + ");"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
                 + "const boxes=Array.from(document.querySelectorAll('.cont-box')).filter(visible);"
                 + "const box=boxes.find(e=>(e.textContent||'').includes('拍卖的道具')"
@@ -1670,7 +1672,8 @@ final class AutomationCoordinator {
                 + "if(!box)return JSON.stringify({status:'not_ready'});"
                 + "const rows=Array.from(box.querySelectorAll('.ul .li'));"
                 + "const matches=rows.filter(e=>{const cells=Array.from(e.children).map(c=>(c.textContent||'').trim());"
-                + "return cells.length>=3&&parseInt(cells[2].replace(/[^0-9]/g,''),10)===price;});"
+                + "return cells.length>=3&&targets.has(cells[1])"
+                + "&&parseInt(cells[2].replace(/[^0-9]/g,''),10)===price;});"
                 + "if(!matches.length)return JSON.stringify({status:'missing'});"
                 + "const row=matches[0],cells=Array.from(row.children).map(c=>(c.textContent||'').trim());"
                 + "const name=cells[1]||price+'金币道具';"
