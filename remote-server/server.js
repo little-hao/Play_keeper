@@ -4,7 +4,8 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
-import { EightAccountPlan, resolveEightAccountRoute } from "./eight-account-plan.js";
+import { EightAccountPlan, resolveEightAccountRoute, resolveQuickTestRoute } from "./eight-account-plan.js";
+import { sendCompletionReport } from "./email-report.js";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const publicDirectory = path.join(currentDirectory, "public");
@@ -132,6 +133,12 @@ const commandValidators = {
   configure_temple_guard(parameters) {
     return accountParameters(parameters) && typeof parameters.enabled === "boolean";
   },
+  configure_return_hang(parameters) {
+    return accountParameters(parameters)
+      && typeof parameters.map === "string"
+      && parameters.map.trim().length >= 1
+      && parameters.map.trim().length <= 30;
+  },
   run_temple_guard: accountParameters
 };
 
@@ -204,7 +211,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.9.3" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.10.0" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -280,6 +287,17 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
         ...action,
         timestamp: Date.now()
       });
+    },
+    async onComplete(plan) {
+      try {
+        const result = await sendCompletionReport(plan);
+        const payload = eightAccountPlan.updateEmailStatus(result.status);
+        broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
+      } catch (error) {
+        const payload = eightAccountPlan.updateEmailStatus(
+          `发送失败：${String(error?.message || error).slice(0, 80)}`);
+        broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
+      }
     }
   });
 
@@ -439,8 +457,25 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
 
       if (message.type === "plan.start") {
         try {
-          const route = resolveEightAccountRoute([...devices.values()].map(deviceSummary));
-          const payload = eightAccountPlan.start(route);
+          const options = message.options && typeof message.options === "object"
+            ? message.options : {};
+          const summaries = [...devices.values()].map(deviceSummary);
+          const route = options.quickTest === true
+            ? resolveQuickTestRoute(summaries) : resolveEightAccountRoute(summaries);
+          const payload = eightAccountPlan.start(route, {
+            resourceItems: Array.isArray(options.resourceItems) ? options.resourceItems : undefined,
+            returnMap: typeof options.returnMap === "string" ? options.returnMap : undefined,
+            reportEmail: typeof options.reportEmail === "string" ? options.reportEmail : undefined
+          });
+          broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
+        } catch (error) {
+          sendJson(socket, { type: "plan.error", message: String(error?.message || error) });
+        }
+        return;
+      }
+      if (message.type === "plan.retry") {
+        try {
+          const payload = eightAccountPlan.retry();
           broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
         } catch (error) {
           sendJson(socket, { type: "plan.error", message: String(error?.message || error) });
@@ -520,9 +555,18 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
     }
   }, 30_000);
   heartbeat.unref();
+  const planTicker = setInterval(() => {
+    const before = JSON.stringify(eightAccountPlan.snapshot());
+    const after = eightAccountPlan.tick();
+    if (JSON.stringify(after) !== before) {
+      broadcast({ type: "plan.update", plan: "eight_account_daily", payload: after });
+    }
+  }, 1_000);
+  planTicker.unref();
 
   server.on("close", () => {
     clearInterval(heartbeat);
+    clearInterval(planTicker);
     for (const socket of deviceServer.clients) socket.terminate();
     for (const socket of controlServer.clients) socket.terminate();
     deviceServer.close();

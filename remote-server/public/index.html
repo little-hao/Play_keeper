@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css?v=1.9.3">
+  <link rel="stylesheet" href="/styles.css?v=1.10.0">
 </head>
 <body>
   <main class="shell">
@@ -34,18 +34,52 @@
         <button id="refreshStatus" class="secondary">刷新状态</button>
         <button id="disconnectButton" class="secondary">断开</button>
       </div>
+      <section class="panel global-control-panel">
+        <div class="section-title">
+          <div><p class="eyebrow">HIGH RISK</p><h2>KeepPlayer 进程控制</h2></div>
+          <span class="risk-badge">高风险操作</span>
+        </div>
+        <div class="global-control-row">
+          <label>目标设备<select id="keepPlayerDevice"></select></label>
+          <button id="startKeepPlayer" class="secondary">启动 KeepPlayer</button>
+          <button id="exitKeepPlayer" class="danger-action">关闭 KeepPlayer</button>
+        </div>
+        <p class="automation-help">关闭前台会保留远程连接；若进程被系统强制停止，将无法从网页重新启动。</p>
+      </section>
+      <section class="panel global-monitor-panel">
+        <div class="section-title">
+          <div><p class="eyebrow">TODAY</p><h2>今日执行与背包汇总</h2></div>
+          <button id="refreshAllInventory" class="secondary">刷新全部背包</button>
+        </div>
+        <div id="globalDailyMonitor" class="daily-monitor-list"></div>
+      </section>
       <section class="panel daily-plan-panel">
         <div class="section-title">
-          <div><p class="eyebrow">8 ACCOUNT RELAY</p><h2>每日装备与副本计划</h2></div>
+          <div><p class="eyebrow">MULTI USER</p><h2>挂机脚本</h2></div>
           <strong id="dailyPlanStatus" class="state offline">未运行</strong>
         </div>
         <p id="dailyPlanDetail">路线：hao → hao1 → hao2 → hao3 → hao4 → hao5 → hao6 → hao7 → hao</p>
+        <div class="plan-settings">
+          <label class="toggle-row"><input id="planQuickTest" type="checkbox" checked> 快速测试：hao → hao1 → hao7 → hao</label>
+          <label>道具组合
+            <select id="planResourcePreset">
+              <option value="one">组合1：曙光/进化/强化丹A/B/天仙玉露</option>
+              <option value="two">组合2：黑暗系列</option>
+              <option value="custom">自定义</option>
+            </select>
+          </label>
+          <label>道具名称<input id="planResourceItems" value="曙光印记,进化宝石,强化丹A,强化丹B,天仙玉露"></label>
+          <label>结束后挂机副本<input id="planReturnMap" value="圣兽云殿" maxlength="30"></label>
+          <label>完成报告邮箱<input id="planReportEmail" type="email" value="konghao0920@gmail.com"></label>
+        </div>
         <div class="plan-progress"><span id="dailyPlanProgress"></span></div>
-        <div class="automation-actions two-actions">
-          <button id="startDailyPlan" class="primary">启动八账号计划</button>
+        <div class="automation-actions action-grid">
+          <button id="startDailyPlan" class="primary">多用户挂机</button>
+          <button id="retryDailyPlan" class="secondary" disabled>已人工处理，重试</button>
           <button id="cancelDailyPlan" class="secondary" disabled>中断计划</button>
         </div>
-        <p class="automation-help">只处理当前主宠的十件情改装备；每棒验收成功后运行四个副本并恢复圣兽云殿。</p>
+        <p class="automation-help">每个小号完成装备、副本、背包刷新后，仅上架数量大于1的组合道具并保留1件；最后由 hao 购买。</p>
+        <div id="planIntervention" class="plan-intervention hidden" role="alert"></div>
       </section>
       <div id="deviceList" class="device-list"></div>
       <section class="panel log-panel">
@@ -75,13 +109,7 @@
         <button data-command="set_orientation" data-orientation="portrait">竖屏</button>
         <button data-command="enter_black_screen">黑屏</button>
         <button data-command="exit_black_screen">退出黑屏</button>
-        <button data-command="keep_player_start">启动 KeepPlayer</button>
-        <button data-command="keep_player_exit" class="danger-action">退出 KeepPlayer</button>
       </div>
-      <section class="daily-monitor-panel">
-        <div class="section-title"><strong>今日装备、副本与背包监控</strong><small>每天自动刷新一次，也可手动刷新</small></div>
-        <div class="daily-monitor-list"></div>
-      </section>
       <section class="preview-panel">
         <div class="preview-heading">
           <div><strong>手机页面</strong><small class="preview-status">按需加载，不在服务器保存</small></div>
@@ -103,7 +131,8 @@
         </div>
         <p class="preview-help">画面最高每秒更新一次。点击画面会在当前 WebView 的对应位置执行一次单击。</p>
       </section>
-      <section class="automation-panel">
+      <details class="automation-panel">
+        <summary>当前账号高级操作</summary>
         <div class="section-title automation-title">
           <div><strong>自动化工具</strong><small class="automation-status">尚未运行</small></div>
           <div class="automation-actions">
@@ -127,12 +156,11 @@
             <label>拍卖快捷组合
               <select class="auction-preset">
                 <option value="custom">自定义</option>
-                <option value="one">组合1：曙光印记 + 进化宝石</option>
-                <option value="two">组合2：强化丹/雨露类</option>
-                <option value="three">组合3：黑暗系列</option>
+                <option value="one">组合1：曙光/进化/强化丹A/B/天仙玉露</option>
+                <option value="two">组合2：黑暗系列</option>
               </select>
             </label>
-            <label>拍卖道具（逗号分隔）<input class="auction-items" type="text" value="曙光印记,进化宝石"></label>
+            <label>拍卖道具（逗号分隔）<input class="auction-items" type="text" value="曙光印记,进化宝石,强化丹A,强化丹B,天仙玉露"></label>
             <label>执行间隔（小时）<input class="auction-hours" type="number" min="1" max="168" value="12"></label>
             <label>指定买家<input class="auction-buyer" type="text" maxlength="30" value="hao"></label>
             <label>拍卖单价（金币）<input class="auction-price" type="number" min="1" max="9999999" value="920"></label>
@@ -161,12 +189,13 @@
         <fieldset class="automation-group maintenance-group">
           <legend><span class="group-index">3</span> 挂机守护与存仓</legend>
           <div class="automation-grid">
-            <label class="toggle-row"><input class="temple-enabled" type="checkbox"> 圣兽云殿守护（1h）</label>
+            <label class="toggle-row"><input class="temple-enabled" type="checkbox"> 返回挂机守护（1h）</label>
             <label class="toggle-row"><input class="warehouse-enabled" type="checkbox"> 背包自动存仓（10min）</label>
             <label class="toggle-row"><input class="warehouse-store-all" type="checkbox" checked> 全选背包存仓（挂机/副本前）</label>
             <label class="toggle-row"><input class="prestige-enabled" type="checkbox"> 圣殿挂机使用威望道具（1h）</label>
             <label class="span-2">存仓道具组合<input class="warehouse-item" type="text" value="护宠仙石"></label>
             <label class="span-2">副本挂机组合<input class="dungeon-items" type="text" value="绘画小屋,伊苏王的神墓,火龙王的宫殿,史芬克斯密穴"></label>
+            <label class="span-2">流程结束返回挂机副本<input class="return-hang-map" type="text" value="圣兽云殿" maxlength="30"></label>
             <label class="span-2">威望道具组合<input class="prestige-items" type="text" value="黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石"></label>
             <label class="span-2">每日背包监控道具<input class="inventory-items" type="text" value="进化宝石,曙光印记,强化丹A,强化丹B,天仙玉露"></label>
           </div>
@@ -179,7 +208,7 @@
           </div>
           <p class="automation-help">每30分钟检查战斗统计；长时间不增加时在账号按钮上标记掉线。</p>
         </fieldset>
-      </section>
+      </details>
       <p class="device-note"></p>
     </article>
   </template>
@@ -193,6 +222,6 @@
       <div id="selectOptions" class="select-options" role="radiogroup"></div>
     </section>
   </div>
-  <script type="module" src="/app.js?v=1.9.3"></script>
+  <script type="module" src="/app.js?v=1.10.0"></script>
 </body>
 </html>

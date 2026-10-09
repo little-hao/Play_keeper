@@ -601,18 +601,15 @@ public final class MainActivity extends Activity {
         form.addView(formLabel("拍卖道具（逗号分隔，可自行修改）"));
         EditText auctionItems = new EditText(this);
         auctionItems.setText(automationCoordinator.auctionItemsText(accountIndex));
-        auctionItems.setHint("进化宝石,曙光印记");
+        auctionItems.setHint("曙光印记,进化宝石,强化丹A,强化丹B,天仙玉露");
         auctionItems.setSingleLine(true);
         form.addView(auctionItems, formFieldParams());
-        Button auctionPresetOne = makeButton("组合1：曙光印记 + 进化宝石",
+        Button auctionPresetOne = makeButton("组合1：曙光/进化/强化丹A/B/天仙玉露",
                 view -> auctionItems.setText(AutomationCoordinator.AUCTION_PRESET_ONE));
         form.addView(auctionPresetOne, automationActionParams());
-        Button auctionPresetTwo = makeButton("组合2：强化丹/雨露类",
+        Button auctionPresetTwo = makeButton("组合2：黑暗系列",
                 view -> auctionItems.setText(AutomationCoordinator.AUCTION_PRESET_TWO));
         form.addView(auctionPresetTwo, automationActionParams());
-        Button auctionPresetThree = makeButton("组合3：黑暗系列",
-                view -> auctionItems.setText(AutomationCoordinator.AUCTION_PRESET_THREE));
-        form.addView(auctionPresetThree, automationActionParams());
 
         form.addView(formLabel("指定买家"));
         EditText buyer = new EditText(this);
@@ -1290,6 +1287,14 @@ public final class MainActivity extends Activity {
                             parameters.optBoolean("enabled", false));
                     success = true;
                     resultMessage = "圣殿挂机守护设置已更新";
+                    break;
+                }
+                case "configure_return_hang": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.configureReturnHang(index,
+                            parameters.optString("map", "圣兽云殿"));
+                    success = true;
+                    resultMessage = "返回挂机副本已更新";
                     break;
                 }
                 case "run_temple_guard": {

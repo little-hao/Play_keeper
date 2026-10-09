@@ -43,11 +43,19 @@ button:active { transform: translateY(1px); }
 small { color: var(--muted); }
 .device-list { display: grid; gap: 14px; }
 .daily-plan-panel { margin-bottom: 14px; padding: 16px; }
+.global-control-panel, .global-monitor-panel { margin-bottom: 14px; padding: 16px; }
+.risk-badge { padding: 5px 8px; color: #ffd8d4; background: #562521; border-radius: 999px; font-size: 11px; font-weight: 700; }
+.global-control-row { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto; align-items: end; gap: 8px; }
+.global-control-row label { margin: 0; }
+.global-control-row select, .plan-settings input, .plan-settings select { display: block; width: 100%; margin-top: 4px; padding: 10px; color: #f3f6fa; background: #090c12; border: 1px solid #343b48; border-radius: 9px; }
 .daily-plan-panel h2 { margin: 3px 0 0; }
 .daily-plan-panel .section-title > div { min-width: 0; }
 .daily-plan-panel .automation-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .plan-progress { height: 8px; overflow: hidden; background: #090c12; border: 1px solid var(--line); border-radius: 999px; }
 .plan-progress span { display: block; width: 0; height: 100%; background: var(--green); transition: width .25s ease; }
+.plan-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 10px 0; }
+.plan-settings label { margin: 0; }
+.plan-intervention { margin-top: 10px; padding: 10px; color: #ffe1aa; background: #422d0c; border: 1px solid #9d7027; border-radius: 9px; font-size: 13px; }
 .device-card { padding: 16px; }
 .device-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .device-heading > div { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 0 8px; }
@@ -87,6 +95,8 @@ small { color: var(--muted); }
 .preview-image { display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; object-fit: contain; cursor: crosshair; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
 .preview-help { margin: 8px 0 0; font-size: 11px; }
 .automation-panel { margin: 0 0 10px; padding: 11px; background: #0d1118; border: 1px solid var(--line); border-radius: 12px; }
+.automation-panel > summary { cursor: pointer; color: #eef3f9; font-weight: 750; }
+.automation-panel[open] > summary { margin-bottom: 12px; }
 .automation-panel .section-title > div { display: flex; flex-direction: column; gap: 3px; }
 .automation-title { gap: 12px; }
 .automation-title .save-automation { min-width: 132px; }
@@ -133,6 +143,7 @@ small { color: var(--muted); }
   .device-heading strong { overflow-wrap: anywhere; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .account-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .global-control-row, .plan-settings { grid-template-columns: 1fr; }
   .button-grid { grid-template-columns: repeat(3, 1fr); }
   .daily-monitor-row { grid-template-columns: 1fr 1.4fr auto; }
   .daily-monitor-row small { grid-column: 1 / -1; grid-row: 2; }

@@ -21,7 +21,19 @@ const elements = {
   dailyPlanDetail: document.querySelector("#dailyPlanDetail"),
   dailyPlanProgress: document.querySelector("#dailyPlanProgress"),
   startDailyPlan: document.querySelector("#startDailyPlan"),
-  cancelDailyPlan: document.querySelector("#cancelDailyPlan")
+  retryDailyPlan: document.querySelector("#retryDailyPlan"),
+  cancelDailyPlan: document.querySelector("#cancelDailyPlan"),
+  planIntervention: document.querySelector("#planIntervention"),
+  planResourcePreset: document.querySelector("#planResourcePreset"),
+  planQuickTest: document.querySelector("#planQuickTest"),
+  planResourceItems: document.querySelector("#planResourceItems"),
+  planReturnMap: document.querySelector("#planReturnMap"),
+  planReportEmail: document.querySelector("#planReportEmail"),
+  keepPlayerDevice: document.querySelector("#keepPlayerDevice"),
+  startKeepPlayer: document.querySelector("#startKeepPlayer"),
+  exitKeepPlayer: document.querySelector("#exitKeepPlayer"),
+  globalDailyMonitor: document.querySelector("#globalDailyMonitor"),
+  refreshAllInventory: document.querySelector("#refreshAllInventory")
 };
 
 const devices = new Map();
@@ -34,9 +46,8 @@ const previewProfiles = {
   "2560": { maxWidth: 2560, fps: 0.1, label: "超清" }
 };
 const auctionPresets = {
-  one: "曙光印记,进化宝石",
-  two: "强化丹A,强化丹B,天仙雨露,雨露结晶",
-  three: "黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石"
+  one: "曙光印记,进化宝石,强化丹A,强化丹B,天仙玉露",
+  two: "黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石"
 };
 const defaultEquipmentItems = "柔情方巾·改,轻罗流萤衫·改,逢羡履·改,君我剑·改,佳人之恋·改,"
   + "三生戒·改,比翼·改,相望镯·改,尾生之泪·改,龙神印记·庆";
@@ -58,11 +69,39 @@ elements.clearLog.addEventListener("click", () => elements.eventLog.replaceChild
 elements.closeSelect.addEventListener("click", closeSelectDialog);
 elements.startDailyPlan.addEventListener("click", () => {
   if (socket?.readyState !== WebSocket.OPEN) return addLog("控制台尚未连接");
-  socket.send(JSON.stringify({ type: "plan.start", plan: "eight_account_daily" }));
+  const resourceItems = elements.planResourceItems.value.split(/[,，\n]/)
+    .map((item) => item.trim()).filter(Boolean);
+  const reportEmail = elements.planReportEmail.value.trim();
+  const returnMap = elements.planReturnMap.value.trim();
+  if (!resourceItems.length || resourceItems.length > 10) return addLog("道具组合需填写1–10项");
+  if (!returnMap) return addLog("请填写流程结束后的挂机副本");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) return addLog("完成报告邮箱格式无效");
+  socket.send(JSON.stringify({ type: "plan.start", plan: "eight_account_daily",
+    options: { resourceItems, returnMap, reportEmail, quickTest: elements.planQuickTest.checked } }));
+});
+elements.retryDailyPlan.addEventListener("click", () => {
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: "plan.retry", plan: "eight_account_daily" }));
+  }
 });
 elements.cancelDailyPlan.addEventListener("click", () => {
   if (socket?.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify({ type: "plan.cancel", plan: "eight_account_daily" }));
+});
+elements.planResourcePreset.addEventListener("change", () => {
+  if (auctionPresets[elements.planResourcePreset.value]) {
+    elements.planResourceItems.value = auctionPresets[elements.planResourcePreset.value];
+  }
+});
+elements.planResourceItems.addEventListener("input", () => {
+  elements.planResourcePreset.value = Object.entries(auctionPresets)
+    .find(([, value]) => value === elements.planResourceItems.value.trim())?.[0] ?? "custom";
+});
+elements.startKeepPlayer.addEventListener("click", () => runKeepPlayerCommand("keep_player_start"));
+elements.exitKeepPlayer.addEventListener("click", () => runKeepPlayerCommand("keep_player_exit"));
+elements.refreshAllInventory.addEventListener("click", () => {
+  for (const deviceId of devices.keys()) sendCommand(deviceId, "request_status", {});
+  addLog("已刷新全部设备状态；可在账号行单独刷新背包数量");
 });
 elements.selectOverlay.addEventListener("click", (event) => {
   if (event.target === elements.selectOverlay) closeSelectDialog();
@@ -188,7 +227,7 @@ function handleMessage(message) {
 function renderDailyPlan() {
   const statusLabels = {
     idle: "未运行", running: "运行中", success: "已完成",
-    error: "失败", cancelled: "已中断"
+    intervention: "等待人工处理", error: "失败", cancelled: "已中断"
   };
   elements.dailyPlanStatus.textContent = statusLabels[dailyPlan.status] ?? dailyPlan.status;
   elements.dailyPlanStatus.className = `state ${dailyPlan.status === "running" || dailyPlan.status === "success" ? "online" : "offline"}`;
@@ -196,17 +235,103 @@ function renderDailyPlan() {
   const current = Number.isInteger(dailyPlan.legIndex) && dailyPlan.legIndex >= 0
     ? `${dailyPlan.route?.[dailyPlan.legIndex]?.accountLabel ?? "--"} → ${dailyPlan.route?.[dailyPlan.legIndex + 1]?.accountLabel ?? "--"}`
     : "等待启动";
+  const total = Math.max(1, (dailyPlan.route?.length ?? 1) - 1);
+  const email = dailyPlan.status === "success" ? ` · 邮件：${dailyPlan.emailStatus || "处理中"}` : "";
   elements.dailyPlanDetail.textContent = dailyPlan.error
-    ? dailyPlan.error : `当前：${current} · 已完成 ${completed}/8`;
-  elements.dailyPlanProgress.style.width = `${Math.min(100, completed * 12.5)}%`;
-  elements.startDailyPlan.disabled = dailyPlan.status === "running";
-  elements.cancelDailyPlan.disabled = dailyPlan.status !== "running";
+    ? dailyPlan.error : `当前：${current} · 已完成 ${completed}/${total}${email}`;
+  elements.dailyPlanProgress.style.width = `${Math.min(100, completed * 100 / total)}%`;
+  elements.startDailyPlan.disabled = ["running", "intervention"].includes(dailyPlan.status);
+  elements.retryDailyPlan.disabled = dailyPlan.status !== "intervention";
+  elements.cancelDailyPlan.disabled = !["running", "intervention"].includes(dailyPlan.status);
+  if (dailyPlan.status === "intervention") {
+    const seconds = Math.max(0, Math.ceil(((dailyPlan.interventionDeadlineAt || Date.now()) - Date.now()) / 1000));
+    elements.planIntervention.textContent = `${dailyPlan.errorAccount || "当前账号"}：${dailyPlan.error}。保留现场 ${seconds} 秒，请人工处理后点击“重试”。`;
+    elements.planIntervention.classList.remove("hidden");
+  } else {
+    elements.planIntervention.classList.add("hidden");
+  }
 }
 
 renderDailyPlan();
+setInterval(() => {
+  if (dailyPlan.status === "intervention") renderDailyPlan();
+}, 1_000);
+
+function runKeepPlayerCommand(command) {
+  const deviceId = elements.keepPlayerDevice.value;
+  if (!deviceId || !devices.has(deviceId)) return addLog("请先选择在线设备");
+  const action = command === "keep_player_exit" ? "关闭" : "启动";
+  if (!window.confirm(`${action} ${deviceId} 的 KeepPlayer 属于高风险操作，确认继续？`)) return;
+  sendCommand(deviceId, command, {});
+}
+
+function renderGlobalControls() {
+  const selected = elements.keepPlayerDevice.value;
+  elements.keepPlayerDevice.replaceChildren();
+  for (const device of devices.values()) {
+    const option = document.createElement("option");
+    option.value = device.deviceId;
+    const model = device.telemetry?.device?.model;
+    option.textContent = model ? `${device.deviceId} · ${model}` : device.deviceId;
+    elements.keepPlayerDevice.append(option);
+  }
+  if (devices.has(selected)) elements.keepPlayerDevice.value = selected;
+  const disabled = devices.size === 0;
+  elements.startKeepPlayer.disabled = disabled;
+  elements.exitKeepPlayer.disabled = disabled;
+}
+
+function renderGlobalDailyMonitor() {
+  elements.globalDailyMonitor.replaceChildren();
+  const entries = [];
+  for (const device of devices.values()) {
+    const accounts = Array.isArray(device.telemetry?.accounts) ? device.telemetry.accounts : [];
+    for (const account of accounts) {
+      if (!Number.isInteger(account?.index)) continue;
+      entries.push({ device, account, monitor: account.automation ?? {} });
+    }
+  }
+  entries.sort((left, right) => String(left.account.label).localeCompare(
+    String(right.account.label), undefined, { numeric: true }));
+  if (!entries.length) {
+    const empty = document.createElement("p");
+    empty.textContent = "等待两台设备上报八个账号状态。";
+    elements.globalDailyMonitor.append(empty);
+    return;
+  }
+  for (const { device, account, monitor } of entries) {
+    const row = document.createElement("div");
+    row.className = "daily-monitor-row";
+    const title = document.createElement("strong");
+    title.textContent = account.label || `账号${account.index + 1}`;
+    const status = document.createElement("span");
+    const transferDone = isToday(monitor.equipmentTransferLastRunAt);
+    const dungeonDone = isToday(monitor.dungeonLastRunAt);
+    status.className = transferDone && dungeonDone ? "daily-ok" : "daily-pending";
+    status.textContent = `装备${transferDone ? "✓" : "—"} · 副本${dungeonDone ? "✓" : "—"}`;
+    const inventory = document.createElement("small");
+    const counts = monitor.inventoryCounts && typeof monitor.inventoryCounts === "object"
+      ? Object.entries(monitor.inventoryCounts).map(([name, count]) => `${name} ${count}`).join(" · ") : "";
+    inventory.textContent = monitor.inventoryStatus === "ok"
+      ? `${counts || "未找到监控物资"} · ${formatDateTime(monitor.inventoryLastRunAt)}`
+      : `背包待刷新${monitor.inventoryStatus === "error" ? "（上次失败）" : ""}`;
+    const refresh = document.createElement("button");
+    refresh.className = "secondary";
+    refresh.textContent = "刷新背包";
+    refresh.addEventListener("click", () => {
+      sendCommand(device.deviceId, "switch_account", { accountIndex: account.index });
+      setTimeout(() => sendCommand(device.deviceId, "run_inventory_snapshot",
+        { accountIndex: account.index }), 700);
+    });
+    row.append(title, status, inventory, refresh);
+    elements.globalDailyMonitor.append(row);
+  }
+}
 
 function renderDevices() {
   elements.deviceCount.textContent = String(devices.size);
+  renderGlobalControls();
+  renderGlobalDailyMonitor();
   elements.deviceList.replaceChildren();
   if (devices.size === 0) {
     const empty = document.createElement("p");
@@ -252,35 +377,6 @@ function renderDevices() {
       if (app.activeAccount === index) button.classList.add("active");
       button.addEventListener("click", () => sendCommand(device.deviceId, "switch_account", { accountIndex: index }));
       tabs.append(button);
-    }
-    const dailyMonitorList = card.querySelector(".daily-monitor-list");
-    for (let index = 0; index < 4; index += 1) {
-      const account = accounts.find((item) => item?.index === index) ?? {};
-      const monitor = account.automation ?? {};
-      const row = document.createElement("div");
-      row.className = "daily-monitor-row";
-      const title = document.createElement("strong");
-      title.textContent = accountLabel(accounts, index);
-      const status = document.createElement("span");
-      const transferDone = isToday(monitor.equipmentTransferLastRunAt);
-      const dungeonDone = isToday(monitor.dungeonLastRunAt);
-      status.className = transferDone && dungeonDone ? "daily-ok" : "daily-pending";
-      status.textContent = `装备${transferDone ? "✓" : "—"} · 副本${dungeonDone ? "✓" : "—"}`;
-      const inventory = document.createElement("small");
-      const counts = monitor.inventoryCounts && typeof monitor.inventoryCounts === "object"
-        ? Object.entries(monitor.inventoryCounts).map(([name, count]) => `${name} ${count}`).join(" · ") : "";
-      inventory.textContent = monitor.inventoryStatus === "ok"
-        ? `${counts || "未找到监控物资"} · ${formatDateTime(monitor.inventoryLastRunAt)}`
-        : `背包待刷新${monitor.inventoryStatus === "error" ? "（上次失败）" : ""}`;
-      const refresh = document.createElement("button");
-      refresh.className = "secondary";
-      refresh.textContent = "刷新背包";
-      refresh.addEventListener("click", () => {
-        sendCommand(device.deviceId, "switch_account", { accountIndex: index });
-        setTimeout(() => sendCommand(device.deviceId, "run_inventory_snapshot", { accountIndex: index }), 500);
-      });
-      row.append(title, status, inventory, refresh);
-      dailyMonitorList.append(row);
     }
     card.querySelectorAll(".button-grid button").forEach((button) => {
       button.addEventListener("click", () => {
@@ -344,6 +440,7 @@ function renderDevices() {
     const storeSellEnabled = card.querySelector(".store-sell-enabled");
     const storeSellItem = card.querySelector(".store-sell-item");
     const templeEnabled = card.querySelector(".temple-enabled");
+    const returnHangMap = card.querySelector(".return-hang-map");
     const warehouseEnabled = card.querySelector(".warehouse-enabled");
     const warehouseStoreAll = card.querySelector(".warehouse-store-all");
     const warehouseItem = card.querySelector(".warehouse-item");
@@ -376,6 +473,8 @@ function renderDevices() {
     storeSellEnabled.checked = automation.storeSellEnabled === true;
     storeSellItem.value = "金币券";
     templeEnabled.checked = automation.templeEnabled === true;
+    returnHangMap.value = typeof automation.returnHangMap === "string"
+      ? automation.returnHangMap : "圣兽云殿";
     warehouseEnabled.checked = automation.warehouseEnabled === true;
     warehouseStoreAll.checked = automation.warehouseStoreAll !== false;
     warehouseItem.value = typeof automation.warehouseItem === "string"
@@ -474,6 +573,10 @@ function renderDevices() {
       sendCommand(device.deviceId, "configure_temple_guard", {
         accountIndex: activeAccountIndex,
         enabled: templeEnabled.checked
+      });
+      sendCommand(device.deviceId, "configure_return_hang", {
+        accountIndex: activeAccountIndex,
+        map: returnHangMap.value.trim() || "圣兽云殿"
       });
       sendCommand(device.deviceId, "configure_warehouse_sync", {
         accountIndex: activeAccountIndex,

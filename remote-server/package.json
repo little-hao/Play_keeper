@@ -1,6 +1,6 @@
 {
   "name": "play-keeper-relay",
-  "version": "1.9.3",
+  "version": "1.10.0",
   "private": true,
   "type": "module",
   "description": "Play Keeper encrypted WebSocket relay and iPhone web dashboard",
@@ -12,6 +12,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "nodemailer": "^10.0.16",
     "ws": "8.22.0"
   }
 }

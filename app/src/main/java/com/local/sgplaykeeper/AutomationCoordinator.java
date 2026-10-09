@@ -59,9 +59,8 @@ final class AutomationCoordinator {
     static final long PRESTIGE_CHECK_INTERVAL_MS = 60L * 60L * 1000L;
     static final long INVENTORY_CHECK_INTERVAL_MS = 24L * 60L * 60L * 1000L;
     private static final long TICK_INTERVAL_MS = 60_000L;
-    static final String AUCTION_PRESET_ONE = "曙光印记,进化宝石";
-    static final String AUCTION_PRESET_TWO = "强化丹A,强化丹B,天仙雨露,雨露结晶";
-    static final String AUCTION_PRESET_THREE = "黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石";
+    static final String AUCTION_PRESET_ONE = "曙光印记,进化宝石,强化丹A,强化丹B,天仙玉露";
+    static final String AUCTION_PRESET_TWO = "黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石";
     private static final String DEFAULT_AUCTION_ITEMS = AUCTION_PRESET_ONE;
     private static final String DEFAULT_STORE_ITEMS = "金币券";
     private static final String DEFAULT_BUYER = "hao";
@@ -98,6 +97,7 @@ final class AutomationCoordinator {
     private static final String PREF_STORE_LAST = "automation_store_last_";
     private static final String PREF_TEMPLE_ENABLED = "automation_temple_enabled_";
     private static final String PREF_TEMPLE_LAST = "automation_temple_last_";
+    private static final String PREF_RETURN_HANG_MAP = "automation_return_hang_map_";
     private static final String PREF_WAREHOUSE_ENABLED = "automation_warehouse_enabled_";
     private static final String PREF_WAREHOUSE_ITEM = "automation_warehouse_item_";
     private static final String PREF_WAREHOUSE_STORE_ALL = "automation_warehouse_store_all_";
@@ -155,6 +155,12 @@ final class AutomationCoordinator {
 
     boolean isTempleEnabled(int accountIndex) {
         return preferences.getBoolean(PREF_TEMPLE_ENABLED + accountIndex, false);
+    }
+
+    String returnHangMap(int accountIndex) {
+        String value = preferences.getString(PREF_RETURN_HANG_MAP + accountIndex, "圣兽云殿");
+        value = value == null ? "" : value.replaceAll("[\\r\\n\\t]", " ").trim();
+        return value.isEmpty() ? "圣兽云殿" : value;
     }
 
     boolean isStoreSellEnabled(int accountIndex) {
@@ -301,6 +307,16 @@ final class AutomationCoordinator {
     void configureTemple(int accountIndex, boolean enabled) {
         requireAccount(accountIndex);
         preferences.edit().putBoolean(PREF_TEMPLE_ENABLED + accountIndex, enabled).apply();
+        host.onAutomationChanged();
+    }
+
+    void configureReturnHang(int accountIndex, String map) {
+        requireAccount(accountIndex);
+        String safe = map == null ? "" : map.replaceAll("[\\r\\n\\t]", " ").trim();
+        if (safe.isEmpty() || safe.length() > 30) {
+            throw new IllegalArgumentException("返回挂机副本名称无效");
+        }
+        preferences.edit().putString(PREF_RETURN_HANG_MAP + accountIndex, safe).apply();
         host.onAutomationChanged();
     }
 
@@ -480,6 +496,7 @@ final class AutomationCoordinator {
         automation.put("sellIntervalHours", auctionIntervalHours(accountIndex));
         automation.put("sellLastRunAt", preferences.getLong(PREF_SELL_LAST + accountIndex, 0L));
         automation.put("templeEnabled", isTempleEnabled(accountIndex));
+        automation.put("returnHangMap", returnHangMap(accountIndex));
         automation.put("templeLastCheckAt", preferences.getLong(
                 PREF_TEMPLE_LAST + accountIndex, 0L));
         automation.put("warehouseEnabled", isWarehouseEnabled(accountIndex));
@@ -2337,9 +2354,11 @@ final class AutomationCoordinator {
         RuntimeState state = states[accountIndex];
         state.awaitingTempleConfirmation = true;
         state.confirmationCompletionMessage = completedMessage;
-        state.confirmationMessage = completedMessage + "，是否转到圣兽云殿手动挂机？";
+        state.confirmationMessage = completedMessage + "，是否转到" + returnHangMap(accountIndex)
+                + "手动挂机？";
         state.confirmationDeadlineAt = System.currentTimeMillis() + TEMPLE_CONFIRM_TIMEOUT_MS;
-        updateState(accountIndex, "等待确认是否进入圣兽云殿（60秒后自动进入）");
+        updateState(accountIndex, "等待确认是否进入" + returnHangMap(accountIndex)
+                + "（60秒后自动进入）");
         host.requestTempleConfirmation(accountIndex, state.confirmationMessage,
                 state.confirmationDeadlineAt);
         handler.postDelayed(() -> {
@@ -2361,7 +2380,7 @@ final class AutomationCoordinator {
                     "账号页面未就绪", manual);
             return;
         }
-        updateState(accountIndex, completedMessage + "，正在进入圣兽云殿");
+        updateState(accountIndex, completedMessage + "，正在进入" + returnHangMap(accountIndex));
         states[accountIndex].templeStoragePrepared = false;
         host.prepareAutomation(accountIndex, false);
         host.openAfk(accountIndex);
@@ -2956,6 +2975,7 @@ final class AutomationCoordinator {
 
     private void runTempleGuard(int accountIndex, boolean manual, boolean homeRetried) {
         RuntimeState state = states[accountIndex];
+        String returnMap = returnHangMap(accountIndex);
         if (!homeRetried) {
             if (state.busy) {
                 if (manual) host.showMessage(accountName(accountIndex) + "脚本正在执行");
@@ -2964,7 +2984,7 @@ final class AutomationCoordinator {
             state.busy = true;
             state.task = "temple";
             state.status = "running";
-            state.lastMessage = "正在检查圣兽云殿挂机";
+            state.lastMessage = "正在检查" + returnMap + "挂机";
             state.updatedAt = System.currentTimeMillis();
             state.templeStoragePrepared = false;
             host.onAutomationChanged();
@@ -2978,22 +2998,24 @@ final class AutomationCoordinator {
             return;
         }
         if (!state.templeStoragePrepared) {
-            updateState(accountIndex, "进入圣兽云殿前正在全选存仓");
+            updateState(accountIndex, "进入" + returnMap + "前正在全选存仓");
             storeAllBeforeHang(accountIndex, view, () -> {
                 state.templeStoragePrepared = true;
                 runTempleGuard(accountIndex, manual, true);
             }, manual, 0);
             return;
         }
-        String script = "(function(){"
+        String script = "(function(){const targetMap=" + JSONObject.quote(returnMap) + ";"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
                 + "const candidates=Array.from(document.querySelectorAll('button,[role=button],uni-button,view')).filter(visible);"
-                + "const stop=candidates.find(e=>(e.textContent||'').replace(/\\s+/g,'').includes('\u505c\u6b62\u6302\u673a'));"
-                + "if(stop)return JSON.stringify({status:'running'});"
                 + "const select=Array.from(document.querySelectorAll('select')).find(s=>"
-                + "Array.from(s.options).some(o=>(o.textContent||'').includes('\u5723兽云殿')));"
+                + "Array.from(s.options).some(o=>(o.textContent||'').includes(targetMap)));"
                 + "if(!select)return JSON.stringify({status:'missing_controls'});"
-                + "const option=Array.from(select.options).find(o=>(o.textContent||'').includes('\u5723兽云殿'));"
+                + "const option=Array.from(select.options).find(o=>(o.textContent||'').includes(targetMap));"
+                + "const selected=(select.options[select.selectedIndex]?.textContent||'');"
+                + "const stop=candidates.find(e=>(e.textContent||'').replace(/\\s+/g,'').includes('\u505c\u6b62\u6302\u673a'));"
+                + "if(stop&&selected.includes(targetMap))return JSON.stringify({status:'running'});"
+                + "if(stop){stop.click();return JSON.stringify({status:'stopping_previous'});}"
                 + "select.value=option.value;select.selectedIndex=option.index;"
                 + "select.dispatchEvent(new Event('input',{bubbles:true}));"
                 + "select.dispatchEvent(new Event('change',{bubbles:true}));"
@@ -3006,9 +3028,12 @@ final class AutomationCoordinator {
             if ("running".equals(status)) {
                 preferences.edit().putLong(PREF_TEMPLE_LAST + accountIndex,
                         System.currentTimeMillis()).apply();
-                finish(accountIndex, "temple", "ok", "圣兽云殿正在挂机，无需操作", manual);
+                finish(accountIndex, "temple", "ok", returnMap + "正在挂机，无需操作", manual);
             } else if ("configured".equals(status)) {
                 handler.postDelayed(() -> clickTempleStart(accountIndex, view, manual), 900L);
+            } else if ("stopping_previous".equals(status)) {
+                handler.postDelayed(() -> runTempleGuard(
+                        accountIndex, manual, true), 1_500L);
             } else if (!homeRetried) {
                 host.openAfk(accountIndex);
                 handler.postDelayed(() -> runTempleGuard(
@@ -3031,9 +3056,9 @@ final class AutomationCoordinator {
             preferences.edit().putLong(PREF_TEMPLE_LAST + accountIndex,
                     System.currentTimeMillis()).apply();
             if ("started".equals(result)) {
-                finish(accountIndex, "temple", "ok", "已启动圣兽云殿手动挂机", manual);
+                finish(accountIndex, "temple", "ok", "已启动" + returnHangMap(accountIndex) + "手动挂机", manual);
             } else if ("running".equals(result)) {
-                finish(accountIndex, "temple", "ok", "圣兽云殿正在挂机", manual);
+                finish(accountIndex, "temple", "ok", returnHangMap(accountIndex) + "正在挂机", manual);
             } else {
                 finish(accountIndex, "temple", "error", "未找到“开始挂机”按钮", manual);
             }

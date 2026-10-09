@@ -5,26 +5,35 @@ export const EQUIPMENT_ITEMS = Object.freeze([
   "三生戒·改", "比翼·改", "相望镯·改", "尾生之泪·改", "龙神印记·庆"
 ]);
 
+export const RESOURCE_ITEMS = Object.freeze([
+  "曙光印记", "进化宝石", "强化丹A", "强化丹B", "天仙玉露"
+]);
+
 const REQUIRED_ROUTE = Object.freeze([
   "hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"
 ]);
+const QUICK_TEST_ROUTE = Object.freeze(["hao", "hao1", "hao7", "hao"]);
+const INTERVENTION_MS = 30_000;
 
 export function resolveEightAccountRoute(deviceSummaries) {
+  return resolveAccountRoute(deviceSummaries, REQUIRED_ROUTE);
+}
+
+export function resolveQuickTestRoute(deviceSummaries) {
+  return resolveAccountRoute(deviceSummaries, QUICK_TEST_ROUTE);
+}
+
+function resolveAccountRoute(deviceSummaries, labels) {
   const accounts = [];
   for (const device of deviceSummaries) {
-    const telemetryAccounts = Array.isArray(device?.telemetry?.accounts)
-      ? device.telemetry.accounts : [];
-    for (const account of telemetryAccounts) {
+    const reported = Array.isArray(device?.telemetry?.accounts) ? device.telemetry.accounts : [];
+    for (const account of reported) {
       if (!Number.isInteger(account?.index) || typeof account?.label !== "string") continue;
-      accounts.push({
-        deviceId: device.deviceId,
-        accountIndex: account.index,
-        accountLabel: account.label,
-        online: true
-      });
+      accounts.push({ deviceId: device.deviceId, accountIndex: account.index,
+        accountLabel: account.label, online: true });
     }
   }
-  return REQUIRED_ROUTE.map((label) => {
+  return labels.map((label) => {
     const match = accounts.find((account) => account.accountLabel === label);
     if (!match) throw new Error(`账号 ${label} 当前不在线或未上报`);
     return { ...match };
@@ -32,73 +41,96 @@ export function resolveEightAccountRoute(deviceSummaries) {
 }
 
 export class EightAccountPlan {
-  constructor({ emitAction = () => {}, now = () => Date.now() } = {}) {
+  constructor({ emitAction = () => {}, now = () => Date.now(), onComplete = () => {} } = {}) {
     this.emitAction = emitAction;
     this.now = now;
+    this.onComplete = onComplete;
     this.state = this.#idleState();
   }
 
   #idleState() {
-    return {
-      status: "idle",
-      runId: "",
-      startedAt: 0,
-      updatedAt: this.now(),
-      legIndex: -1,
-      phase: "idle",
-      buyerStarted: false,
-      route: [],
-      items: [...EQUIPMENT_ITEMS],
-      price: 920,
-      error: "",
-      history: []
-    };
+    return { status: "idle", runId: "", startedAt: 0, updatedAt: this.now(),
+      phaseStartedAt: 0, legIndex: -1, phase: "idle", resumePhase: "",
+      buyerStarted: false, mainBuySeen: false, route: [], items: [...EQUIPMENT_ITEMS],
+      resourceItems: [...RESOURCE_ITEMS], price: 920, returnMap: "圣兽云殿",
+      reportEmail: "konghao0920@gmail.com", error: "", errorAccount: "",
+      interventionDeadlineAt: 0, emailStatus: "pending", inventoryByAccount: {}, history: [] };
   }
 
-  snapshot() {
-    return JSON.parse(JSON.stringify(this.state));
-  }
+  snapshot() { return JSON.parse(JSON.stringify(this.state)); }
 
-  start(route, { price = 920, items = EQUIPMENT_ITEMS } = {}) {
-    if (this.state.status === "running") throw new Error("八账号计划已在运行");
+  start(route, options = {}) {
+    if (["running", "intervention"].includes(this.state.status)) throw new Error("多用户挂机已在运行");
     this.#validateRoute(route);
-    if (!Number.isInteger(price) || price < 1 || price > 9_999_999) {
-      throw new Error("装备单价无效");
-    }
-    if (!Array.isArray(items) || items.length !== 10
-        || new Set(items).size !== 10
+    const price = options.price ?? 920;
+    const items = options.items ?? EQUIPMENT_ITEMS;
+    const resourceItems = options.resourceItems ?? RESOURCE_ITEMS;
+    const returnMap = options.returnMap ?? "圣兽云殿";
+    const reportEmail = options.reportEmail ?? "konghao0920@gmail.com";
+    if (!Number.isInteger(price) || price < 1 || price > 9_999_999) throw new Error("交易单价无效");
+    if (!Array.isArray(items) || items.length !== 10 || new Set(items).size !== 10
         || EQUIPMENT_ITEMS.some((item) => !items.includes(item))) {
       throw new Error("装备清单必须是指定的十件情改装备");
     }
+    if (!Array.isArray(resourceItems) || resourceItems.length < 1 || resourceItems.length > 10) {
+      throw new Error("道具组合需包含1–10项");
+    }
+    if (typeof returnMap !== "string" || !returnMap.trim() || returnMap.length > 30) {
+      throw new Error("返回挂机副本无效");
+    }
+    if (typeof reportEmail !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) {
+      throw new Error("报告邮箱格式无效");
+    }
     const now = this.now();
-    this.state = {
-      status: "running",
-      runId: crypto.randomUUID(),
-      startedAt: now,
-      updatedAt: now,
-      legIndex: 0,
-      phase: "starting_leg",
-      buyerStarted: false,
-      route: route.map((entry) => ({ ...entry })),
-      items: [...items],
-      price,
-      error: "",
-      history: []
-    };
+    this.state = { ...this.#idleState(), status: "running", runId: crypto.randomUUID(),
+      startedAt: now, updatedAt: now, phaseStartedAt: now, legIndex: 0,
+      phase: "starting_leg", route: route.map((entry) => ({ ...entry })), items: [...items],
+      resourceItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
+      price, returnMap: returnMap.trim(), reportEmail: reportEmail.trim() };
     this.#startCurrentLeg();
     return this.snapshot();
   }
 
   cancel(reason = "用户中断") {
-    if (this.state.status !== "running") return this.snapshot();
+    if (!["running", "intervention"].includes(this.state.status)) return this.snapshot();
     const leg = this.#currentLeg();
     for (const account of [leg?.seller, leg?.buyer]) {
-      if (!account) continue;
-      this.#command(account, "cancel_automation", { accountIndex: account.accountIndex });
+      if (account) this.#command(account, "cancel_automation", { accountIndex: account.accountIndex });
     }
-    this.state.status = "cancelled";
-    this.state.phase = "cancelled";
-    this.state.error = reason;
+    Object.assign(this.state, { status: "cancelled", phase: "cancelled", error: reason,
+      interventionDeadlineAt: 0, updatedAt: this.now() });
+    return this.snapshot();
+  }
+
+  retry() {
+    if (this.state.status !== "intervention") throw new Error("当前没有等待人工处理的错误");
+    if (this.now() > this.state.interventionDeadlineAt) return this.tick();
+    const phase = this.state.resumePhase;
+    Object.assign(this.state, { status: "running", error: "", errorAccount: "",
+      interventionDeadlineAt: 0, phaseStartedAt: this.now() });
+    if (["seller_running", "buyer_running"].includes(phase)) {
+      this.state.buyerStarted = false;
+      this.#startCurrentLeg();
+    } else if (phase === "resource_auction_running") {
+      this.#startResourceAuction(this.#currentLeg().buyer);
+    } else if (phase === "main_buy_running") {
+      this.#startMainBuy(this.#currentLeg().buyer);
+    } else {
+      return this.#intervene("无法判断需要重试的阶段", "当前账号");
+    }
+    return this.snapshot();
+  }
+
+  tick() {
+    if (this.state.status === "intervention" && this.now() >= this.state.interventionDeadlineAt) {
+      Object.assign(this.state, { status: "error", phase: "error",
+        error: `${this.state.error}；30秒人工介入时间已结束`, updatedAt: this.now() });
+    }
+    return this.snapshot();
+  }
+
+  updateEmailStatus(status) {
+    this.state.emailStatus = String(status || "unknown").slice(0, 120);
     this.state.updatedAt = this.now();
     return this.snapshot();
   }
@@ -107,7 +139,8 @@ export class EightAccountPlan {
     if (this.state.status !== "running") return this.snapshot();
     const leg = this.#currentLeg();
     if (leg && (leg.seller.deviceId === deviceId || leg.buyer.deviceId === deviceId)) {
-      return this.#fail(`当前交接设备 ${deviceId} 已离线`);
+      const account = leg.seller.deviceId === deviceId ? leg.seller : leg.buyer;
+      return this.#intervene(`设备 ${deviceId} 已离线`, account.accountLabel);
     }
     return this.snapshot();
   }
@@ -115,50 +148,109 @@ export class EightAccountPlan {
   onTelemetry(deviceId, telemetry) {
     if (this.state.status !== "running") return this.snapshot();
     const leg = this.#currentLeg();
-    if (!leg) return this.#fail("计划交接序号无效");
-    const sellerAutomation = this.#automationFor(leg.seller, deviceId, telemetry);
-    const buyerAutomation = this.#automationFor(leg.buyer, deviceId, telemetry);
-
-    if (sellerAutomation?.task === "equipment_sell" && sellerAutomation.status === "error") {
-      return this.#fail(`${leg.seller.accountLabel} 上架失败：${sellerAutomation.lastMessage || "未知错误"}`);
-    }
-    if (buyerAutomation?.task === "equipment_buy" && buyerAutomation.status === "error") {
-      return this.#fail(`${leg.buyer.accountLabel} 接收失败：${buyerAutomation.lastMessage || "未知错误"}`);
-    }
-
-    if (!this.state.buyerStarted && sellerAutomation?.task === "equipment_sell"
-        && sellerAutomation.status === "running"
-        && Number(sellerAutomation.equipmentListedInBatch) > 0) {
-      this.state.buyerStarted = true;
-      this.state.phase = "buyer_running";
-      this.state.updatedAt = this.now();
-      this.#command(leg.buyer, "switch_account", { accountIndex: leg.buyer.accountIndex });
-      this.#command(leg.buyer, "run_equipment_buy", { accountIndex: leg.buyer.accountIndex });
-    }
-
-    if (buyerAutomation?.task === "equipment_buy" && buyerAutomation.status === "success") {
-      if (buyerAutomation.equipmentAllTransferred !== true) {
-        return this.#fail(`${leg.buyer.accountLabel} 未通过十件装备最终验收`);
+    if (!leg) return this.#intervene("计划交接序号无效", "系统");
+    const seller = this.#automationFor(leg.seller, deviceId, telemetry);
+    const buyer = this.#automationFor(leg.buyer, deviceId, telemetry);
+    if (["seller_running", "buyer_running"].includes(this.state.phase)) {
+      if (seller?.task === "equipment_sell" && seller.status === "error") {
+        return this.#intervene(`${leg.seller.accountLabel} 上架失败：${seller.lastMessage || "未知错误"}`,
+          leg.seller.accountLabel);
       }
-      this.state.history.push({
-        legIndex: this.state.legIndex,
-        seller: leg.seller.accountLabel,
-        buyer: leg.buyer.accountLabel,
-        completedAt: this.now(),
-        result: "success"
-      });
-      if (this.state.legIndex >= this.state.route.length - 2) {
-        this.state.status = "success";
-        this.state.phase = "complete";
+      if (buyer?.status === "error") {
+        return this.#intervene(`${leg.buyer.accountLabel} 执行失败：${buyer.lastMessage || "未知错误"}`,
+          leg.buyer.accountLabel);
+      }
+      if (!this.state.buyerStarted && seller?.task === "equipment_sell" && seller.status === "running"
+          && Number(seller.equipmentListedInBatch) > 0) {
+        this.state.buyerStarted = true;
+        this.state.phase = "buyer_running";
         this.state.updatedAt = this.now();
-        return this.snapshot();
+        this.#command(leg.buyer, "switch_account", { accountIndex: leg.buyer.accountIndex });
+        this.#command(leg.buyer, "run_equipment_buy", { accountIndex: leg.buyer.accountIndex });
       }
-      this.state.legIndex += 1;
-      this.state.buyerStarted = false;
-      this.state.phase = "starting_leg";
-      this.#startCurrentLeg();
+      if (buyer && this.#buyerWorkflowComplete(buyer)) {
+        this.#captureInventory(leg.buyer, buyer);
+        if (leg.buyer.accountLabel === "hao") this.#startMainBuy(leg.buyer);
+        else this.#startResourceAuction(leg.buyer);
+      }
+      return this.snapshot();
+    }
+    if (this.state.phase === "resource_auction_running" && buyer) {
+      if (buyer.status === "error") {
+        return this.#intervene(`${leg.buyer.accountLabel} 道具上架失败：${buyer.lastMessage || "未知错误"}`,
+          leg.buyer.accountLabel);
+      }
+      const auctionDone = Number(buyer.auctionLastRunAt) >= this.state.phaseStartedAt;
+      const returned = buyer.task === "temple" && buyer.status === "ok"
+        && Number(buyer.updatedAt) >= this.state.phaseStartedAt;
+      if (auctionDone && returned) this.#completeLeg();
+      return this.snapshot();
+    }
+    if (this.state.phase === "main_buy_running" && buyer) {
+      if (buyer.task === "auction_buy" && buyer.status === "running") this.state.mainBuySeen = true;
+      if (buyer.status === "error") {
+        return this.#intervene(`hao 道具购买失败：${buyer.lastMessage || "未知错误"}`, "hao");
+      }
+      const returned = this.state.mainBuySeen && buyer.task === "temple" && buyer.status === "ok"
+        && Number(buyer.updatedAt) >= this.state.phaseStartedAt;
+      if (returned) this.#completeLeg();
     }
     return this.snapshot();
+  }
+
+  #buyerWorkflowComplete(automation) {
+    const afterStart = (value) => Number(value) >= this.state.phaseStartedAt;
+    return afterStart(automation.equipmentTransferLastRunAt)
+      && afterStart(automation.dungeonLastRunAt)
+      && afterStart(automation.inventoryLastRunAt)
+      && automation.inventoryStatus === "ok"
+      && automation.task === "temple" && automation.status === "ok";
+  }
+
+  #captureInventory(account, automation) {
+    const source = automation.inventoryCounts && typeof automation.inventoryCounts === "object"
+      ? automation.inventoryCounts : {};
+    const counts = {};
+    for (const item of this.state.resourceItems) counts[item] = Number(source[item]) || 0;
+    this.state.inventoryByAccount[account.accountLabel] = counts;
+  }
+
+  #startResourceAuction(account) {
+    Object.assign(this.state, { phase: "resource_auction_running", phaseStartedAt: this.now(),
+      updatedAt: this.now() });
+    this.#configureResourcesAndReturn(account);
+    this.#command(account, "run_auto_auction", { accountIndex: account.accountIndex });
+  }
+
+  #startMainBuy(account) {
+    Object.assign(this.state, { phase: "main_buy_running", phaseStartedAt: this.now(),
+      updatedAt: this.now(), mainBuySeen: false });
+    this.#configureResourcesAndReturn(account);
+    this.#command(account, "run_auction_buy", { accountIndex: account.accountIndex });
+  }
+
+  #configureResourcesAndReturn(account) {
+    this.#command(account, "configure_auto_auction", { accountIndex: account.accountIndex,
+      enabled: false, items: [...this.state.resourceItems], buyer: "hao",
+      price: this.state.price, intervalHours: 24 });
+    this.#command(account, "configure_return_hang", {
+      accountIndex: account.accountIndex, map: this.state.returnMap });
+  }
+
+  #completeLeg() {
+    const leg = this.#currentLeg();
+    this.state.history.push({ legIndex: this.state.legIndex, seller: leg.seller.accountLabel,
+      buyer: leg.buyer.accountLabel, completedAt: this.now(), result: "success" });
+    if (this.state.legIndex >= this.state.route.length - 2) {
+      Object.assign(this.state, { status: "success", phase: "complete", updatedAt: this.now() });
+      Promise.resolve(this.onComplete(this.snapshot())).catch(() => {});
+      return;
+    }
+    this.state.legIndex += 1;
+    this.state.buyerStarted = false;
+    this.state.mainBuySeen = false;
+    this.state.phase = "starting_leg";
+    this.#startCurrentLeg();
   }
 
   #automationFor(account, deviceId, telemetry) {
@@ -169,26 +261,22 @@ export class EightAccountPlan {
 
   #currentLeg() {
     if (this.state.legIndex < 0 || this.state.legIndex >= this.state.route.length - 1) return null;
-    return {
-      seller: this.state.route[this.state.legIndex],
-      buyer: this.state.route[this.state.legIndex + 1]
-    };
+    return { seller: this.state.route[this.state.legIndex], buyer: this.state.route[this.state.legIndex + 1] };
   }
 
   #startCurrentLeg() {
     const leg = this.#currentLeg();
-    if (!leg) return this.#fail("计划交接序号无效");
+    if (!leg) return this.#intervene("计划交接序号无效", "系统");
+    this.state.phaseStartedAt = this.now();
     const common = { items: [...this.state.items], price: this.state.price };
     this.#command(leg.seller, "configure_equipment_transfer", {
-      accountIndex: leg.seller.accountIndex,
-      ...common,
-      buyer: leg.buyer.accountLabel
-    });
+      accountIndex: leg.seller.accountIndex, ...common, buyer: leg.buyer.accountLabel });
     this.#command(leg.buyer, "configure_equipment_transfer", {
-      accountIndex: leg.buyer.accountIndex,
-      ...common,
-      buyer: ""
-    });
+      accountIndex: leg.buyer.accountIndex, ...common, buyer: "" });
+    this.#command(leg.buyer, "configure_inventory_monitor", {
+      accountIndex: leg.buyer.accountIndex, items: [...this.state.resourceItems] });
+    this.#command(leg.buyer, "configure_return_hang", {
+      accountIndex: leg.buyer.accountIndex, map: this.state.returnMap });
     this.#command(leg.seller, "switch_account", { accountIndex: leg.seller.accountIndex });
     this.#command(leg.seller, "run_equipment_sell", { accountIndex: leg.seller.accountIndex });
     this.state.phase = "seller_running";
@@ -196,30 +284,24 @@ export class EightAccountPlan {
   }
 
   #command(account, command, parameters) {
-    this.emitAction({
-      deviceId: account.deviceId,
-      accountLabel: account.accountLabel,
-      command,
-      parameters
-    });
+    this.emitAction({ deviceId: account.deviceId, accountLabel: account.accountLabel,
+      command, parameters });
   }
 
-  #fail(message) {
-    this.state.status = "error";
-    this.state.phase = "error";
-    this.state.error = message;
-    this.state.updatedAt = this.now();
+  #intervene(message, accountLabel) {
+    this.state.resumePhase = this.state.phase;
+    Object.assign(this.state, { status: "intervention", error: message, errorAccount: accountLabel,
+      interventionDeadlineAt: this.now() + INTERVENTION_MS, updatedAt: this.now() });
     return this.snapshot();
   }
 
   #validateRoute(route) {
-    if (!Array.isArray(route) || route.length !== REQUIRED_ROUTE.length) {
-      throw new Error("八账号路线必须包含起点和回到 hao 的共9个节点");
-    }
+    const labels = Array.isArray(route) ? route.map((entry) => entry?.accountLabel) : [];
+    const allowed = [REQUIRED_ROUTE, QUICK_TEST_ROUTE].some((candidate) =>
+      candidate.length === labels.length && candidate.every((label, index) => labels[index] === label));
+    if (!allowed) throw new Error("账号路线无效");
     route.forEach((entry, index) => {
-      if (!entry || entry.accountLabel !== REQUIRED_ROUTE[index]
-          || typeof entry.deviceId !== "string"
-          || !Number.isInteger(entry.accountIndex)
+      if (!entry || typeof entry.deviceId !== "string" || !Number.isInteger(entry.accountIndex)
           || entry.accountIndex < 0 || entry.accountIndex > 3) {
         throw new Error(`路线第${index + 1}个账号无效`);
       }

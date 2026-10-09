@@ -15,15 +15,16 @@ android {
         applicationId 'com.local.sgplaykeeper'
         minSdk 26
         targetSdk 35
-        versionCode 24
-        versionName '1.9.3'
+        versionCode 25
+        versionName '1.10.0'
     }
 
     signingConfigs {
         preservedDebug {
             def repositoryKey = rootProject.file('signing/debug.keystore')
             def userKey = new File(System.getProperty('user.home'), '.android/debug.keystore')
-            storeFile repositoryKey.exists() ? repositoryKey : userKey
+            def availableKey = repositoryKey.exists() ? repositoryKey : userKey.exists() ? userKey : null
+            if (availableKey != null) storeFile availableKey
             storePassword 'android'
             keyAlias 'androiddebugkey'
             keyPassword 'android'
@@ -34,13 +35,15 @@ android {
         debug {
             applicationIdSuffix '.test.v190'
             versionNameSuffix '-debug'
-            resValue 'string', 'app_name', 'Play Keeper 1.9 测试'
+            resValue 'string', 'app_name', 'Play Keeper 1.10 测试'
         }
         release {
             // v1.9 is the user-approved parallel-install line. Keep this ID so the
             // formal build upgrades the already-tested v1.9 app without touching v1.8.x.
             applicationIdSuffix '.test.v190'
-            signingConfig signingConfigs.preservedDebug
+            if (signingConfigs.preservedDebug.storeFile != null) {
+                signingConfig signingConfigs.preservedDebug
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
