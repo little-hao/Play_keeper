@@ -36,6 +36,7 @@ const elements = {
   quickAuctionAccount: document.querySelector("#quickAuctionAccount"),
   quickAuctionToMain: document.querySelector("#quickAuctionToMain"),
   quickMainBuy: document.querySelector("#quickMainBuy"),
+  quickSweepAll: document.querySelector("#quickSweepAll"),
   quickHangAccount: document.querySelector("#quickHangAccount"),
   quickHangMap: document.querySelector("#quickHangMap"),
   quickStartHang: document.querySelector("#quickStartHang"),
@@ -150,7 +151,28 @@ elements.quickMainBuy.addEventListener("click", () => {
     { accountIndex: target.accountIndex }), 700);
   addLog("hao 已启动全部920金币组合道具购买");
 });
+elements.quickSweepAll.addEventListener("click", () => {
+  if (socket?.readyState !== WebSocket.OPEN) return addLog("控制台尚未连接");
+  const resourceItems = planResourceItems();
+  if (!resourceItems) return;
+  socket.send(JSON.stringify({ type: "plan.resource_sweep.start", options: {
+    resourceItems, returnMap: elements.planReturnMap.value.trim() || "圣兽云殿"
+  } }));
+  addLog("已启动 hao1–hao7 逐号拍卖、hao统一购买及全部账号回挂机副本");
+});
 elements.quickStartHang.addEventListener("click", () => {
+  if (elements.quickHangAccount.value === "all") {
+    const map = elements.quickHangMap.value.trim() || "圣兽云殿";
+    let started = 0;
+    for (const label of ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7"]) {
+      const target = accountTarget(label);
+      if (!target) continue;
+      sendCommand(target.deviceId, "configure_return_hang", { accountIndex: target.accountIndex, map });
+      sendCommand(target.deviceId, "run_temple_guard", { accountIndex: target.accountIndex });
+      started++;
+    }
+    return addLog(`已向 ${started}/8 个在线账号发送${map}挂机指令`);
+  }
   const target = accountTarget(elements.quickHangAccount.value);
   if (!target) return addLog(`账号 ${elements.quickHangAccount.value || "--"} 当前不在线`);
   const map = elements.quickHangMap.value.trim() || "圣兽云殿";
@@ -395,6 +417,10 @@ function renderQuickAccountControls() {
   const hangSelected = elements.quickHangAccount.value || "hao";
   elements.quickAuctionAccount.replaceChildren();
   elements.quickHangAccount.replaceChildren();
+  const allOption = document.createElement("option");
+  allOption.value = "all";
+  allOption.textContent = "所有账号";
+  elements.quickHangAccount.append(allOption);
   for (const label of ["hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7"]) {
     const option = document.createElement("option");
     option.value = label;
@@ -412,6 +438,7 @@ function renderQuickAccountControls() {
   const disabled = devices.size === 0;
   elements.quickAuctionToMain.disabled = disabled;
   elements.quickMainBuy.disabled = disabled;
+  elements.quickSweepAll.disabled = disabled;
   elements.quickStartHang.disabled = disabled;
 }
 

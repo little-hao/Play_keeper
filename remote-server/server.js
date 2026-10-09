@@ -5,7 +5,8 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
-import { EightAccountPlan, resolveEightAccountRoute } from "./eight-account-plan.js";
+import { EightAccountPlan, resolveEightAccountRoute,
+  resolveResourceSweepRoute } from "./eight-account-plan.js";
 import { sendCompletionReport } from "./email-report.js";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -129,6 +130,7 @@ const commandValidators = {
   },
   run_equipment_sell: accountParameters,
   run_equipment_buy: accountParameters,
+  run_seller_cleanup: accountParameters,
   cancel_automation: accountParameters,
   run_auction_buy: accountParameters,
   resolve_temple_confirmation(parameters) {
@@ -215,7 +217,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.10.2" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.10.3" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -410,6 +412,15 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
     });
   }
 
+  function startResourceSweep(options) {
+    const summaries = [...devices.values()].map(deviceSummary);
+    const route = resolveResourceSweepRoute(summaries);
+    return eightAccountPlan.startResourceSweep(route, {
+      resourceItems: Array.isArray(options.resourceItems) ? options.resourceItems : undefined,
+      returnMap: typeof options.returnMap === "string" ? options.returnMap : undefined
+    });
+  }
+
   deviceServer.on("connection", (socket) => {
     socket.isAlive = true;
     socket.authenticated = false;
@@ -548,6 +559,16 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         try {
           const options = normalizePlanOptions(message.options);
           const payload = startConfiguredPlan(options);
+          broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
+        } catch (error) {
+          sendJson(socket, { type: "plan.error", message: String(error?.message || error) });
+        }
+        return;
+      }
+      if (message.type === "plan.resource_sweep.start") {
+        try {
+          const options = normalizePlanOptions(message.options);
+          const payload = startResourceSweep(options);
           broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
         } catch (error) {
           sendJson(socket, { type: "plan.error", message: String(error?.message || error) });

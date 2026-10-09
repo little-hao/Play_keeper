@@ -18,6 +18,11 @@ export function resolveEightAccountRoute(deviceSummaries) {
   return resolveAccountRoute(deviceSummaries, REQUIRED_ROUTE);
 }
 
+export function resolveResourceSweepRoute(deviceSummaries) {
+  return resolveAccountRoute(deviceSummaries,
+    ["hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"]);
+}
+
 function resolveAccountRoute(deviceSummaries, labels) {
   const accounts = [];
   for (const device of deviceSummaries) {
@@ -45,8 +50,8 @@ export class EightAccountPlan {
 
   #idleState() {
     return { status: "idle", runId: "", startedAt: 0, updatedAt: this.now(),
-      phaseStartedAt: 0, legIndex: -1, phase: "idle", resumePhase: "",
-      buyerStarted: false, sellerReleased: false, mainBuySeen: false,
+      phaseStartedAt: 0, legIndex: -1, phase: "idle", mode: "daily", resumePhase: "",
+      buyerStarted: false, sellerReleased: false, sellerCleaned: false, mainBuySeen: false,
       route: [], items: [...EQUIPMENT_ITEMS],
       resourceItems: [...RESOURCE_ITEMS], price: 920, returnMap: "圣兽云殿",
       dungeonItems: ["绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"],
@@ -94,6 +99,30 @@ export class EightAccountPlan {
     return this.snapshot();
   }
 
+  startResourceSweep(route, options = {}) {
+    if (["running", "intervention"].includes(this.state.status)) throw new Error("已有多用户任务正在运行");
+    if (!Array.isArray(route) || route.length !== 8
+        || route.map((entry) => entry.accountLabel).join(",")
+          !== "hao1,hao2,hao3,hao4,hao5,hao6,hao7,hao") {
+      throw new Error("资源归集需要 hao1–hao7 与 hao 全部在线");
+    }
+    const resourceItems = options.resourceItems ?? RESOURCE_ITEMS;
+    const returnMap = String(options.returnMap ?? "圣兽云殿").trim();
+    if (!Array.isArray(resourceItems) || resourceItems.length < 1 || resourceItems.length > 10) {
+      throw new Error("道具组合需包含1–10项");
+    }
+    if (!returnMap || returnMap.length > 30) throw new Error("返回挂机副本无效");
+    const now = this.now();
+    this.state = { ...this.#idleState(), status: "running", mode: "resource_sweep",
+      runId: crypto.randomUUID(), startedAt: now, updatedAt: now, phaseStartedAt: now,
+      legIndex: 0, phase: "resource_auction_running",
+      route: route.map((entry) => ({ ...entry })),
+      resourceItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
+      price: 920, returnMap };
+    this.#startResourceAuction(this.state.route[0]);
+    return this.snapshot();
+  }
+
   cancel(reason = "用户中断") {
     if (!["running", "intervention"].includes(this.state.status)) return this.snapshot();
     const leg = this.#currentLeg();
@@ -111,6 +140,10 @@ export class EightAccountPlan {
     const phase = this.state.resumePhase;
     Object.assign(this.state, { status: "running", error: "", errorAccount: "",
       interventionDeadlineAt: 0, phaseStartedAt: this.now() });
+    if (this.state.mode === "resource_sweep") {
+      this.#startResourceAuction(this.state.route[this.state.legIndex]);
+      return this.snapshot();
+    }
     if (["seller_running", "buyer_running"].includes(phase)) {
       this.state.buyerStarted = false;
       this.#startCurrentLeg();
@@ -150,6 +183,9 @@ export class EightAccountPlan {
 
   onTelemetry(deviceId, telemetry) {
     if (this.state.status !== "running") return this.snapshot();
+    if (this.state.mode === "resource_sweep") {
+      return this.#onResourceSweepTelemetry(deviceId, telemetry);
+    }
     const leg = this.#currentLeg();
     if (!leg) return this.#intervene("计划交接序号无效", "系统");
     const seller = this.#automationFor(leg.seller, deviceId, telemetry);
@@ -163,6 +199,14 @@ export class EightAccountPlan {
         return this.#intervene(`${leg.buyer.accountLabel} 执行失败：${buyer.lastMessage || "未知错误"}`,
           leg.buyer.accountLabel);
       }
+      if (this.state.sellerReleased && seller?.status === "error") {
+        return this.#intervene(`${leg.seller.accountLabel} 重新穿戴或返回挂机失败：${seller.lastMessage || "未知错误"}`,
+          leg.seller.accountLabel);
+      }
+      if (this.state.sellerReleased && seller?.task === "temple" && seller.status === "ok"
+          && Number(seller.updatedAt) >= this.state.phaseStartedAt) {
+        this.state.sellerCleaned = true;
+      }
       if (!this.state.buyerStarted && seller?.task === "equipment_sell" && seller.status === "running"
           && Number(seller.equipmentListedInBatch) > 0) {
         this.state.buyerStarted = true;
@@ -172,7 +216,7 @@ export class EightAccountPlan {
         this.#command(leg.buyer, "run_equipment_buy", { accountIndex: leg.buyer.accountIndex });
       }
       if (buyer) this.#releaseCrossDeviceSellerAfterTransfer(leg, buyer);
-      if (buyer && this.#buyerWorkflowComplete(buyer)) {
+      if (buyer && this.state.sellerCleaned && this.#buyerWorkflowComplete(buyer)) {
         this.#captureInventory(leg.buyer, buyer);
         if (leg.buyer.accountLabel === "hao") this.#startMainBuy(leg.buyer);
         else this.#startResourceAuction(leg.buyer);
@@ -202,6 +246,40 @@ export class EightAccountPlan {
     return this.snapshot();
   }
 
+  #onResourceSweepTelemetry(deviceId, telemetry) {
+    const account = this.state.route[this.state.legIndex];
+    if (!account) return this.#intervene("资源归集账号序号无效", "系统");
+    const automation = this.#automationFor(account, deviceId, telemetry);
+    if (!automation) return this.snapshot();
+    if (automation.status === "error") {
+      return this.#intervene(`${account.accountLabel} 资源归集失败：${automation.lastMessage || "未知错误"}`,
+        account.accountLabel);
+    }
+    const returned = automation.task === "temple" && automation.status === "ok"
+      && Number(automation.updatedAt) >= this.state.phaseStartedAt;
+    if (account.accountLabel !== "hao") {
+      const auctionDone = Number(automation.auctionLastRunAt) >= this.state.phaseStartedAt;
+      if (!auctionDone || !returned) return this.snapshot();
+      this.state.history.push({ account: account.accountLabel, completedAt: this.now(), result: "success" });
+      this.state.legIndex++;
+      this.#startResourceAuction(this.state.route[this.state.legIndex]);
+      return this.snapshot();
+    }
+    if (automation.task === "auction_buy" && automation.status === "running") {
+      this.state.mainBuySeen = true;
+    }
+    if (this.state.mainBuySeen && returned) {
+      for (const target of this.state.route) {
+        this.#command(target, "configure_return_hang", {
+          accountIndex: target.accountIndex, map: this.state.returnMap });
+        this.#command(target, "run_temple_guard", { accountIndex: target.accountIndex });
+      }
+      this.state.history.push({ account: "hao", completedAt: this.now(), result: "success" });
+      Object.assign(this.state, { status: "success", phase: "complete", updatedAt: this.now() });
+    }
+    return this.snapshot();
+  }
+
   #buyerWorkflowComplete(automation) {
     const afterStart = (value) => Number(value) >= this.state.phaseStartedAt;
     return afterStart(automation.equipmentTransferLastRunAt)
@@ -218,7 +296,7 @@ export class EightAccountPlan {
     this.#command(leg.seller, "cancel_automation", { accountIndex: leg.seller.accountIndex });
     this.#command(leg.seller, "configure_return_hang", {
       accountIndex: leg.seller.accountIndex, map: this.state.returnMap });
-    this.#command(leg.seller, "run_temple_guard", { accountIndex: leg.seller.accountIndex });
+    this.#command(leg.seller, "run_seller_cleanup", { accountIndex: leg.seller.accountIndex });
   }
 
   #captureInventory(account, automation) {
@@ -233,7 +311,13 @@ export class EightAccountPlan {
     Object.assign(this.state, { phase: "resource_auction_running", phaseStartedAt: this.now(),
       updatedAt: this.now() });
     this.#configureResourcesAndReturn(account);
-    this.#command(account, "run_auto_auction", { accountIndex: account.accountIndex });
+    if (account.accountLabel === "hao") {
+      this.state.mainBuySeen = false;
+      this.state.phase = "main_buy_running";
+      this.#command(account, "run_auction_buy", { accountIndex: account.accountIndex });
+    } else {
+      this.#command(account, "run_auto_auction", { accountIndex: account.accountIndex });
+    }
   }
 
   #startMainBuy(account) {
@@ -263,6 +347,7 @@ export class EightAccountPlan {
     this.state.legIndex += 1;
     this.state.buyerStarted = false;
     this.state.sellerReleased = false;
+    this.state.sellerCleaned = false;
     this.state.mainBuySeen = false;
     this.state.phase = "starting_leg";
     this.#startCurrentLeg();

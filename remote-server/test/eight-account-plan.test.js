@@ -63,6 +63,17 @@ test("runs all eight relay legs and returns the equipment to hao", () => {
       inventoryStatus: "ok",
       inventoryCounts: { "曙光印记": 3, "进化宝石": 2 }
     }));
+    plan.onTelemetry(seller.deviceId, telemetry(seller.accountIndex, {
+      task: "temple", status: "ok", updatedAt: 1_000_000
+    }));
+    plan.onTelemetry(buyer.deviceId, telemetry(buyer.accountIndex, {
+      task: "temple", status: "ok", updatedAt: 1_000_000,
+      equipmentTransferLastRunAt: 1_000_000,
+      dungeonLastRunAt: 1_000_000,
+      inventoryLastRunAt: 1_000_000,
+      inventoryStatus: "ok",
+      inventoryCounts: { "曙光印记": 3, "进化宝石": 2 }
+    }));
     if (buyer.accountLabel !== "hao") {
       assert.equal(actions.at(-1).command, "run_auto_auction");
       plan.onTelemetry(buyer.deviceId, telemetry(buyer.accountIndex, {
@@ -114,7 +125,7 @@ test("releases every seller to the return map after equipment arrives", () => {
   }));
   const release = actions.slice(-3).map((action) => action.command);
   assert.deepEqual(release,
-    ["cancel_automation", "configure_return_hang", "run_temple_guard"]);
+    ["cancel_automation", "configure_return_hang", "run_seller_cleanup"]);
   assert.equal(actions.at(-1).accountLabel, "hao");
 
   actions.length = 0;
@@ -129,7 +140,34 @@ test("releases every seller to the return map after equipment arrives", () => {
     { index: 1, automation: { task: "equipment_buy", status: "running", equipmentTransferLastRunAt: 2_000 } }
   ] });
   assert.deepEqual(actions.slice(-3).map((action) => action.command),
-    ["cancel_automation", "configure_return_hang", "run_temple_guard"]);
+    ["cancel_automation", "configure_return_hang", "run_seller_cleanup"]);
+});
+
+test("auctions resources from all small accounts, buys on hao, then hangs all accounts", () => {
+  const actions = [];
+  let clock = 1_000;
+  const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action),
+    now: () => ++clock });
+  const sweepRoute = route().slice(1);
+  plan.startResourceSweep(sweepRoute);
+  for (const account of sweepRoute.slice(0, 7)) {
+    assert.equal(actions.at(-1).command, "run_auto_auction");
+    plan.onTelemetry(account.deviceId, telemetry(account.accountIndex, {
+      task: "temple", status: "ok", updatedAt: 1_000_000,
+      auctionLastRunAt: 1_000_000
+    }));
+  }
+  const main = sweepRoute.at(-1);
+  assert.equal(actions.at(-1).command, "run_auction_buy");
+  plan.onTelemetry(main.deviceId, telemetry(main.accountIndex, {
+    task: "auction_buy", status: "running", updatedAt: 1_000_000
+  }));
+  plan.onTelemetry(main.deviceId, telemetry(main.accountIndex, {
+    task: "temple", status: "ok", updatedAt: 1_000_000
+  }));
+  assert.equal(plan.snapshot().status, "success");
+  assert.equal(plan.snapshot().history.length, 8);
+  assert.equal(actions.filter((action) => action.command === "run_temple_guard").length, 8);
 });
 
 test("rejects a route with an offline account", () => {

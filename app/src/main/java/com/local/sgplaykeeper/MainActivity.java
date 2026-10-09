@@ -1274,6 +1274,13 @@ public final class MainActivity extends Activity {
                     resultMessage = "已启动装备购买";
                     break;
                 }
+                case "run_seller_cleanup": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.runSellerCleanupNow(index);
+                    success = true;
+                    resultMessage = "已启动剩余装备穿戴与挂机收尾";
+                    break;
+                }
                 case "cancel_automation": {
                     int index = requiredAccountIndex(parameters);
                     automationCoordinator.cancelCurrent(index);

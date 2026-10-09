@@ -15,8 +15,8 @@ android {
         applicationId 'com.local.sgplaykeeper'
         minSdk 26
         targetSdk 35
-        versionCode 27
-        versionName '1.10.2'
+        versionCode 28
+        versionName '1.10.3'
     }
 
     signingConfigs {
@@ -35,7 +35,7 @@ android {
         debug {
             applicationIdSuffix '.test.v190'
             versionNameSuffix '-debug'
-            resValue 'string', 'app_name', 'Play Keeper 1.10.2 测试'
+            resValue 'string', 'app_name', 'Play Keeper 1.10.3 测试'
         }
         release {
             // v1.9 is the user-approved parallel-install line. Keep this ID so the

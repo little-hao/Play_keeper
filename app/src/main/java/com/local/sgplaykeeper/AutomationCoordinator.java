@@ -78,6 +78,8 @@ final class AutomationCoordinator {
     private static final long EQUIPMENT_BUYER_START_DELAY_MS = 20_000L;
     private static final long EQUIPMENT_WAIT_TIMEOUT_MS = 24L * 60L * 60L * 1000L;
     private static final long DUNGEON_CHECK_INTERVAL_MS = 15_000L;
+    private static final long DUNGEON_STUCK_RETRY_MS = 10L * 60L * 1000L;
+    private static final int DUNGEON_MAX_RECOVERY_ATTEMPTS = 3;
     private static final long DUNGEON_TIMEOUT_MS = 3L * 60L * 60L * 1000L;
     private static final long TEMPLE_CONFIRM_TIMEOUT_MS = 30_000L;
     static final List<String> DEFAULT_DUNGEON_SEQUENCE = Arrays.asList(
@@ -422,6 +424,31 @@ final class AutomationCoordinator {
         runEquipmentTransfer(accountIndex, false, true);
     }
 
+    void runSellerCleanupNow(int accountIndex) {
+        requireAccount(accountIndex);
+        RuntimeState state = states[accountIndex];
+        if (state.busy) cancelCurrent(accountIndex);
+        state.busy = true;
+        state.task = "seller_cleanup";
+        state.status = "running";
+        state.lastMessage = "正在重新穿戴剩余装备并返回" + returnHangMap(accountIndex);
+        state.updatedAt = System.currentTimeMillis();
+        state.manualRun = false;
+        state.runGeneration++;
+        host.onAutomationChanged();
+        WebView view;
+        try {
+            view = host.requireWebView(accountIndex);
+        } catch (RuntimeException error) {
+            finish(accountIndex, state.task, "error", "账号页面未就绪", false);
+            return;
+        }
+        host.prepareAutomation(accountIndex, true);
+        List<String> items = parseEquipmentItems(equipmentItemsText(accountIndex));
+        handler.postDelayed(() -> preparePetEquipment(accountIndex, view, items, true,
+                PetEquipmentNext.SELLER_REEQUIP_TO_TEMPLE, false, 0), 1_800L);
+    }
+
     void runDungeonNow(int accountIndex) {
         requireAccount(accountIndex);
         runDungeonQueue(accountIndex, true, false);
@@ -732,13 +759,9 @@ final class AutomationCoordinator {
                                 accountIndex, view, items, 0, true, manual, 0), 1_800L);
                         break;
                     case SELLER_REEQUIP_TO_TEMPLE:
-                        handler.postDelayed(() -> requestTempleConfirmation(
-                                accountIndex, "装备已全部成交，剩余装备已重新穿戴",
-                                manual), 1_800L);
-                        if (states[accountIndex].linkedEquipmentAccount >= 0) {
-                            handler.postDelayed(() -> host.activateAccount(
-                                    states[accountIndex].linkedEquipmentAccount), 2_200L);
-                        }
+                        handler.postDelayed(() -> restoreAfkAndRunTemple(
+                                accountIndex, false,
+                                "装备已全部成交，剩余装备已重新穿戴"), 1_800L);
                         break;
                     case BUYER_UNEQUIP_THEN_EQUIP:
                         handler.postDelayed(() -> preparePetEquipment(
@@ -888,7 +911,8 @@ final class AutomationCoordinator {
 
     private void processEquipmentItem(int accountIndex, WebView view, List<String> items,
                                       int itemIndex, boolean selling, boolean manual) {
-        if (stopped || !states[accountIndex].busy) return;
+        if (stopped || !states[accountIndex].busy
+                || (selling && !"equipment_sell".equals(states[accountIndex].task))) return;
         if (itemIndex >= items.size()) {
             if (selling) {
                 updateState(accountIndex, "目标装备已处理完毕，未自动穿戴背包内其他装备");
@@ -963,7 +987,8 @@ final class AutomationCoordinator {
     private void fillAndConfirmEquipmentSell(int accountIndex, WebView view, List<String> items,
                                              int itemIndex, String itemName, int before,
                                              boolean manual, int attempt) {
-        if (stopped || !states[accountIndex].busy) return;
+        if (stopped || !states[accountIndex].busy
+                || !"equipment_sell".equals(states[accountIndex].task)) return;
         int price = equipmentPrice(accountIndex);
         String buyer = equipmentBuyer(accountIndex);
         String script = "(function(){const target=" + JSONObject.quote(itemName)
@@ -1008,6 +1033,8 @@ final class AutomationCoordinator {
     private void verifyEquipmentSell(int accountIndex, WebView view, List<String> items,
                                      int itemIndex, String itemName, int before,
                                      boolean manual, int attempt) {
+        if (stopped || !states[accountIndex].busy
+                || !"equipment_sell".equals(states[accountIndex].task)) return;
         String script = "(function(){const target=" + JSONObject.quote(itemName) + ";"
                 + "const modal=Array.from(document.querySelectorAll('.sell-modal')).find(e=>e.getClientRects().length>0);"
                 + "const box=Array.from(document.querySelectorAll('.cont-box'))"
@@ -1111,7 +1138,7 @@ final class AutomationCoordinator {
     private void waitForEquipmentBatchClear(int accountIndex, WebView view, List<String> items,
                                             int nextIndex, boolean manual) {
         RuntimeState state = states[accountIndex];
-        if (stopped || !state.busy) return;
+        if (stopped || !state.busy || !"equipment_sell".equals(state.task)) return;
         if (System.currentTimeMillis() - state.equipmentWaitStartedAt
                 > EQUIPMENT_WAIT_TIMEOUT_MS) {
             finish(accountIndex, "equipment_sell", "error",
@@ -2137,6 +2164,8 @@ final class AutomationCoordinator {
         state.dungeonIndex = 0;
         state.dungeonStarted = false;
         state.dungeonStartedAt = System.currentTimeMillis();
+        state.dungeonLastProgressAt = state.dungeonStartedAt;
+        state.dungeonRecoveryAttempts = 0;
         state.storagePreparedDungeonIndex = -1;
         state.prestigePreparedDungeonIndex = -1;
         state.dungeonDailyTasksPrepared = false;
@@ -2223,9 +2252,16 @@ final class AutomationCoordinator {
                 state.dungeonIndex++;
                 state.dungeonStarted = false;
                 state.dungeonStartedAt = System.currentTimeMillis();
+                state.dungeonLastProgressAt = state.dungeonStartedAt;
+                state.dungeonRecoveryAttempts = 0;
                 handler.postDelayed(() -> runCurrentDungeon(
                         accountIndex, view, manual, 0), 1_200L);
             } else if ("running".equals(result)) {
+                if (System.currentTimeMillis() - state.dungeonLastProgressAt
+                        >= DUNGEON_STUCK_RETRY_MS) {
+                    recoverStuckDungeon(accountIndex, dungeon, manual);
+                    return;
+                }
                 updateState(accountIndex, dungeon + "执行中，等待挂机自动结束");
                 handler.postDelayed(() -> runCurrentDungeon(
                         accountIndex, view, manual, 0), DUNGEON_CHECK_INTERVAL_MS);
@@ -2234,6 +2270,8 @@ final class AutomationCoordinator {
                 state.dungeonIndex++;
                 state.dungeonStarted = false;
                 state.dungeonStartedAt = System.currentTimeMillis();
+                state.dungeonLastProgressAt = state.dungeonStartedAt;
+                state.dungeonRecoveryAttempts = 0;
                 updateState(accountIndex, dungeon + "未解锁，已安全跳过");
                 handler.postDelayed(() -> runCurrentDungeon(
                         accountIndex, view, manual, 0), 500L);
@@ -2256,6 +2294,28 @@ final class AutomationCoordinator {
                         "未找到" + dungeon + "的手动挂机控件", manual);
             }
         });
+    }
+
+    private void recoverStuckDungeon(int accountIndex, String dungeon, boolean manual) {
+        RuntimeState state = states[accountIndex];
+        if (state.dungeonRecoveryAttempts >= DUNGEON_MAX_RECOVERY_ATTEMPTS) {
+            finish(accountIndex, state.task, "error",
+                    dungeon + "连续三次网络恢复后仍无进展", manual);
+            return;
+        }
+        state.dungeonRecoveryAttempts++;
+        state.dungeonStarted = false;
+        state.dungeonStartedAt = System.currentTimeMillis();
+        state.dungeonLastProgressAt = state.dungeonStartedAt;
+        // The pre-dungeon storage and prestige steps already succeeded.  Keep their indexes so a
+        // network recovery only reloads the helper and re-enters the current dungeon.
+        state.storagePreparedDungeonIndex = state.dungeonIndex;
+        state.prestigePreparedDungeonIndex = state.dungeonIndex;
+        updateState(accountIndex, dungeon + "10分钟无进展，网络恢复第"
+                + state.dungeonRecoveryAttempts + "/3次：刷新并重新进入副本");
+        host.prepareAutomation(accountIndex, false);
+        host.openAfk(accountIndex);
+        handler.postDelayed(() -> runDungeonQueue(accountIndex, manual, true), 4_000L);
     }
 
     private void acceptDailyTasksBeforeDungeons(int accountIndex, WebView view,
@@ -2381,6 +2441,7 @@ final class AutomationCoordinator {
         RuntimeState state = states[accountIndex];
         state.dungeonStarted = true;
         state.dungeonStartedAt = System.currentTimeMillis();
+        state.dungeonLastProgressAt = state.dungeonStartedAt;
         updateState(accountIndex, dungeon + "已开始，正在监控副本完成");
         handler.postDelayed(() -> runCurrentDungeon(
                 accountIndex, view, manual, 0), DUNGEON_CHECK_INTERVAL_MS);
@@ -2448,6 +2509,8 @@ final class AutomationCoordinator {
             state.dungeonIndex = 0;
             state.dungeonStarted = false;
             state.dungeonStartedAt = System.currentTimeMillis();
+            state.dungeonLastProgressAt = state.dungeonStartedAt;
+            state.dungeonRecoveryAttempts = 0;
             state.storagePreparedDungeonIndex = -1;
             state.prestigePreparedDungeonIndex = -1;
             state.dungeonDailyTasksPrepared = false;
@@ -3365,6 +3428,8 @@ final class AutomationCoordinator {
         int dungeonIndex;
         boolean dungeonStarted;
         long dungeonStartedAt;
+        long dungeonLastProgressAt;
+        int dungeonRecoveryAttempts;
         final Set<String> skippedDungeons = new LinkedHashSet<>();
         boolean awaitingTempleConfirmation;
         String confirmationMessage = "";
