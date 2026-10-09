@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css?v=1.10.0">
+  <link rel="stylesheet" href="/styles.css?v=1.10.1">
 </head>
 <body>
   <main class="shell">
@@ -60,7 +60,6 @@
         </div>
         <p id="dailyPlanDetail">路线：hao → hao1 → hao2 → hao3 → hao4 → hao5 → hao6 → hao7 → hao</p>
         <div class="plan-settings">
-          <label class="toggle-row"><input id="planQuickTest" type="checkbox" checked> 快速测试：hao → hao1 → hao7 → hao</label>
           <label>道具组合
             <select id="planResourcePreset">
               <option value="one">组合1：曙光/进化/强化丹A/B/天仙玉露</option>
@@ -69,14 +68,21 @@
             </select>
           </label>
           <label>道具名称<input id="planResourceItems" value="曙光印记,进化宝石,强化丹A,强化丹B,天仙玉露"></label>
+          <label class="span-2">副本组合<input id="planDungeonItems" value="绘画小屋,伊苏王的神墓,火龙王的宫殿,史芬克斯密穴"></label>
           <label>结束后挂机副本<input id="planReturnMap" value="圣兽云殿" maxlength="30"></label>
           <label>完成报告邮箱<input id="planReportEmail" type="email" value="konghao0920@gmail.com"></label>
+          <label class="toggle-row"><input id="planScheduleEnabled" type="checkbox"> 每天定时运行</label>
+          <label>运行时间（北京时间）<input id="planScheduleTime" type="time" value="04:00"></label>
         </div>
         <div class="plan-progress"><span id="dailyPlanProgress"></span></div>
         <div class="automation-actions action-grid">
           <button id="startDailyPlan" class="primary">多用户挂机</button>
           <button id="retryDailyPlan" class="secondary" disabled>已人工处理，重试</button>
           <button id="cancelDailyPlan" class="secondary" disabled>中断计划</button>
+        </div>
+        <div class="automation-actions">
+          <button id="savePlanSchedule" class="secondary">保存每日定时</button>
+          <small id="planScheduleStatus">每日定时未启用</small>
         </div>
         <p class="automation-help">每个小号完成装备、副本、背包刷新后，仅上架数量大于1的组合道具并保留1件；最后由 hao 购买。</p>
         <div id="planIntervention" class="plan-intervention hidden" role="alert"></div>
@@ -143,7 +149,7 @@
         <div class="automation-confirmation hidden">
           <p class="automation-confirmation-message"></p>
           <div class="automation-actions">
-            <button class="confirm-temple primary">进入圣兽云殿</button>
+            <button class="confirm-temple primary">进入设定挂机副本</button>
             <button class="decline-temple secondary">保持当前页</button>
           </div>
         </div>
@@ -222,6 +228,6 @@
       <div id="selectOptions" class="select-options" role="radiogroup"></div>
     </section>
   </div>
-  <script type="module" src="/app.js?v=1.10.0"></script>
+  <script type="module" src="/app.js?v=1.10.1"></script>
 </body>
 </html>

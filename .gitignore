@@ -2,6 +2,7 @@
 .gradle/
 remote-server/node_modules/
 remote-server/.env
+remote-server/data/
 **/build/
 local.properties
 *.iml

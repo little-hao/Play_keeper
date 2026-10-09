@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EightAccountPlan, EQUIPMENT_ITEMS, resolveEightAccountRoute, resolveQuickTestRoute } from "../eight-account-plan.js";
+import { EightAccountPlan, EQUIPMENT_ITEMS, resolveEightAccountRoute } from "../eight-account-plan.js";
 
 const d1 = "PK-DEVICE111111";
 const d2 = "PK-DEVICE222222";
@@ -37,8 +37,6 @@ test("resolves the required route from the two live device account labels", () =
   const resolved = resolveEightAccountRoute(summaries);
   assert.deepEqual(resolved.map((entry) => entry.accountLabel),
     ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"]);
-  assert.deepEqual(resolveQuickTestRoute(summaries).map((entry) => entry.accountLabel),
-    ["hao", "hao1", "hao7", "hao"]);
 });
 
 test("runs all eight relay legs and returns the equipment to hao", () => {
@@ -89,7 +87,7 @@ test("runs all eight relay legs and returns the equipment to hao", () => {
   assert.equal(result.history.at(-1).buyer, "hao");
 });
 
-test("offers 30 seconds for manual intervention before an error stops the chain", () => {
+test("offers 60 seconds for manual intervention before an error stops the chain", () => {
   let clock = 10_000;
   const plan = new EightAccountPlan({ now: () => clock });
   plan.start(route());
@@ -98,10 +96,26 @@ test("offers 30 seconds for manual intervention before an error stops the chain"
   }));
   assert.equal(plan.snapshot().status, "intervention");
   assert.equal(plan.snapshot().errorAccount, "hao1");
-  clock += 30_001;
+  clock += 60_001;
   plan.tick();
   assert.equal(plan.snapshot().status, "error");
-  assert.match(plan.snapshot().error, /30秒人工介入/);
+  assert.match(plan.snapshot().error, /60秒人工介入/);
+});
+
+test("releases a cross-device seller to the return map after equipment arrives", () => {
+  const actions = [];
+  const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => 1_000 });
+  plan.start(route());
+  plan.onTelemetry(d2, telemetry(0, {
+    task: "equipment_sell", status: "running", equipmentListedInBatch: 5
+  }));
+  plan.onTelemetry(d1, telemetry(0, {
+    task: "equipment_buy", status: "running", equipmentTransferLastRunAt: 2_000
+  }));
+  const release = actions.slice(-4).map((action) => action.command);
+  assert.deepEqual(release,
+    ["cancel_automation", "configure_return_hang", "switch_account", "run_temple_guard"]);
+  assert.equal(actions.at(-1).accountLabel, "hao");
 });
 
 test("rejects a route with an offline account", () => {

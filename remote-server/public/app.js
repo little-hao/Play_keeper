@@ -25,10 +25,14 @@ const elements = {
   cancelDailyPlan: document.querySelector("#cancelDailyPlan"),
   planIntervention: document.querySelector("#planIntervention"),
   planResourcePreset: document.querySelector("#planResourcePreset"),
-  planQuickTest: document.querySelector("#planQuickTest"),
   planResourceItems: document.querySelector("#planResourceItems"),
+  planDungeonItems: document.querySelector("#planDungeonItems"),
   planReturnMap: document.querySelector("#planReturnMap"),
   planReportEmail: document.querySelector("#planReportEmail"),
+  planScheduleEnabled: document.querySelector("#planScheduleEnabled"),
+  planScheduleTime: document.querySelector("#planScheduleTime"),
+  savePlanSchedule: document.querySelector("#savePlanSchedule"),
+  planScheduleStatus: document.querySelector("#planScheduleStatus"),
   keepPlayerDevice: document.querySelector("#keepPlayerDevice"),
   startKeepPlayer: document.querySelector("#startKeepPlayer"),
   exitKeepPlayer: document.querySelector("#exitKeepPlayer"),
@@ -57,6 +61,8 @@ let reconnectTimer;
 let connectionGeneration = 0;
 let pendingSelect;
 let dailyPlan = { status: "idle", legIndex: -1, phase: "idle", history: [] };
+let planSchedule = { enabled: false, time: "04:00", options: {} };
+const openAdvancedDevices = new Set();
 
 elements.adminToken.value = sessionStorage.getItem("playKeeperAdminToken") ?? "";
 elements.connectButton.addEventListener("click", connect);
@@ -69,15 +75,10 @@ elements.clearLog.addEventListener("click", () => elements.eventLog.replaceChild
 elements.closeSelect.addEventListener("click", closeSelectDialog);
 elements.startDailyPlan.addEventListener("click", () => {
   if (socket?.readyState !== WebSocket.OPEN) return addLog("控制台尚未连接");
-  const resourceItems = elements.planResourceItems.value.split(/[,，\n]/)
-    .map((item) => item.trim()).filter(Boolean);
-  const reportEmail = elements.planReportEmail.value.trim();
-  const returnMap = elements.planReturnMap.value.trim();
-  if (!resourceItems.length || resourceItems.length > 10) return addLog("道具组合需填写1–10项");
-  if (!returnMap) return addLog("请填写流程结束后的挂机副本");
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) return addLog("完成报告邮箱格式无效");
+  const options = readPlanOptions();
+  if (!options) return;
   socket.send(JSON.stringify({ type: "plan.start", plan: "eight_account_daily",
-    options: { resourceItems, returnMap, reportEmail, quickTest: elements.planQuickTest.checked } }));
+    options }));
 });
 elements.retryDailyPlan.addEventListener("click", () => {
   if (socket?.readyState === WebSocket.OPEN) {
@@ -87,6 +88,16 @@ elements.retryDailyPlan.addEventListener("click", () => {
 elements.cancelDailyPlan.addEventListener("click", () => {
   if (socket?.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify({ type: "plan.cancel", plan: "eight_account_daily" }));
+});
+elements.savePlanSchedule.addEventListener("click", () => {
+  if (socket?.readyState !== WebSocket.OPEN) return addLog("控制台尚未连接");
+  const options = readPlanOptions();
+  if (!options) return;
+  socket.send(JSON.stringify({ type: "plan.schedule.update", payload: {
+    enabled: elements.planScheduleEnabled.checked,
+    time: elements.planScheduleTime.value,
+    options
+  } }));
 });
 elements.planResourcePreset.addEventListener("change", () => {
   if (auctionPresets[elements.planResourcePreset.value]) {
@@ -190,7 +201,8 @@ function handleMessage(message) {
       current.telemetry = message.payload;
       current.lastUpdate = message.timestamp;
       devices.set(message.deviceId, current);
-      renderDevices();
+      if (openAdvancedDevices.size) renderGlobalDailyMonitor();
+      else renderDevices();
       break;
     }
     case "preview.frame":
@@ -214,6 +226,10 @@ function handleMessage(message) {
         dailyPlan = message.payload ?? dailyPlan;
         renderDailyPlan();
       }
+      break;
+    case "plan.schedule":
+      planSchedule = message.payload ?? planSchedule;
+      renderPlanSchedule();
       break;
     case "plan.command":
       addLog(`每日计划：${message.accountLabel} · ${message.command}`);
@@ -250,6 +266,42 @@ function renderDailyPlan() {
   } else {
     elements.planIntervention.classList.add("hidden");
   }
+}
+
+function readPlanOptions() {
+  const resourceItems = elements.planResourceItems.value.split(/[,，\n]/)
+    .map((item) => item.trim()).filter(Boolean);
+  const dungeonItems = elements.planDungeonItems.value.split(/[,，\n]/)
+    .map((item) => item.trim()).filter(Boolean);
+  const reportEmail = elements.planReportEmail.value.trim();
+  const returnMap = elements.planReturnMap.value.trim();
+  if (!resourceItems.length || resourceItems.length > 10) {
+    addLog("道具组合需填写1–10项"); return null;
+  }
+  if (!dungeonItems.length || dungeonItems.length > 20) {
+    addLog("副本组合需填写1–20项"); return null;
+  }
+  if (!returnMap) { addLog("请填写流程结束后的挂机副本"); return null; }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) {
+    addLog("完成报告邮箱格式无效"); return null;
+  }
+  return { resourceItems, dungeonItems, returnMap, reportEmail };
+}
+
+function renderPlanSchedule() {
+  elements.planScheduleEnabled.checked = planSchedule.enabled === true;
+  elements.planScheduleTime.value = planSchedule.time || "04:00";
+  const options = planSchedule.options ?? {};
+  if (Array.isArray(options.resourceItems)) elements.planResourceItems.value = options.resourceItems.join(",");
+  if (Array.isArray(options.dungeonItems)) elements.planDungeonItems.value = options.dungeonItems.join(",");
+  if (typeof options.returnMap === "string") elements.planReturnMap.value = options.returnMap;
+  if (typeof options.reportEmail === "string") elements.planReportEmail.value = options.reportEmail;
+  elements.planResourcePreset.value = Object.entries(auctionPresets)
+    .find(([, value]) => value === elements.planResourceItems.value.trim())?.[0] ?? "custom";
+  const last = planSchedule.lastRunDate ? ` · 上次运行 ${planSchedule.lastRunDate}` : "";
+  const error = planSchedule.lastError ? ` · 上次启动失败：${planSchedule.lastError}` : "";
+  elements.planScheduleStatus.textContent = planSchedule.enabled
+    ? `每天 ${planSchedule.time}（北京时间）${last}${error}` : "每日定时未启用";
 }
 
 renderDailyPlan();
@@ -350,6 +402,15 @@ function renderDevices() {
     const activeAccountTelemetry = accounts.find((account) => account?.index === activeAccountIndex) ?? {};
     const automation = activeAccountTelemetry.automation ?? {};
     card.dataset.deviceId = device.deviceId;
+    const advancedPanel = card.querySelector(".automation-panel");
+    advancedPanel.open = openAdvancedDevices.has(device.deviceId);
+    advancedPanel.addEventListener("toggle", () => {
+      if (advancedPanel.open) openAdvancedDevices.add(device.deviceId);
+      else {
+        openAdvancedDevices.delete(device.deviceId);
+        renderDevices();
+      }
+    });
     card.querySelector(".device-id").textContent = device.deviceId;
     card.querySelector(".device-model").textContent = [deviceInfo.manufacturer, deviceInfo.model].filter(Boolean).join(" ") || "等待设备状态";
     card.querySelector(".last-update").textContent = formatTime(device.lastUpdate ?? device.connectedAt);
@@ -375,7 +436,10 @@ function renderDevices() {
       if (monitor.monitorStatus === "online") button.classList.add("healthy");
       button.title = monitor.monitorMessage || "等待战斗统计检查";
       if (app.activeAccount === index) button.classList.add("active");
-      button.addEventListener("click", () => sendCommand(device.deviceId, "switch_account", { accountIndex: index }));
+      button.addEventListener("click", () => {
+        openAdvancedDevices.delete(device.deviceId);
+        sendCommand(device.deviceId, "switch_account", { accountIndex: index });
+      });
       tabs.append(button);
     }
     card.querySelectorAll(".button-grid button").forEach((button) => {

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { once } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { WebSocket } from "ws";
 import { createRelayServer } from "../server.js";
 
@@ -75,14 +78,17 @@ test("relay starts the cross-device first leg and starts buyer after exchange li
   }));
 
   const sellerStart = nextMessages(device2, "command.request", 3);
-  const buyerConfig = nextMessages(device1, "command.request", 1);
+  const buyerConfig = nextMessages(device1, "command.request", 4);
   control.send(JSON.stringify({ type: "plan.start", plan: "eight_account_daily" }));
   const [sellerCommands, buyerCommands] = await Promise.all([sellerStart, buyerConfig]);
   assert.deepEqual(sellerCommands.map((message) => message.command),
     ["configure_equipment_transfer", "switch_account", "run_equipment_sell"]);
   assert.equal(sellerCommands[0].parameters.buyer, "hao1");
   assert.equal(sellerCommands[0].parameters.items.length, 10);
-  assert.equal(buyerCommands[0].command, "configure_equipment_transfer");
+  assert.deepEqual(buyerCommands.map((message) => message.command), [
+    "configure_equipment_transfer", "configure_inventory_monitor",
+    "configure_dungeon_sequence", "configure_return_hang"
+  ]);
 
   const buyerStart = nextMessages(device1, "command.request", 2);
   device2.send(JSON.stringify({
@@ -96,4 +102,33 @@ test("relay starts the cross-device first leg and starts buyer after exchange li
   assert.deepEqual(buyerStartCommands.map((message) => message.command),
     ["switch_account", "run_equipment_buy"]);
   assert.equal(buyerStartCommands[1].parameters.accountIndex, 0);
+});
+
+test("saves a daily full-route schedule with configurable dungeons", async (context) => {
+  const scheduleFile = path.join(os.tmpdir(), `play-keeper-schedule-${Date.now()}.json`);
+  const server = createRelayServer({ adminToken, deviceToken,
+    planScheduleFile: scheduleFile, logger: { warn() {}, error() {} } });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const control = await connect(`ws://127.0.0.1:${server.address().port}/control`);
+  context.after(async () => {
+    control.terminate();
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(scheduleFile, { force: true });
+  });
+  const accepted = nextMessages(control, "control.accepted", 1);
+  control.send(JSON.stringify({ type: "control.hello", token: adminToken }));
+  await accepted;
+  const update = nextMessages(control, "plan.schedule", 1);
+  control.send(JSON.stringify({ type: "plan.schedule.update", payload: {
+    enabled: true, time: "03:30", options: {
+      resourceItems: ["曙光印记", "进化宝石"],
+      dungeonItems: ["绘画小屋", "史芬克斯密穴"],
+      returnMap: "圣兽云殿", reportEmail: "konghao0920@gmail.com"
+    }
+  } }));
+  const [message] = await update;
+  assert.equal(message.payload.enabled, true);
+  assert.equal(message.payload.time, "03:30");
+  assert.deepEqual(message.payload.options.dungeonItems, ["绘画小屋", "史芬克斯密穴"]);
 });

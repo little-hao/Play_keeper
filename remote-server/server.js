@@ -1,10 +1,11 @@
 import crypto from "node:crypto";
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
-import { EightAccountPlan, resolveEightAccountRoute, resolveQuickTestRoute } from "./eight-account-plan.js";
+import { EightAccountPlan, resolveEightAccountRoute } from "./eight-account-plan.js";
 import { sendCompletionReport } from "./email-report.js";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -13,6 +14,9 @@ const MAX_MESSAGE_BYTES = 5 * 1024 * 1024;
 const MAX_PREVIEW_BYTES = 2_500 * 1024;
 const COMMAND_WINDOW_MS = 60_000;
 const COMMAND_LIMIT = 180;
+const DEFAULT_DUNGEONS = Object.freeze([
+  "绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"
+]);
 
 const commandValidators = {
   switch_account: accountParameters,
@@ -211,7 +215,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.10.0" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.10.1" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -241,7 +245,73 @@ async function serveHttp(request, response) {
   }
 }
 
-export function createRelayServer({ adminToken, deviceToken, logger = console } = {}) {
+function normalizePlanOptions(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const resourceItems = Array.isArray(source.resourceItems) ? source.resourceItems : undefined;
+  const dungeonItems = Array.isArray(source.dungeonItems) ? source.dungeonItems : [...DEFAULT_DUNGEONS];
+  if (resourceItems !== undefined && !validItemList(resourceItems, 10)) {
+    throw new Error("道具组合无效");
+  }
+  if (!validItemList(dungeonItems, 20)) throw new Error("副本组合无效");
+  const returnMap = typeof source.returnMap === "string" ? source.returnMap.trim() : "圣兽云殿";
+  if (!returnMap || returnMap.length > 30) throw new Error("返回挂机副本无效");
+  const reportEmail = typeof source.reportEmail === "string"
+    ? source.reportEmail.trim() : "konghao0920@gmail.com";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) throw new Error("报告邮箱格式无效");
+  return { resourceItems, dungeonItems, returnMap, reportEmail };
+}
+
+function defaultPlanSchedule() {
+  return { enabled: false, time: "04:00", timeZone: "Asia/Shanghai", lastRunDate: "",
+    lastAttemptAt: 0, lastError: "", options: normalizePlanOptions({}) };
+}
+
+function normalizePlanSchedule(value, previous = defaultPlanSchedule()) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const time = typeof source.time === "string" ? source.time : previous.time;
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new Error("每日运行时间无效");
+  return { enabled: source.enabled === true, time, timeZone: "Asia/Shanghai",
+    lastRunDate: typeof source.lastRunDate === "string" ? source.lastRunDate : (previous.lastRunDate || ""),
+    lastAttemptAt: Number(source.lastAttemptAt ?? previous.lastAttemptAt) || 0,
+    lastError: typeof source.lastError === "string" ? source.lastError.slice(0, 160) : "",
+    options: normalizePlanOptions(source.options ?? previous.options) };
+}
+
+function loadPlanSchedule(file, logger) {
+  try {
+    if (!syncFs.existsSync(file)) return defaultPlanSchedule();
+    return normalizePlanSchedule(JSON.parse(syncFs.readFileSync(file, "utf8")));
+  } catch (error) {
+    logger.warn?.("Unable to load plan schedule", error.message);
+    return defaultPlanSchedule();
+  }
+}
+
+function savePlanSchedule(file, schedule, logger) {
+  try {
+    syncFs.mkdirSync(path.dirname(file), { recursive: true });
+    syncFs.writeFileSync(file, `${JSON.stringify(schedule, null, 2)}\n`, { mode: 0o600 });
+  } catch (error) {
+    logger.warn?.("Unable to save plan schedule", error.message);
+  }
+}
+
+function timeToMinutes(time) {
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
+function zonedClock(timestamp, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit",
+    day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+    .formatToParts(new Date(timestamp));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return { date: `${values.year}-${values.month}-${values.day}`,
+    minutes: Number(values.hour) * 60 + Number(values.minute) };
+}
+
+export function createRelayServer({ adminToken, deviceToken, logger = console,
+  planScheduleFile } = {}) {
   if (!adminToken || adminToken.length < 16 || !deviceToken || deviceToken.length < 16) {
     throw new Error("ADMIN_TOKEN and DEVICE_TOKEN must each contain at least 16 characters");
   }
@@ -257,6 +327,9 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
   const controlServer = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
   const devices = new Map();
   const controllers = new Set();
+  const scheduleFile = planScheduleFile || process.env.PLAN_SETTINGS_FILE
+    || path.join(currentDirectory, "data", "plan-schedule.json");
+  let planSchedule = loadPlanSchedule(scheduleFile, logger);
 
   function dispatchDeviceCommand(deviceId, command, parameters) {
     const validator = commandValidators[command];
@@ -319,6 +392,21 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
       type: "devices.snapshot",
       devices: [...devices.values()].map(deviceSummary),
       timestamp: Date.now()
+    });
+  }
+
+  function sendSchedule(controller) {
+    sendJson(controller, { type: "plan.schedule", payload: { ...planSchedule } });
+  }
+
+  function startConfiguredPlan(options) {
+    const summaries = [...devices.values()].map(deviceSummary);
+    const route = resolveEightAccountRoute(summaries);
+    return eightAccountPlan.start(route, {
+      resourceItems: Array.isArray(options.resourceItems) ? options.resourceItems : undefined,
+      dungeonItems: Array.isArray(options.dungeonItems) ? options.dungeonItems : undefined,
+      returnMap: typeof options.returnMap === "string" ? options.returnMap : undefined,
+      reportEmail: typeof options.reportEmail === "string" ? options.reportEmail : undefined
     });
   }
 
@@ -452,22 +540,25 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
           plan: "eight_account_daily",
           payload: eightAccountPlan.snapshot()
         });
+        sendSchedule(socket);
         return;
       }
 
       if (message.type === "plan.start") {
         try {
-          const options = message.options && typeof message.options === "object"
-            ? message.options : {};
-          const summaries = [...devices.values()].map(deviceSummary);
-          const route = options.quickTest === true
-            ? resolveQuickTestRoute(summaries) : resolveEightAccountRoute(summaries);
-          const payload = eightAccountPlan.start(route, {
-            resourceItems: Array.isArray(options.resourceItems) ? options.resourceItems : undefined,
-            returnMap: typeof options.returnMap === "string" ? options.returnMap : undefined,
-            reportEmail: typeof options.reportEmail === "string" ? options.reportEmail : undefined
-          });
+          const options = normalizePlanOptions(message.options);
+          const payload = startConfiguredPlan(options);
           broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
+        } catch (error) {
+          sendJson(socket, { type: "plan.error", message: String(error?.message || error) });
+        }
+        return;
+      }
+      if (message.type === "plan.schedule.update") {
+        try {
+          planSchedule = normalizePlanSchedule(message.payload, planSchedule);
+          savePlanSchedule(scheduleFile, planSchedule, logger);
+          broadcast({ type: "plan.schedule", payload: { ...planSchedule } });
         } catch (error) {
           sendJson(socket, { type: "plan.error", message: String(error?.message || error) });
         }
@@ -563,10 +654,33 @@ export function createRelayServer({ adminToken, deviceToken, logger = console } 
     }
   }, 1_000);
   planTicker.unref();
+  const scheduleTicker = setInterval(() => {
+    if (!planSchedule.enabled || ["running", "intervention"].includes(
+      eightAccountPlan.snapshot().status)) return;
+    const local = zonedClock(Date.now(), planSchedule.timeZone);
+    if (local.minutes < timeToMinutes(planSchedule.time)
+        || planSchedule.lastRunDate === local.date
+        || Date.now() - Number(planSchedule.lastAttemptAt || 0) < 5 * 60_000) return;
+    planSchedule.lastAttemptAt = Date.now();
+    try {
+      const payload = startConfiguredPlan(planSchedule.options);
+      planSchedule.lastRunDate = local.date;
+      planSchedule.lastError = "";
+      savePlanSchedule(scheduleFile, planSchedule, logger);
+      broadcast({ type: "plan.schedule", payload: { ...planSchedule } });
+      broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
+    } catch (error) {
+      planSchedule.lastError = String(error?.message || error).slice(0, 160);
+      savePlanSchedule(scheduleFile, planSchedule, logger);
+      broadcast({ type: "plan.schedule", payload: { ...planSchedule } });
+    }
+  }, 15_000);
+  scheduleTicker.unref();
 
   server.on("close", () => {
     clearInterval(heartbeat);
     clearInterval(planTicker);
+    clearInterval(scheduleTicker);
     for (const socket of deviceServer.clients) socket.terminate();
     for (const socket of controlServer.clients) socket.terminate();
     deviceServer.close();

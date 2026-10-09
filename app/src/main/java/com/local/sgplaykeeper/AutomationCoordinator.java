@@ -79,7 +79,7 @@ final class AutomationCoordinator {
     private static final long EQUIPMENT_WAIT_TIMEOUT_MS = 24L * 60L * 60L * 1000L;
     private static final long DUNGEON_CHECK_INTERVAL_MS = 15_000L;
     private static final long DUNGEON_TIMEOUT_MS = 3L * 60L * 60L * 1000L;
-    private static final long TEMPLE_CONFIRM_TIMEOUT_MS = 60_000L;
+    private static final long TEMPLE_CONFIRM_TIMEOUT_MS = 30_000L;
     static final List<String> DEFAULT_DUNGEON_SEQUENCE = Arrays.asList(
             "绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴");
     private static final Set<String> ALLOWED_STORE_ITEMS = new LinkedHashSet<>(
@@ -2361,7 +2361,7 @@ final class AutomationCoordinator {
                 + "手动挂机？";
         state.confirmationDeadlineAt = System.currentTimeMillis() + TEMPLE_CONFIRM_TIMEOUT_MS;
         updateState(accountIndex, "等待确认是否进入" + returnHangMap(accountIndex)
-                + "（60秒后自动进入）");
+                + "（30秒后自动进入）");
         host.requestTempleConfirmation(accountIndex, state.confirmationMessage,
                 state.confirmationDeadlineAt);
         handler.postDelayed(() -> {

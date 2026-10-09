@@ -12,15 +12,10 @@ export const RESOURCE_ITEMS = Object.freeze([
 const REQUIRED_ROUTE = Object.freeze([
   "hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"
 ]);
-const QUICK_TEST_ROUTE = Object.freeze(["hao", "hao1", "hao7", "hao"]);
-const INTERVENTION_MS = 30_000;
+const INTERVENTION_MS = 60_000;
 
 export function resolveEightAccountRoute(deviceSummaries) {
   return resolveAccountRoute(deviceSummaries, REQUIRED_ROUTE);
-}
-
-export function resolveQuickTestRoute(deviceSummaries) {
-  return resolveAccountRoute(deviceSummaries, QUICK_TEST_ROUTE);
 }
 
 function resolveAccountRoute(deviceSummaries, labels) {
@@ -51,8 +46,10 @@ export class EightAccountPlan {
   #idleState() {
     return { status: "idle", runId: "", startedAt: 0, updatedAt: this.now(),
       phaseStartedAt: 0, legIndex: -1, phase: "idle", resumePhase: "",
-      buyerStarted: false, mainBuySeen: false, route: [], items: [...EQUIPMENT_ITEMS],
+      buyerStarted: false, sellerReleased: false, mainBuySeen: false,
+      route: [], items: [...EQUIPMENT_ITEMS],
       resourceItems: [...RESOURCE_ITEMS], price: 920, returnMap: "圣兽云殿",
+      dungeonItems: ["绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"],
       reportEmail: "konghao0920@gmail.com", error: "", errorAccount: "",
       interventionDeadlineAt: 0, emailStatus: "pending", inventoryByAccount: {}, history: [] };
   }
@@ -65,6 +62,8 @@ export class EightAccountPlan {
     const price = options.price ?? 920;
     const items = options.items ?? EQUIPMENT_ITEMS;
     const resourceItems = options.resourceItems ?? RESOURCE_ITEMS;
+    const dungeonItems = options.dungeonItems
+      ?? ["绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"];
     const returnMap = options.returnMap ?? "圣兽云殿";
     const reportEmail = options.reportEmail ?? "konghao0920@gmail.com";
     if (!Number.isInteger(price) || price < 1 || price > 9_999_999) throw new Error("交易单价无效");
@@ -74,6 +73,9 @@ export class EightAccountPlan {
     }
     if (!Array.isArray(resourceItems) || resourceItems.length < 1 || resourceItems.length > 10) {
       throw new Error("道具组合需包含1–10项");
+    }
+    if (!Array.isArray(dungeonItems) || dungeonItems.length < 1 || dungeonItems.length > 20) {
+      throw new Error("副本组合需包含1–20项");
     }
     if (typeof returnMap !== "string" || !returnMap.trim() || returnMap.length > 30) {
       throw new Error("返回挂机副本无效");
@@ -86,6 +88,7 @@ export class EightAccountPlan {
       startedAt: now, updatedAt: now, phaseStartedAt: now, legIndex: 0,
       phase: "starting_leg", route: route.map((entry) => ({ ...entry })), items: [...items],
       resourceItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
+      dungeonItems: [...new Set(dungeonItems.map((item) => String(item).trim()).filter(Boolean))],
       price, returnMap: returnMap.trim(), reportEmail: reportEmail.trim() };
     this.#startCurrentLeg();
     return this.snapshot();
@@ -124,7 +127,7 @@ export class EightAccountPlan {
   tick() {
     if (this.state.status === "intervention" && this.now() >= this.state.interventionDeadlineAt) {
       Object.assign(this.state, { status: "error", phase: "error",
-        error: `${this.state.error}；30秒人工介入时间已结束`, updatedAt: this.now() });
+        error: `${this.state.error}；60秒人工介入时间已结束`, updatedAt: this.now() });
     }
     return this.snapshot();
   }
@@ -168,6 +171,7 @@ export class EightAccountPlan {
         this.#command(leg.buyer, "switch_account", { accountIndex: leg.buyer.accountIndex });
         this.#command(leg.buyer, "run_equipment_buy", { accountIndex: leg.buyer.accountIndex });
       }
+      if (buyer) this.#releaseCrossDeviceSellerAfterTransfer(leg, buyer);
       if (buyer && this.#buyerWorkflowComplete(buyer)) {
         this.#captureInventory(leg.buyer, buyer);
         if (leg.buyer.accountLabel === "hao") this.#startMainBuy(leg.buyer);
@@ -205,6 +209,17 @@ export class EightAccountPlan {
       && afterStart(automation.inventoryLastRunAt)
       && automation.inventoryStatus === "ok"
       && automation.task === "temple" && automation.status === "ok";
+  }
+
+  #releaseCrossDeviceSellerAfterTransfer(leg, buyerAutomation) {
+    if (this.state.sellerReleased || leg.seller.deviceId === leg.buyer.deviceId) return;
+    if (Number(buyerAutomation.equipmentTransferLastRunAt) < this.state.phaseStartedAt) return;
+    this.state.sellerReleased = true;
+    this.#command(leg.seller, "cancel_automation", { accountIndex: leg.seller.accountIndex });
+    this.#command(leg.seller, "configure_return_hang", {
+      accountIndex: leg.seller.accountIndex, map: this.state.returnMap });
+    this.#command(leg.seller, "switch_account", { accountIndex: leg.seller.accountIndex });
+    this.#command(leg.seller, "run_temple_guard", { accountIndex: leg.seller.accountIndex });
   }
 
   #captureInventory(account, automation) {
@@ -248,6 +263,7 @@ export class EightAccountPlan {
     }
     this.state.legIndex += 1;
     this.state.buyerStarted = false;
+    this.state.sellerReleased = false;
     this.state.mainBuySeen = false;
     this.state.phase = "starting_leg";
     this.#startCurrentLeg();
@@ -267,6 +283,7 @@ export class EightAccountPlan {
   #startCurrentLeg() {
     const leg = this.#currentLeg();
     if (!leg) return this.#intervene("计划交接序号无效", "系统");
+    this.state.sellerReleased = false;
     this.state.phaseStartedAt = this.now();
     const common = { items: [...this.state.items], price: this.state.price };
     this.#command(leg.seller, "configure_equipment_transfer", {
@@ -275,6 +292,8 @@ export class EightAccountPlan {
       accountIndex: leg.buyer.accountIndex, ...common, buyer: "" });
     this.#command(leg.buyer, "configure_inventory_monitor", {
       accountIndex: leg.buyer.accountIndex, items: [...this.state.resourceItems] });
+    this.#command(leg.buyer, "configure_dungeon_sequence", {
+      accountIndex: leg.buyer.accountIndex, items: [...this.state.dungeonItems] });
     this.#command(leg.buyer, "configure_return_hang", {
       accountIndex: leg.buyer.accountIndex, map: this.state.returnMap });
     this.#command(leg.seller, "switch_account", { accountIndex: leg.seller.accountIndex });
@@ -297,9 +316,10 @@ export class EightAccountPlan {
 
   #validateRoute(route) {
     const labels = Array.isArray(route) ? route.map((entry) => entry?.accountLabel) : [];
-    const allowed = [REQUIRED_ROUTE, QUICK_TEST_ROUTE].some((candidate) =>
-      candidate.length === labels.length && candidate.every((label, index) => labels[index] === label));
-    if (!allowed) throw new Error("账号路线无效");
+    if (REQUIRED_ROUTE.length !== labels.length
+        || !REQUIRED_ROUTE.every((label, index) => labels[index] === label)) {
+      throw new Error("账号路线无效");
+    }
     route.forEach((entry, index) => {
       if (!entry || typeof entry.deviceId !== "string" || !Number.isInteger(entry.accountIndex)
           || entry.accountIndex < 0 || entry.accountIndex > 3) {

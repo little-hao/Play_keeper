@@ -55,6 +55,8 @@ small { color: var(--muted); }
 .plan-progress span { display: block; width: 0; height: 100%; background: var(--green); transition: width .25s ease; }
 .plan-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 10px 0; }
 .plan-settings label { margin: 0; }
+.plan-settings .span-2 { grid-column: span 2; }
+.daily-plan-panel .automation-actions small { align-self: center; }
 .plan-intervention { margin-top: 10px; padding: 10px; color: #ffe1aa; background: #422d0c; border: 1px solid #9d7027; border-radius: 9px; font-size: 13px; }
 .device-card { padding: 16px; }
 .device-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
@@ -144,6 +146,7 @@ small { color: var(--muted); }
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .account-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .global-control-row, .plan-settings { grid-template-columns: 1fr; }
+  .plan-settings .span-2 { grid-column: span 1; }
   .button-grid { grid-template-columns: repeat(3, 1fr); }
   .daily-monitor-row { grid-template-columns: 1fr 1.4fr auto; }
   .daily-monitor-row small { grid-column: 1 / -1; grid-row: 2; }

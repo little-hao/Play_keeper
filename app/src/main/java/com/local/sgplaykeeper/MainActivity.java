@@ -540,7 +540,7 @@ public final class MainActivity extends Activity {
         if (activityDestroyed || isFinishing()) return;
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(accountDisplayName(accountIndex) + " · 后续挂机")
-                .setMessage(message + "\n60秒内未选择将自动进入圣兽云殿。")
+                .setMessage(message + "\n30秒内未选择将自动进入设定的挂机副本。")
                 .setNegativeButton("保持当前页", (ignored, which) ->
                         automationCoordinator.resolveTempleConfirmation(accountIndex, false))
                 .setPositiveButton("进入圣兽云殿", (ignored, which) ->
