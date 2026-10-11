@@ -312,7 +312,7 @@ function handleMessage(message) {
 function renderDailyPlan() {
   const statusLabels = {
     idle: "未运行", running: "运行中", success: "已完成",
-    intervention: "等待人工处理", error: "失败", cancelled: "已中断"
+    intervention: "等待人工处理", error: "失败可继续", cancelled: "已中断可继续"
   };
   elements.dailyPlanStatus.textContent = statusLabels[dailyPlan.status] ?? dailyPlan.status;
   elements.dailyPlanStatus.className = `state ${dailyPlan.status === "running" || dailyPlan.status === "success" ? "online" : "offline"}`;
@@ -322,15 +322,17 @@ function renderDailyPlan() {
     : "等待启动";
   const total = Math.max(1, (dailyPlan.route?.length ?? 1) - 1);
   const email = dailyPlan.status === "success" ? ` · 邮件：${dailyPlan.emailStatus || "处理中"}` : "";
+  const holder = dailyPlan.equipmentHolderLabel || "未知账号";
   elements.dailyPlanDetail.textContent = dailyPlan.error
-    ? dailyPlan.error : `当前：${current} · 已完成 ${completed}/${total}${email}`;
+    ? `装备所在：${holder} · ${dailyPlan.error}`
+    : `当前：${current} · 装备所在：${holder} · 已完成 ${completed}/${total}${email}`;
   elements.dailyPlanProgress.style.width = `${Math.min(100, completed * 100 / total)}%`;
   elements.startDailyPlan.disabled = ["running", "intervention"].includes(dailyPlan.status);
-  elements.retryDailyPlan.disabled = dailyPlan.status !== "intervention";
+  elements.retryDailyPlan.disabled = !["intervention", "error", "cancelled"].includes(dailyPlan.status);
+  elements.retryDailyPlan.textContent = `从 ${holder} 继续任务`;
   elements.cancelDailyPlan.disabled = !["running", "intervention"].includes(dailyPlan.status);
-  if (dailyPlan.status === "intervention") {
-    const seconds = Math.max(0, Math.ceil(((dailyPlan.interventionDeadlineAt || Date.now()) - Date.now()) / 1000));
-    elements.planIntervention.textContent = `${dailyPlan.errorAccount || "当前账号"}：${dailyPlan.error}。保留现场 ${seconds} 秒，请人工处理后点击“重试”。`;
+  if (["intervention", "error", "cancelled"].includes(dailyPlan.status)) {
+    elements.planIntervention.textContent = `报错账号：${dailyPlan.errorAccount || "当前账号"}；装备所在：${holder}；${dailyPlan.error || "任务已中断"}。现场会持续保留，人工处理后可从装备所在账号继续。`;
     elements.planIntervention.classList.remove("hidden");
   } else {
     elements.planIntervention.classList.add("hidden");
@@ -375,7 +377,7 @@ function renderPlanSchedule() {
 
 renderDailyPlan();
 setInterval(() => {
-  if (dailyPlan.status === "intervention") renderDailyPlan();
+  if (["intervention", "error", "cancelled"].includes(dailyPlan.status)) renderDailyPlan();
 }, 1_000);
 
 function runKeepPlayerCommand(command) {
@@ -487,7 +489,9 @@ function renderGlobalDailyMonitor() {
       ? `${counts || "未找到监控物资"} · ${formatDateTime(monitor.inventoryLastRunAt)}`
       : `背包待刷新${monitor.inventoryStatus === "error" ? "（上次失败）" : ""}`;
     const failure = account.lastFailure;
-    if (failure?.capturedAt) {
+    const obsoleteInventoryFailure = failure?.task === "inventory_snapshot"
+      || /未找到挂机辅助背包|背包快照失败/.test(failure?.message || "");
+    if (failure?.capturedAt && !obsoleteInventoryFailure) {
       const retained = failure.screenshotAvailable ? "已保留截图" : "已保留信息";
       inventory.textContent += ` · 异常${retained}：${failure.message || failure.task || "未知错误"}`;
     }
@@ -499,7 +503,19 @@ function renderGlobalDailyMonitor() {
       setTimeout(() => sendCommand(device.deviceId, "run_inventory_snapshot",
         { accountIndex: account.index }), 700);
     });
-    row.append(title, status, inventory, refresh);
+    const actions = document.createElement("div");
+    actions.className = "daily-status-actions";
+    const completionButton = (kind, done, label) => {
+      const button = document.createElement("button");
+      button.className = "secondary compact";
+      button.textContent = done ? `重置${label}` : `标记${label}完成`;
+      button.addEventListener("click", () => sendCommand(device.deviceId,
+        "set_daily_completion", { accountIndex: account.index, kind, completed: !done }));
+      return button;
+    };
+    actions.append(completionButton("equipment", transferDone, "装备"),
+      completionButton("dungeon", dungeonDone, "副本"), refresh);
+    row.append(title, status, inventory, actions);
     elements.globalDailyMonitor.append(row);
   }
 }

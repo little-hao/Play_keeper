@@ -492,6 +492,11 @@ public final class MainActivity extends Activity {
                     }
 
                     @Override
+                    public void clearAutomationFailure(int accountIndex, String task) {
+                        clearAutomationFailureSnapshot(accountIndex, task);
+                    }
+
+                    @Override
                     public void onAutomationChanged() {
                         pushTelemetry();
                     }
@@ -1257,6 +1262,15 @@ public final class MainActivity extends Activity {
                     resultMessage = "已启动背包物资刷新";
                     break;
                 }
+                case "set_daily_completion": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.setDailyCompletion(index,
+                            parameters.optString("kind"),
+                            parameters.optBoolean("completed", false));
+                    success = true;
+                    resultMessage = "每日完成状态已更新";
+                    break;
+                }
                 case "configure_equipment_transfer": {
                     int index = requiredAccountIndex(parameters);
                     JSONArray itemArray = parameters.optJSONArray("items");
@@ -1481,6 +1495,22 @@ public final class MainActivity extends Activity {
                 if (bitmap != null) bitmap.recycle();
             }
         });
+    }
+
+    private void clearAutomationFailureSnapshot(int accountIndex, String task) {
+        String storedTask = preferences.getString(PREF_FAILURE_TASK_PREFIX + accountIndex, "");
+        if (task != null && !task.equals(storedTask)) return;
+        String screenshot = preferences.getString(PREF_FAILURE_SCREENSHOT_PREFIX + accountIndex, "");
+        preferences.edit()
+                .remove(PREF_FAILURE_AT_PREFIX + accountIndex)
+                .remove(PREF_FAILURE_TASK_PREFIX + accountIndex)
+                .remove(PREF_FAILURE_MESSAGE_PREFIX + accountIndex)
+                .remove(PREF_FAILURE_SCREENSHOT_PREFIX + accountIndex)
+                .apply();
+        if (!screenshot.isBlank()) {
+            File image = new File(new File(getFilesDir(), "automation_failures"), screenshot);
+            if (image.isFile()) image.delete();
+        }
     }
 
     private void pruneFailureSnapshots(File directory, int accountIndex) {

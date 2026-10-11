@@ -115,6 +115,11 @@ const commandValidators = {
     return accountParameters(parameters) && validItemList(parameters.items, 20);
   },
   run_inventory_snapshot: accountParameters,
+  set_daily_completion(parameters) {
+    return accountParameters(parameters)
+      && ["equipment", "dungeon"].includes(parameters.kind)
+      && typeof parameters.completed === "boolean";
+  },
   configure_equipment_transfer(parameters) {
     return accountParameters(parameters)
       && Array.isArray(parameters.items)
@@ -217,7 +222,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.10.4" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.10.5" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -298,6 +303,26 @@ function savePlanSchedule(file, schedule, logger) {
   }
 }
 
+function loadPlanState(file, logger) {
+  try {
+    if (!syncFs.existsSync(file)) return null;
+    const value = JSON.parse(syncFs.readFileSync(file, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  } catch (error) {
+    logger.warn?.("Unable to load plan state", error.message);
+    return null;
+  }
+}
+
+function savePlanState(file, state, logger) {
+  try {
+    syncFs.mkdirSync(path.dirname(file), { recursive: true });
+    syncFs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+  } catch (error) {
+    logger.warn?.("Unable to save plan state", error.message);
+  }
+}
+
 function timeToMinutes(time) {
   const [hours, minutes] = time.split(":").map(Number);
   return hours * 60 + minutes;
@@ -313,7 +338,7 @@ function zonedClock(timestamp, timeZone) {
 }
 
 export function createRelayServer({ adminToken, deviceToken, logger = console,
-  planScheduleFile } = {}) {
+  planScheduleFile, planStateFile } = {}) {
   if (!adminToken || adminToken.length < 16 || !deviceToken || deviceToken.length < 16) {
     throw new Error("ADMIN_TOKEN and DEVICE_TOKEN must each contain at least 16 characters");
   }
@@ -331,6 +356,8 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   const controllers = new Set();
   const scheduleFile = planScheduleFile || process.env.PLAN_SETTINGS_FILE
     || path.join(currentDirectory, "data", "plan-schedule.json");
+  const stateFile = planStateFile || process.env.PLAN_STATE_FILE
+    || (planScheduleFile ? `${scheduleFile}.state` : path.join(currentDirectory, "data", "plan-state.json"));
   let planSchedule = loadPlanSchedule(scheduleFile, logger);
 
   function dispatchDeviceCommand(deviceId, command, parameters) {
@@ -367,14 +394,15 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
       try {
         const result = await sendCompletionReport(plan);
         const payload = eightAccountPlan.updateEmailStatus(result.status);
-        broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
+        publishPlan(payload);
       } catch (error) {
         const payload = eightAccountPlan.updateEmailStatus(
           `发送失败：${String(error?.message || error).slice(0, 80)}`);
-        broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
+        publishPlan(payload);
       }
     }
   });
+  eightAccountPlan.restore(loadPlanState(stateFile, logger));
 
   function deviceSummary(entry) {
     return {
@@ -387,6 +415,11 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
 
   function broadcast(value) {
     for (const controller of controllers) sendJson(controller, value);
+  }
+
+  function publishPlan(payload) {
+    savePlanState(stateFile, payload, logger);
+    broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
   }
 
   function broadcastSnapshot(controller) {
@@ -471,7 +504,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         const before = JSON.stringify(eightAccountPlan.snapshot());
         const after = eightAccountPlan.onTelemetry(entry.deviceId, entry.telemetry);
         if (JSON.stringify(after) !== before) {
-          broadcast({ type: "plan.update", plan: "eight_account_daily", payload: after });
+          publishPlan(after);
         }
       } else if (message.type === "command.result" && typeof message.commandId === "string") {
         broadcast({
@@ -517,7 +550,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         const before = JSON.stringify(eightAccountPlan.snapshot());
         const after = eightAccountPlan.onDeviceOffline(socket.deviceId);
         if (JSON.stringify(after) !== before) {
-          broadcast({ type: "plan.update", plan: "eight_account_daily", payload: after });
+          publishPlan(after);
         }
       }
     });
@@ -559,7 +592,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         try {
           const options = normalizePlanOptions(message.options);
           const payload = startConfiguredPlan(options);
-          broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
+          publishPlan(payload);
         } catch (error) {
           sendJson(socket, { type: "plan.error", message: String(error?.message || error) });
         }
@@ -569,7 +602,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         try {
           const options = normalizePlanOptions(message.options);
           const payload = startResourceSweep(options);
-          broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
+          publishPlan(payload);
         } catch (error) {
           sendJson(socket, { type: "plan.error", message: String(error?.message || error) });
         }
@@ -587,8 +620,10 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
       }
       if (message.type === "plan.retry") {
         try {
-          const payload = eightAccountPlan.retry();
-          broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
+          const summaries = [...devices.values()].map(deviceSummary);
+          const route = resolveEightAccountRoute(summaries);
+          const payload = eightAccountPlan.resume(route);
+          publishPlan(payload);
         } catch (error) {
           sendJson(socket, { type: "plan.error", message: String(error?.message || error) });
         }
@@ -597,7 +632,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
       if (message.type === "plan.cancel") {
         try {
           const payload = eightAccountPlan.cancel("用户从监控页面中断");
-          broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
+          publishPlan(payload);
         } catch (error) {
           sendJson(socket, { type: "plan.error", message: String(error?.message || error) });
         }
@@ -671,7 +706,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
     const before = JSON.stringify(eightAccountPlan.snapshot());
     const after = eightAccountPlan.tick();
     if (JSON.stringify(after) !== before) {
-      broadcast({ type: "plan.update", plan: "eight_account_daily", payload: after });
+      publishPlan(after);
     }
   }, 1_000);
   planTicker.unref();
@@ -689,7 +724,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
       planSchedule.lastError = "";
       savePlanSchedule(scheduleFile, planSchedule, logger);
       broadcast({ type: "plan.schedule", payload: { ...planSchedule } });
-      broadcast({ type: "plan.update", plan: "eight_account_daily", payload });
+      publishPlan(payload);
     } catch (error) {
       planSchedule.lastError = String(error?.message || error).slice(0, 160);
       savePlanSchedule(scheduleFile, planSchedule, logger);

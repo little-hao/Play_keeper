@@ -44,7 +44,9 @@ function helloDevice(socket, deviceId) {
 }
 
 test("relay starts the cross-device first leg and starts buyer after exchange listing", async (context) => {
-  const server = createRelayServer({ adminToken, deviceToken, logger: { warn() {}, error() {} } });
+  const stateFile = path.join(os.tmpdir(), `play-keeper-state-${Date.now()}-${process.pid}.json`);
+  const server = createRelayServer({ adminToken, deviceToken, planStateFile: stateFile,
+    logger: { warn() {}, error() {} } });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const port = server.address().port;
@@ -56,6 +58,7 @@ test("relay starts the cross-device first leg and starts buyer after exchange li
     device2.terminate();
     control.terminate();
     await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(stateFile, { force: true });
   });
 
   await helloDevice(device1, d1);
@@ -115,6 +118,7 @@ test("saves a daily full-route schedule with configurable dungeons", async (cont
     control.terminate();
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(scheduleFile, { force: true });
+    fs.rmSync(`${scheduleFile}.state`, { force: true });
   });
   const accepted = nextMessages(control, "control.accepted", 1);
   control.send(JSON.stringify({ type: "control.hello", token: adminToken }));

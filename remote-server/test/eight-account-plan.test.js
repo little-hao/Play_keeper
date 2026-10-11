@@ -115,7 +115,7 @@ test("skips an abnormal buyer when the equipment is still on the seller", () => 
     && action.accountLabel === "hao").at(-1).parameters.buyer, "hao2");
 });
 
-test("offers 60 seconds for manual intervention when the equipment is on the abnormal account", () => {
+test("waits indefinitely for manual intervention when the equipment is on the abnormal account", () => {
   let clock = 10_000;
   const plan = new EightAccountPlan({ now: () => clock });
   plan.start(route());
@@ -127,10 +127,51 @@ test("offers 60 seconds for manual intervention when the equipment is on the abn
   }));
   assert.equal(plan.snapshot().status, "intervention");
   assert.equal(plan.snapshot().errorAccount, "hao1");
-  clock += 60_001;
+  assert.equal(plan.snapshot().equipmentHolderLabel, "hao1");
+  assert.equal(plan.snapshot().interventionDeadlineAt, 0);
+  clock += 24 * 60 * 60 * 1_000;
   plan.tick();
-  assert.equal(plan.snapshot().status, "error");
-  assert.match(plan.snapshot().error, /60秒人工介入/);
+  assert.equal(plan.snapshot().status, "intervention");
+  assert.match(plan.snapshot().error, /情改套装当前在该账号/);
+});
+
+test("restores an interrupted run and resumes from the account holding the equipment", () => {
+  const actions = [];
+  let clock = 10_000;
+  const first = new EightAccountPlan({ now: () => clock });
+  first.start(route());
+  first.onTelemetry(d1, telemetry(0, {
+    task: "equipment_buy", status: "running", equipmentTransferLastRunAt: 20_000
+  }));
+  first.onTelemetry(d1, telemetry(0, {
+    task: "equipment_buy", status: "error", lastMessage: "复核失败"
+  }));
+
+  const restored = new EightAccountPlan({ emitAction: (action) => actions.push(action),
+    now: () => ++clock });
+  restored.restore(first.snapshot());
+  assert.equal(restored.snapshot().status, "intervention");
+  assert.equal(restored.snapshot().equipmentHolderLabel, "hao1");
+  restored.resume(route());
+  assert.equal(restored.snapshot().status, "running");
+  assert.equal(restored.snapshot().phase, "buyer_running");
+  assert.equal(actions.at(-2).command, "switch_account");
+  assert.equal(actions.at(-2).accountLabel, "hao1");
+  assert.equal(actions.at(-1).command, "run_equipment_buy");
+  assert.equal(actions.at(-1).accountLabel, "hao1");
+  assert.equal(actions.some((action) => action.command === "run_equipment_sell"), false);
+});
+
+test("restores a running saved state as an indefinite intervention", () => {
+  const first = new EightAccountPlan({ now: () => 10_000 });
+  first.start(route());
+  const restored = new EightAccountPlan({ now: () => 20_000 });
+  restored.restore(first.snapshot());
+  assert.equal(restored.snapshot().status, "intervention");
+  assert.equal(restored.snapshot().resumePhase, "seller_running");
+  assert.equal(restored.snapshot().equipmentHolderLabel, "hao");
+  assert.equal(restored.snapshot().interventionDeadlineAt, 0);
+  assert.match(restored.snapshot().error, /服务恢复后已暂停/);
 });
 
 test("releases every seller to the return map after equipment arrives", () => {

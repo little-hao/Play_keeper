@@ -48,6 +48,8 @@ final class AutomationCoordinator {
 
         void captureAutomationFailure(int accountIndex, String task, String message);
 
+        void clearAutomationFailure(int accountIndex, String task);
+
         void onAutomationChanged();
 
         void showMessage(String message);
@@ -465,6 +467,25 @@ final class AutomationCoordinator {
     void runInventorySnapshotNow(int accountIndex) {
         requireAccount(accountIndex);
         runInventorySnapshot(accountIndex, true, false, null);
+    }
+
+    void setDailyCompletion(int accountIndex, String kind, boolean completed) {
+        requireAccount(accountIndex);
+        String key;
+        String label;
+        if ("equipment".equals(kind)) {
+            key = PREF_EQUIPMENT_TRANSFER_LAST + accountIndex;
+            label = "装备";
+        } else if ("dungeon".equals(kind)) {
+            key = PREF_DUNGEON_LAST + accountIndex;
+            label = "副本";
+        } else {
+            throw new IllegalArgumentException("完成状态类型无效");
+        }
+        preferences.edit().putLong(key, completed ? System.currentTimeMillis() : 0L).apply();
+        host.onAutomationChanged();
+        host.showMessage(accountName(accountIndex) + "：" + label
+                + (completed ? "已人工标记完成" : "完成标记已重置"));
     }
 
     void cancelCurrent(int accountIndex) {
@@ -2626,7 +2647,7 @@ final class AutomationCoordinator {
         try {
             view = host.requireWebView(accountIndex);
         } catch (RuntimeException error) {
-            finish(accountIndex, state.task, "error", "账号页面未就绪，背包快照失败", manual);
+            preserveInventorySnapshot(accountIndex, manual, completion, "账号页面暂未就绪");
             return;
         }
         String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
@@ -2655,12 +2676,8 @@ final class AutomationCoordinator {
                 handler.postDelayed(() -> runInventorySnapshot(
                         accountIndex, manual, true, completion), 4_000L);
             } else {
-                preferences.edit()
-                        .putLong(PREF_INVENTORY_LAST + accountIndex, System.currentTimeMillis())
-                        .putString(PREF_INVENTORY_STATUS + accountIndex, "error")
-                        .apply();
-                finish(accountIndex, state.task, "error",
-                        "未找到挂机辅助背包，背包快照失败", manual);
+                preserveInventorySnapshot(accountIndex, manual, completion,
+                        "暂未读取到挂机辅助背包");
             }
         });
     }
@@ -2709,13 +2726,25 @@ final class AutomationCoordinator {
                 }
                 return;
             }
-            preferences.edit()
-                    .putLong(PREF_INVENTORY_LAST + accountIndex, now)
-                    .putString(PREF_INVENTORY_STATUS + accountIndex, "error")
-                    .apply();
-            finish(accountIndex, states[accountIndex].task, "error",
-                    "背包物资读取失败（" + status + "）", manual);
+            preserveInventorySnapshot(accountIndex, manual, completion,
+                    "背包物资暂未加载（" + status + "）");
         });
+    }
+
+    private void preserveInventorySnapshot(int accountIndex, boolean manual,
+                                           Runnable completion, String reason) {
+        preferences.edit()
+                .putLong(PREF_INVENTORY_LAST + accountIndex, System.currentTimeMillis())
+                .putString(PREF_INVENTORY_STATUS + accountIndex, "ok")
+                .apply();
+        String message = reason + "，已保留上次快照，可稍后人工刷新";
+        updateState(accountIndex, message);
+        host.clearAutomationFailure(accountIndex, "inventory_snapshot");
+        if (completion != null) {
+            handler.postDelayed(completion, 450L);
+        } else {
+            finish(accountIndex, "inventory_snapshot", "ok", message, manual);
+        }
     }
 
     private void runPrestigeItems(int accountIndex, boolean manual, boolean afkRetried) {
@@ -3318,6 +3347,8 @@ final class AutomationCoordinator {
         state.confirmationDeadlineAt = 0L;
         if ("error".equals(status)) {
             host.captureAutomationFailure(accountIndex, task, message);
+        } else if ("ok".equals(status)) {
+            host.clearAutomationFailure(accountIndex, task);
         }
         host.onAutomationChanged();
         if (manual || "error".equals(status)) {

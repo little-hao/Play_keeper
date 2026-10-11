@@ -1,6 +1,6 @@
 {
   "name": "play-keeper-relay",
-  "version": "1.10.4",
+  "version": "1.10.5",
   "private": true,
   "type": "module",
   "description": "Play Keeper encrypted WebSocket relay and iPhone web dashboard",

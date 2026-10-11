@@ -82,8 +82,10 @@ small { color: var(--muted); }
 .daily-monitor-panel { margin: 12px 0; padding: 12px; background: #0d1118; border: 1px solid var(--line); border-radius: 12px; }
 .daily-monitor-panel .section-title { align-items: baseline; gap: 8px; }
 .daily-monitor-list { display: grid; gap: 7px; margin-top: 10px; }
-.daily-monitor-row { display: grid; grid-template-columns: minmax(62px, .7fr) minmax(130px, 1fr) minmax(240px, 3fr) auto; align-items: center; gap: 8px; padding: 9px; background: #111722; border-radius: 9px; }
+.daily-monitor-row { display: grid; grid-template-columns: minmax(62px, .7fr) minmax(130px, 1fr) minmax(240px, 3fr) minmax(250px, auto); align-items: center; gap: 8px; padding: 9px; background: #111722; border-radius: 9px; }
 .daily-monitor-row small { overflow-wrap: anywhere; }
+.daily-status-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.daily-status-actions .compact { padding: 8px 10px; white-space: nowrap; }
 .daily-ok { color: var(--green); }
 .daily-pending { color: #f0bd66; }
 .preview-panel { margin: 12px 0; padding: 12px; background: #0d1118; border: 1px solid var(--line); border-radius: 12px; }
@@ -152,8 +154,10 @@ small { color: var(--muted); }
   .global-control-row, .plan-settings, .quick-account-actions { grid-template-columns: 1fr; }
   .plan-settings .span-2 { grid-column: span 1; }
   .button-grid { grid-template-columns: repeat(3, 1fr); }
-  .daily-monitor-row { grid-template-columns: 1fr 1.4fr auto; }
+  .daily-monitor-row { grid-template-columns: 1fr 1.4fr; }
   .daily-monitor-row small { grid-column: 1 / -1; grid-row: 2; }
+  .daily-status-actions { grid-column: 1 / -1; justify-content: stretch; }
+  .daily-status-actions button { flex: 1 1 120px; }
   .login-row { flex-direction: column; }
   .preview-heading { align-items: flex-start; flex-direction: column; }
   .preview-actions { width: 100%; flex-wrap: wrap; }

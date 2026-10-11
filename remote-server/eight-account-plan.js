@@ -12,7 +12,6 @@ export const RESOURCE_ITEMS = Object.freeze([
 const REQUIRED_ROUTE = Object.freeze([
   "hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"
 ]);
-const INTERVENTION_MS = 60_000;
 const SELLER_CLEANUP_DELAY_MS = 30_000;
 
 function shanghaiDateKey(timestamp) {
@@ -75,6 +74,33 @@ export class EightAccountPlan {
   }
 
   snapshot() { return JSON.parse(JSON.stringify(this.state)); }
+
+  restore(savedState) {
+    if (!savedState || typeof savedState !== "object" || Array.isArray(savedState)) {
+      return this.snapshot();
+    }
+    const route = Array.isArray(savedState.route) ? savedState.route : [];
+    this.state = { ...this.#idleState(), ...savedState,
+      route: route.map((entry) => ({ ...entry })),
+      items: Array.isArray(savedState.items) ? [...savedState.items] : [...EQUIPMENT_ITEMS],
+      resourceItems: Array.isArray(savedState.resourceItems)
+        ? [...savedState.resourceItems] : [...RESOURCE_ITEMS],
+      dungeonItems: Array.isArray(savedState.dungeonItems)
+        ? [...savedState.dungeonItems] : [...this.#idleState().dungeonItems],
+      history: Array.isArray(savedState.history) ? [...savedState.history] : [],
+      inventoryByAccount: savedState.inventoryByAccount
+        && typeof savedState.inventoryByAccount === "object"
+        ? { ...savedState.inventoryByAccount } : {} };
+    if (this.state.status === "running") {
+      this.state.resumePhase = this.state.phase;
+      this.state.status = "intervention";
+      this.state.error = `服务恢复后已暂停；情改套装当前在${this.state.equipmentHolderLabel || "未知账号"}`;
+      this.state.errorAccount = this.state.equipmentHolderLabel || "当前账号";
+    }
+    if (this.state.status === "intervention") this.state.interventionDeadlineAt = 0;
+    this.state.updatedAt = this.now();
+    return this.snapshot();
+  }
 
   start(route, options = {}) {
     if (["running", "intervention"].includes(this.state.status)) throw new Error("多用户挂机已在运行");
@@ -154,14 +180,16 @@ export class EightAccountPlan {
     for (const account of [leg?.seller, leg?.buyer]) {
       if (account) this.#command(account, "cancel_automation", { accountIndex: account.accountIndex });
     }
-    Object.assign(this.state, { status: "cancelled", phase: "cancelled", error: reason,
+    const resumePhase = this.state.status === "intervention"
+      ? this.state.resumePhase : this.state.phase;
+    Object.assign(this.state, { status: "cancelled", phase: "cancelled", resumePhase,
+      error: reason,
       interventionDeadlineAt: 0, updatedAt: this.now() });
     return this.snapshot();
   }
 
   retry() {
     if (this.state.status !== "intervention") throw new Error("当前没有等待人工处理的错误");
-    if (this.now() > this.state.interventionDeadlineAt) return this.tick();
     const phase = this.state.resumePhase;
     Object.assign(this.state, { status: "running", error: "", errorAccount: "",
       interventionDeadlineAt: 0, phaseStartedAt: this.now() });
@@ -170,16 +198,35 @@ export class EightAccountPlan {
       return this.snapshot();
     }
     if (["seller_running", "buyer_running"].includes(phase)) {
-      this.state.buyerStarted = false;
-      this.#startCurrentLeg();
+      this.#resumeEquipmentLeg();
     } else if (phase === "resource_auction_running") {
       this.#startResourceAuction(this.#currentLeg().buyer);
     } else if (phase === "main_buy_running") {
       this.#startMainBuy(this.#currentLeg().buyer);
+    } else if (phase === "standalone_main_running") {
+      this.#startStandaloneMain(this.#currentLeg().buyer);
     } else {
       return this.#intervene("无法判断需要重试的阶段", "当前账号");
     }
     return this.snapshot();
+  }
+
+  resume(liveRoute) {
+    if (!["intervention", "error", "cancelled"].includes(this.state.status)) {
+      throw new Error("当前计划不需要恢复");
+    }
+    this.#refreshRouteBindings(liveRoute);
+    if (this.state.status !== "intervention") {
+      const phase = this.state.resumePhase;
+      if (!phase || ["idle", "complete", "cancelled", "error"].includes(phase)) {
+        throw new Error("中断记录缺少可恢复阶段");
+      }
+      Object.assign(this.state, { status: "intervention", phase,
+        error: `准备从${this.state.equipmentHolderLabel || "当前账号"}继续`,
+        errorAccount: this.state.equipmentHolderLabel || "当前账号",
+        interventionDeadlineAt: 0, updatedAt: this.now() });
+    }
+    return this.retry();
   }
 
   tick() {
@@ -187,10 +234,6 @@ export class EightAccountPlan {
         && this.state.sellerCleanupDueAt > 0
         && this.now() >= this.state.sellerCleanupDueAt) {
       this.#releaseScheduledSeller();
-    }
-    if (this.state.status === "intervention" && this.now() >= this.state.interventionDeadlineAt) {
-      Object.assign(this.state, { status: "error", phase: "error",
-        error: `${this.state.error}；60秒人工介入时间已结束`, updatedAt: this.now() });
     }
     return this.snapshot();
   }
@@ -395,6 +438,39 @@ export class EightAccountPlan {
     return this.#intervene(message, account.accountLabel);
   }
 
+  #resumeEquipmentLeg() {
+    const leg = this.#currentLeg();
+    if (!leg) return this.#intervene("恢复时未找到当前装备交接账号", "系统");
+    if (this.state.equipmentHolderLabel !== leg.buyer.accountLabel) {
+      this.state.buyerStarted = false;
+      this.#startCurrentLeg();
+      return;
+    }
+    this.state.phase = "buyer_running";
+    this.state.buyerStarted = true;
+    this.state.updatedAt = this.now();
+    if (!this.state.sellerCleaned) {
+      this.state.sellerReleased = true;
+      this.#command(leg.seller, "cancel_automation", { accountIndex: leg.seller.accountIndex });
+      this.#command(leg.seller, "configure_return_hang", {
+        accountIndex: leg.seller.accountIndex, map: this.state.returnMap });
+      this.#command(leg.seller, "run_seller_cleanup", { accountIndex: leg.seller.accountIndex });
+    }
+    this.#command(leg.buyer, "switch_account", { accountIndex: leg.buyer.accountIndex });
+    this.#command(leg.buyer, "run_equipment_buy", { accountIndex: leg.buyer.accountIndex });
+  }
+
+  #refreshRouteBindings(liveRoute) {
+    this.#validateRoute(liveRoute);
+    const byLabel = new Map(liveRoute.map((entry) => [entry.accountLabel, entry]));
+    this.state.route = this.state.route.map((entry) => {
+      const live = byLabel.get(entry.accountLabel);
+      if (!live) throw new Error(`账号 ${entry.accountLabel} 当前不在线`);
+      return { ...entry, deviceId: live.deviceId, accountIndex: live.accountIndex,
+        online: true, automation: { ...(live.automation || {}) } };
+    });
+  }
+
   #captureInventory(account, automation) {
     const source = automation.inventoryCounts && typeof automation.inventoryCounts === "object"
       ? automation.inventoryCounts : {};
@@ -506,7 +582,7 @@ export class EightAccountPlan {
   #intervene(message, accountLabel) {
     this.state.resumePhase = this.state.phase;
     Object.assign(this.state, { status: "intervention", error: message, errorAccount: accountLabel,
-      interventionDeadlineAt: this.now() + INTERVENTION_MS, updatedAt: this.now() });
+      interventionDeadlineAt: 0, updatedAt: this.now() });
     return this.snapshot();
   }
 
