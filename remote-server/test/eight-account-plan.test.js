@@ -42,7 +42,7 @@ test("resolves the required route from the two live device account labels", () =
 test("runs all eight relay legs and returns the equipment to hao", () => {
   const actions = [];
   let clock = 1_000;
-  const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => ++clock });
+  const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => clock });
   plan.start(route());
   assert.equal(actions[0].command, "configure_equipment_transfer");
   assert.deepEqual(actions[0].parameters.items, EQUIPMENT_ITEMS);
@@ -63,6 +63,8 @@ test("runs all eight relay legs and returns the equipment to hao", () => {
       inventoryStatus: "ok",
       inventoryCounts: { "曙光印记": 3, "进化宝石": 2 }
     }));
+    clock += 30_001;
+    plan.tick();
     plan.onTelemetry(seller.deviceId, telemetry(seller.accountIndex, {
       task: "temple", status: "ok", updatedAt: 1_000_000
     }));
@@ -98,10 +100,28 @@ test("runs all eight relay legs and returns the equipment to hao", () => {
   assert.equal(result.history.at(-1).buyer, "hao");
 });
 
-test("offers 60 seconds for manual intervention before an error stops the chain", () => {
+test("skips an abnormal buyer when the equipment is still on the seller", () => {
+  const actions = [];
+  const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => 10_000 });
+  plan.start(route());
+  plan.onTelemetry(d1, telemetry(0, {
+    task: "equipment_buy", status: "error", lastMessage: "购买页面异常"
+  }));
+  assert.equal(plan.snapshot().status, "running");
+  assert.equal(plan.snapshot().history.at(-1).result, "skipped_error");
+  assert.equal(plan.snapshot().history.at(-1).account, "hao1");
+  assert.equal(actions.at(-1).command, "run_equipment_sell");
+  assert.equal(actions.filter((action) => action.command === "configure_equipment_transfer"
+    && action.accountLabel === "hao").at(-1).parameters.buyer, "hao2");
+});
+
+test("offers 60 seconds for manual intervention when the equipment is on the abnormal account", () => {
   let clock = 10_000;
   const plan = new EightAccountPlan({ now: () => clock });
   plan.start(route());
+  plan.onTelemetry(d1, telemetry(0, {
+    task: "equipment_buy", status: "running", equipmentTransferLastRunAt: 20_000
+  }));
   plan.onTelemetry(d1, telemetry(0, {
     task: "equipment_buy", status: "error", lastMessage: "十件装备复核失败"
   }));
@@ -115,7 +135,8 @@ test("offers 60 seconds for manual intervention before an error stops the chain"
 
 test("releases every seller to the return map after equipment arrives", () => {
   const actions = [];
-  const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => 1_000 });
+  let clock = 1_000;
+  const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => clock });
   plan.start(route());
   plan.onTelemetry(d2, telemetry(0, {
     task: "equipment_sell", status: "running", equipmentListedInBatch: 5
@@ -123,6 +144,9 @@ test("releases every seller to the return map after equipment arrives", () => {
   plan.onTelemetry(d1, telemetry(0, {
     task: "equipment_buy", status: "running", equipmentTransferLastRunAt: 2_000
   }));
+  assert.notEqual(actions.at(-1).command, "run_seller_cleanup");
+  clock += 30_001;
+  plan.tick();
   const release = actions.slice(-3).map((action) => action.command);
   assert.deepEqual(release,
     ["cancel_automation", "configure_return_hang", "run_seller_cleanup"]);
@@ -131,7 +155,8 @@ test("releases every seller to the return map after equipment arrives", () => {
   actions.length = 0;
   const sameDeviceRoute = route().map((entry, index) => ({ ...entry, deviceId: d1,
     accountIndex: index === 1 ? 1 : entry.accountIndex }));
-  const sameDevicePlan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => 1_000 });
+  clock = 1_000;
+  const sameDevicePlan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => clock });
   sameDevicePlan.start(sameDeviceRoute);
   sameDevicePlan.onTelemetry(d1, { accounts: [
     { index: 0, automation: { task: "equipment_sell", status: "running", equipmentListedInBatch: 5 } }
@@ -139,8 +164,52 @@ test("releases every seller to the return map after equipment arrives", () => {
   sameDevicePlan.onTelemetry(d1, { accounts: [
     { index: 1, automation: { task: "equipment_buy", status: "running", equipmentTransferLastRunAt: 2_000 } }
   ] });
+  clock += 30_001;
+  sameDevicePlan.tick();
   assert.deepEqual(actions.slice(-3).map((action) => action.command),
     ["cancel_automation", "configure_return_hang", "run_seller_cleanup"]);
+});
+
+test("omits accounts whose dungeon telemetry is already complete today", () => {
+  const actions = [];
+  const today = Date.parse("2026-10-11T10:00:00+08:00");
+  const plannedRoute = route();
+  plannedRoute[1].automation = { dungeonLastRunAt: today - 60_000 };
+  const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => today });
+  plan.start(plannedRoute);
+  const snapshot = plan.snapshot();
+  assert.deepEqual(snapshot.route.map((entry) => entry.accountLabel),
+    ["hao", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"]);
+  assert.equal(snapshot.history[0].result, "skipped_completed");
+  assert.equal(snapshot.history[0].account, "hao1");
+  assert.equal(actions[0].parameters.buyer, "hao2");
+});
+
+test("runs hao directly without a self-transfer when every small account is complete", () => {
+  const actions = [];
+  const today = Date.parse("2026-10-11T10:00:00+08:00");
+  const plannedRoute = route();
+  for (let index = 1; index < plannedRoute.length - 1; index += 1) {
+    plannedRoute[index].automation = { dungeonLastRunAt: today - 60_000 };
+  }
+  const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => today });
+  plan.start(plannedRoute);
+  assert.equal(plan.snapshot().phase, "standalone_main_running");
+  assert.equal(actions.some((action) => action.command === "run_equipment_sell"), false);
+  assert.equal(actions.at(-1).command, "run_dungeon_sequence");
+  plan.onTelemetry(d2, telemetry(0, {
+    task: "temple", status: "ok", updatedAt: today + 1,
+    dungeonLastRunAt: today + 1, inventoryLastRunAt: today + 1,
+    inventoryStatus: "ok", inventoryCounts: { "进化宝石": 4 }
+  }));
+  assert.equal(actions.at(-1).command, "run_auction_buy");
+  plan.onTelemetry(d2, telemetry(0, {
+    task: "auction_buy", status: "running", updatedAt: today + 2
+  }));
+  plan.onTelemetry(d2, telemetry(0, {
+    task: "temple", status: "ok", updatedAt: today + 3
+  }));
+  assert.equal(plan.snapshot().status, "success");
 });
 
 test("auctions resources from all small accounts, buys on hao, then hangs all accounts", () => {

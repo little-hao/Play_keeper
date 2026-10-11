@@ -61,6 +61,11 @@ import org.json.JSONObject;
 import org.json.JSONTokener;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.Locale;
 
 public final class MainActivity extends Activity {
@@ -74,6 +79,10 @@ public final class MainActivity extends Activity {
     private static final String PREF_LANDSCAPE_PREFIX = "landscape_mode_";
     private static final String PREF_ACCOUNT_LABEL_PREFIX = "account_label_";
     private static final String PREF_ACCOUNT_LABEL_MANUAL_PREFIX = "account_label_manual_";
+    private static final String PREF_FAILURE_AT_PREFIX = "automation_failure_at_";
+    private static final String PREF_FAILURE_TASK_PREFIX = "automation_failure_task_";
+    private static final String PREF_FAILURE_MESSAGE_PREFIX = "automation_failure_message_";
+    private static final String PREF_FAILURE_SCREENSHOT_PREFIX = "automation_failure_screenshot_";
     private static final int MAX_ACCOUNTS = 4;
     private static final long PAGE_LOAD_TIMEOUT_MS = 60_000L;
     private static final long[] RETRY_DELAYS_MS = {3_000L, 10_000L, 30_000L, 60_000L};
@@ -474,6 +483,12 @@ public final class MainActivity extends Activity {
                     public void expectDailyTaskConfirmation(int accountIndex) {
                         dailyTaskConfirmationUntil[accountIndex] =
                                 System.currentTimeMillis() + 10_000L;
+                    }
+
+                    @Override
+                    public void captureAutomationFailure(int accountIndex, String task,
+                                                         String message) {
+                        captureAutomationFailureSnapshot(accountIndex, task, message);
                     }
 
                     @Override
@@ -1422,6 +1437,63 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void captureAutomationFailureSnapshot(int accountIndex, String task, String message) {
+        long capturedAt = System.currentTimeMillis();
+        preferences.edit()
+                .putLong(PREF_FAILURE_AT_PREFIX + accountIndex, capturedAt)
+                .putString(PREF_FAILURE_TASK_PREFIX + accountIndex, task == null ? "" : task)
+                .putString(PREF_FAILURE_MESSAGE_PREFIX + accountIndex,
+                        message == null ? "" : message)
+                .remove(PREF_FAILURE_SCREENSHOT_PREFIX + accountIndex)
+                .apply();
+        Session session = sessions[accountIndex];
+        if (session == null) return;
+        session.webView.post(() -> {
+            WebView view = session.webView;
+            int sourceWidth = view.getWidth();
+            int sourceHeight = view.getHeight();
+            if (sourceWidth <= 0 || sourceHeight <= 0) return;
+            int targetWidth = Math.min(720, sourceWidth);
+            int targetHeight = Math.max(1,
+                    Math.round(sourceHeight * targetWidth / (float) sourceWidth));
+            Bitmap bitmap = null;
+            try {
+                bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.RGB_565);
+                Canvas canvas = new Canvas(bitmap);
+                canvas.drawColor(Color.WHITE);
+                canvas.scale(targetWidth / (float) sourceWidth,
+                        targetHeight / (float) sourceHeight);
+                view.draw(canvas);
+                File directory = new File(getFilesDir(), "automation_failures");
+                if (!directory.exists() && !directory.mkdirs()) return;
+                File image = new File(directory,
+                        "failure-" + accountIndex + "-" + capturedAt + ".jpg");
+                try (FileOutputStream output = new FileOutputStream(image)) {
+                    if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 72, output)) return;
+                }
+                preferences.edit().putString(PREF_FAILURE_SCREENSHOT_PREFIX + accountIndex,
+                        image.getName()).apply();
+                pruneFailureSnapshots(directory, accountIndex);
+                pushTelemetry();
+            } catch (RuntimeException | IOException ignored) {
+                // Failure capture is diagnostic only and must never replace the original error.
+            } finally {
+                if (bitmap != null) bitmap.recycle();
+            }
+        });
+    }
+
+    private void pruneFailureSnapshots(File directory, int accountIndex) {
+        File[] files = directory.listFiles((dir, name) ->
+                name.startsWith("failure-" + accountIndex + "-") && name.endsWith(".jpg"));
+        if (files == null || files.length <= 3) return;
+        Arrays.sort(files, Comparator.comparingLong(File::lastModified).reversed());
+        for (int index = 3; index < files.length; index++) {
+            //noinspection ResultOfMethodCallIgnored
+            files[index].delete();
+        }
+    }
+
     private byte[] compressPreview(Bitmap bitmap, int quality) {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         bitmap.compress(Bitmap.CompressFormat.JPEG, quality, output);
@@ -1622,6 +1694,20 @@ public final class MainActivity extends Activity {
                 }
                 if (automationCoordinator != null) {
                     automationCoordinator.appendAccountTelemetry(account, i);
+                }
+                long failureAt = preferences.getLong(PREF_FAILURE_AT_PREFIX + i, 0L);
+                if (failureAt > 0L) {
+                    JSONObject failure = new JSONObject();
+                    failure.put("capturedAt", failureAt);
+                    failure.put("task", preferences.getString(
+                            PREF_FAILURE_TASK_PREFIX + i, ""));
+                    failure.put("message", preferences.getString(
+                            PREF_FAILURE_MESSAGE_PREFIX + i, ""));
+                    String screenshot = preferences.getString(
+                            PREF_FAILURE_SCREENSHOT_PREFIX + i, "");
+                    failure.put("screenshotAvailable", !screenshot.isBlank());
+                    failure.put("screenshotName", screenshot);
+                    account.put("lastFailure", failure);
                 }
                 accounts.put(account);
             }

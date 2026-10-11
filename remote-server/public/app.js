@@ -486,6 +486,11 @@ function renderGlobalDailyMonitor() {
     inventory.textContent = monitor.inventoryStatus === "ok"
       ? `${counts || "未找到监控物资"} · ${formatDateTime(monitor.inventoryLastRunAt)}`
       : `背包待刷新${monitor.inventoryStatus === "error" ? "（上次失败）" : ""}`;
+    const failure = account.lastFailure;
+    if (failure?.capturedAt) {
+      const retained = failure.screenshotAvailable ? "已保留截图" : "已保留信息";
+      inventory.textContent += ` · 异常${retained}：${failure.message || failure.task || "未知错误"}`;
+    }
     const refresh = document.createElement("button");
     refresh.className = "secondary";
     refresh.textContent = "刷新背包";

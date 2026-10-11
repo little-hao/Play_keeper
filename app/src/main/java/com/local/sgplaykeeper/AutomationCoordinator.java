@@ -12,6 +12,7 @@ import org.json.JSONTokener;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Calendar;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -44,6 +45,8 @@ final class AutomationCoordinator {
         int findOpenedAccountByLabel(String accountLabel, int excludingAccountIndex);
 
         void expectDailyTaskConfirmation(int accountIndex);
+
+        void captureAutomationFailure(int accountIndex, String task, String message);
 
         void onAutomationChanged();
 
@@ -2160,6 +2163,13 @@ final class AutomationCoordinator {
         updateState(accountIndex, "正在返回挂机辅助并准备副本队列");
         host.prepareAutomation(accountIndex, false);
         host.openAfk(accountIndex);
+        if (isToday(preferences.getLong(PREF_DUNGEON_LAST + accountIndex, 0L))) {
+            String message = "今日副本已完成，已跳过重复副本";
+            updateState(accountIndex, message + "，正在读取每日背包物资");
+            handler.postDelayed(() -> runInventorySnapshot(accountIndex, manual, false,
+                    () -> requestTempleConfirmation(accountIndex, message, manual)), 4_000L);
+            return;
+        }
         RuntimeState state = states[accountIndex];
         state.dungeonIndex = 0;
         state.dungeonStarted = false;
@@ -2171,6 +2181,16 @@ final class AutomationCoordinator {
         state.dungeonDailyTasksPrepared = false;
         state.skippedDungeons.clear();
         handler.postDelayed(() -> runDungeonQueue(accountIndex, manual, true), 4_000L);
+    }
+
+    private boolean isToday(long timestamp) {
+        if (timestamp <= 0L) return false;
+        Calendar now = Calendar.getInstance();
+        Calendar value = Calendar.getInstance();
+        value.setTimeInMillis(timestamp);
+        return now.get(Calendar.ERA) == value.get(Calendar.ERA)
+                && now.get(Calendar.YEAR) == value.get(Calendar.YEAR)
+                && now.get(Calendar.DAY_OF_YEAR) == value.get(Calendar.DAY_OF_YEAR);
     }
 
     private void runCurrentDungeon(int accountIndex, WebView view,
@@ -2338,9 +2358,9 @@ final class AutomationCoordinator {
         view.evaluateJavascript(script, encoded -> {
             String result = decodeString(encoded);
             if ("accepted".equals(result)) {
-                updateState(accountIndex, "已一键接受日常任务");
-                handler.postDelayed(() -> closeTaskModalAndContinue(
-                        view, continuation), 700L);
+                updateState(accountIndex, "已确认一键接受，正在等待页面更新");
+                handler.postDelayed(() -> verifyDailyTasksAccepted(
+                        accountIndex, view, continuation, 0), 1_500L);
             } else if ("done".equals(result)) {
                 handler.postDelayed(continuation, 400L);
             } else if (("opened".equals(result) || "daily_clicked".equals(result)
@@ -2350,6 +2370,39 @@ final class AutomationCoordinator {
             } else {
                 updateState(accountIndex, "未找到可接受的日常任务，已继续副本流程");
                 handler.postDelayed(continuation, 400L);
+            }
+        });
+    }
+
+    private void verifyDailyTasksAccepted(int accountIndex, WebView view,
+                                          Runnable continuation, int attempt) {
+        host.expectDailyTaskConfirmation(accountIndex);
+        String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
+                + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'').trim();"
+                + "const modal=Array.from(document.querySelectorAll('.task-modal,[role=dialog],.uni-popup__wrapper'))"
+                + ".find(e=>visible(e)&&clean(e).includes('任务列表'));"
+                + "if(!modal)return 'done';"
+                + "const daily=Array.from(modal.querySelectorAll('button,[role=tab],view,div,span'))"
+                + ".filter(visible).find(e=>clean(e).startsWith('日常任务'));"
+                + "if(daily&&!/active|selected/.test(daily.className||'')){daily.click();return 'daily_clicked';}"
+                + "const accept=Array.from(modal.querySelectorAll('button,[role=button],uni-button,view'))"
+                + ".filter(visible).find(e=>clean(e)==='一键接受');"
+                + "if(accept&&!accept.disabled){accept.click();return 'retry';}"
+                + "return 'done';})()";
+        view.evaluateJavascript(script, encoded -> {
+            String result = decodeString(encoded);
+            if ("retry".equals(result) && attempt < 2) {
+                updateState(accountIndex, "日常任务页仍有待接受项，正在重试");
+                handler.postDelayed(() -> verifyDailyTasksAccepted(
+                        accountIndex, view, continuation, attempt + 1), 1_500L);
+            } else if ("daily_clicked".equals(result) && attempt < 3) {
+                handler.postDelayed(() -> verifyDailyTasksAccepted(
+                        accountIndex, view, continuation, attempt + 1), 700L);
+            } else {
+                updateState(accountIndex, "done".equals(result)
+                        ? "日常任务一键接受已完成"
+                        : "日常任务页未及时更新，已跳过并继续副本");
+                closeTaskModalAndContinue(view, continuation);
             }
         });
     }
@@ -3263,6 +3316,9 @@ final class AutomationCoordinator {
         state.updatedAt = System.currentTimeMillis();
         state.awaitingTempleConfirmation = false;
         state.confirmationDeadlineAt = 0L;
+        if ("error".equals(status)) {
+            host.captureAutomationFailure(accountIndex, task, message);
+        }
         host.onAutomationChanged();
         if (manual || "error".equals(status)) {
             host.showMessage(accountName(accountIndex) + "：" + message);

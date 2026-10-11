@@ -13,6 +13,18 @@ const REQUIRED_ROUTE = Object.freeze([
   "hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"
 ]);
 const INTERVENTION_MS = 60_000;
+const SELLER_CLEANUP_DELAY_MS = 30_000;
+
+function shanghaiDateKey(timestamp) {
+  if (!Number.isFinite(Number(timestamp)) || Number(timestamp) <= 0) return "";
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit"
+  }).format(new Date(Number(timestamp)));
+}
+
+function completedToday(account, now) {
+  return shanghaiDateKey(account?.automation?.dungeonLastRunAt) === shanghaiDateKey(now);
+}
 
 export function resolveEightAccountRoute(deviceSummaries) {
   return resolveAccountRoute(deviceSummaries, REQUIRED_ROUTE);
@@ -30,7 +42,9 @@ function resolveAccountRoute(deviceSummaries, labels) {
     for (const account of reported) {
       if (!Number.isInteger(account?.index) || typeof account?.label !== "string") continue;
       accounts.push({ deviceId: device.deviceId, accountIndex: account.index,
-        accountLabel: account.label, online: true });
+        accountLabel: account.label, online: true,
+        automation: account.automation && typeof account.automation === "object"
+          ? { ...account.automation } : {} });
     }
   }
   return labels.map((label) => {
@@ -52,6 +66,7 @@ export class EightAccountPlan {
     return { status: "idle", runId: "", startedAt: 0, updatedAt: this.now(),
       phaseStartedAt: 0, legIndex: -1, phase: "idle", mode: "daily", resumePhase: "",
       buyerStarted: false, sellerReleased: false, sellerCleaned: false, mainBuySeen: false,
+      sellerCleanupDueAt: 0, equipmentHolderLabel: "hao",
       route: [], items: [...EQUIPMENT_ITEMS],
       resourceItems: [...RESOURCE_ITEMS], price: 920, returnMap: "圣兽云殿",
       dungeonItems: ["绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"],
@@ -89,12 +104,22 @@ export class EightAccountPlan {
       throw new Error("报告邮箱格式无效");
     }
     const now = this.now();
+    const skippedCompleted = route.slice(1, -1).filter((entry) => completedToday(entry, now));
+    const activeRoute = [route[0],
+      ...route.slice(1, -1).filter((entry) => !completedToday(entry, now)), route.at(-1)];
     this.state = { ...this.#idleState(), status: "running", runId: crypto.randomUUID(),
       startedAt: now, updatedAt: now, phaseStartedAt: now, legIndex: 0,
-      phase: "starting_leg", route: route.map((entry) => ({ ...entry })), items: [...items],
+      phase: "starting_leg", route: activeRoute.map((entry) => ({ ...entry })), items: [...items],
       resourceItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
       dungeonItems: [...new Set(dungeonItems.map((item) => String(item).trim()).filter(Boolean))],
       price, returnMap: returnMap.trim(), reportEmail: reportEmail.trim() };
+    this.state.history.push(...skippedCompleted.map((entry) => ({ account: entry.accountLabel,
+      completedAt: now, result: "skipped_completed", message: "今日副本已完成" })));
+    if (this.state.route.length === 2) {
+      if (completedToday(this.state.route[0], now)) this.#startMainBuy(this.state.route[0]);
+      else this.#startStandaloneMain(this.state.route[0]);
+      return this.snapshot();
+    }
     this.#startCurrentLeg();
     return this.snapshot();
   }
@@ -158,6 +183,11 @@ export class EightAccountPlan {
   }
 
   tick() {
+    if (this.state.status === "running" && this.state.mode === "daily"
+        && this.state.sellerCleanupDueAt > 0
+        && this.now() >= this.state.sellerCleanupDueAt) {
+      this.#releaseScheduledSeller();
+    }
     if (this.state.status === "intervention" && this.now() >= this.state.interventionDeadlineAt) {
       Object.assign(this.state, { status: "error", phase: "error",
         error: `${this.state.error}；60秒人工介入时间已结束`, updatedAt: this.now() });
@@ -176,7 +206,7 @@ export class EightAccountPlan {
     const leg = this.#currentLeg();
     if (leg && (leg.seller.deviceId === deviceId || leg.buyer.deviceId === deviceId)) {
       const account = leg.seller.deviceId === deviceId ? leg.seller : leg.buyer;
-      return this.#intervene(`设备 ${deviceId} 已离线`, account.accountLabel);
+      return this.#handleAccountFailure(account, `设备 ${deviceId} 已离线`);
     }
     return this.snapshot();
   }
@@ -190,18 +220,31 @@ export class EightAccountPlan {
     if (!leg) return this.#intervene("计划交接序号无效", "系统");
     const seller = this.#automationFor(leg.seller, deviceId, telemetry);
     const buyer = this.#automationFor(leg.buyer, deviceId, telemetry);
+    if (this.state.phase === "standalone_main_running" && buyer) {
+      if (buyer.status === "error") {
+        return this.#handleAccountFailure(leg.buyer,
+          `hao 副本执行失败：${buyer.lastMessage || "未知错误"}`);
+      }
+      if (this.#standaloneMainComplete(buyer)) {
+        this.#captureInventory(leg.buyer, buyer);
+        this.#startMainBuy(leg.buyer);
+      }
+      return this.snapshot();
+    }
     if (["seller_running", "buyer_running"].includes(this.state.phase)) {
+      if (buyer) this.#scheduleSellerAfterTransfer(leg, buyer);
       if (seller?.task === "equipment_sell" && seller.status === "error") {
-        return this.#intervene(`${leg.seller.accountLabel} 上架失败：${seller.lastMessage || "未知错误"}`,
-          leg.seller.accountLabel);
+        return this.#handleAccountFailure(leg.seller,
+          `${leg.seller.accountLabel} 上架失败：${seller.lastMessage || "未知错误"}`);
       }
       if (buyer?.status === "error") {
-        return this.#intervene(`${leg.buyer.accountLabel} 执行失败：${buyer.lastMessage || "未知错误"}`,
-          leg.buyer.accountLabel);
+        return this.#handleAccountFailure(leg.buyer,
+          `${leg.buyer.accountLabel} 执行失败：${buyer.lastMessage || "未知错误"}`);
       }
       if (this.state.sellerReleased && seller?.status === "error") {
-        return this.#intervene(`${leg.seller.accountLabel} 重新穿戴或返回挂机失败：${seller.lastMessage || "未知错误"}`,
-          leg.seller.accountLabel);
+        return this.#handleAccountFailure(leg.seller,
+          `${leg.seller.accountLabel} 重新穿戴或返回挂机失败：${seller.lastMessage || "未知错误"}`,
+          { sellerCleanup: true });
       }
       if (this.state.sellerReleased && seller?.task === "temple" && seller.status === "ok"
           && Number(seller.updatedAt) >= this.state.phaseStartedAt) {
@@ -215,7 +258,6 @@ export class EightAccountPlan {
         this.#command(leg.buyer, "switch_account", { accountIndex: leg.buyer.accountIndex });
         this.#command(leg.buyer, "run_equipment_buy", { accountIndex: leg.buyer.accountIndex });
       }
-      if (buyer) this.#releaseCrossDeviceSellerAfterTransfer(leg, buyer);
       if (buyer && this.state.sellerCleaned && this.#buyerWorkflowComplete(buyer)) {
         this.#captureInventory(leg.buyer, buyer);
         if (leg.buyer.accountLabel === "hao") this.#startMainBuy(leg.buyer);
@@ -289,14 +331,68 @@ export class EightAccountPlan {
       && automation.task === "temple" && automation.status === "ok";
   }
 
-  #releaseCrossDeviceSellerAfterTransfer(leg, buyerAutomation) {
-    if (this.state.sellerReleased) return;
-    if (Number(buyerAutomation.equipmentTransferLastRunAt) < this.state.phaseStartedAt) return;
+  #standaloneMainComplete(automation) {
+    const afterStart = (value) => Number(value) >= this.state.phaseStartedAt;
+    return afterStart(automation.dungeonLastRunAt)
+      && afterStart(automation.inventoryLastRunAt)
+      && automation.inventoryStatus === "ok"
+      && automation.task === "temple" && automation.status === "ok";
+  }
+
+  #scheduleSellerAfterTransfer(leg, buyerAutomation) {
+    if (this.state.sellerReleased || this.state.sellerCleanupDueAt > 0) return;
+    const transferredAt = Number(buyerAutomation.equipmentTransferLastRunAt);
+    if (!Number.isFinite(transferredAt) || transferredAt < this.state.phaseStartedAt) return;
+    this.state.equipmentHolderLabel = leg.buyer.accountLabel;
+    this.state.sellerCleanupDueAt = this.now() + SELLER_CLEANUP_DELAY_MS;
+    this.state.updatedAt = this.now();
+  }
+
+  #releaseScheduledSeller() {
+    const leg = this.#currentLeg();
+    if (!leg || this.state.sellerReleased || this.state.sellerCleanupDueAt <= 0) return;
     this.state.sellerReleased = true;
+    this.state.sellerCleanupDueAt = 0;
+    this.state.updatedAt = this.now();
     this.#command(leg.seller, "cancel_automation", { accountIndex: leg.seller.accountIndex });
     this.#command(leg.seller, "configure_return_hang", {
       accountIndex: leg.seller.accountIndex, map: this.state.returnMap });
     this.#command(leg.seller, "run_seller_cleanup", { accountIndex: leg.seller.accountIndex });
+  }
+
+  #handleAccountFailure(account, message, { sellerCleanup = false } = {}) {
+    if (account.accountLabel === this.state.equipmentHolderLabel) {
+      return this.#intervene(`${message}；情改套装当前在该账号，请人工处理`,
+        account.accountLabel);
+    }
+    this.state.history.push({ account: account.accountLabel, completedAt: this.now(),
+      result: "skipped_error", message });
+    if (sellerCleanup) {
+      this.state.sellerCleaned = true;
+      this.state.updatedAt = this.now();
+      return this.snapshot();
+    }
+    const leg = this.#currentLeg();
+    if (leg && account.accountLabel === leg.buyer.accountLabel) {
+      // The seller may still be polling its current listing batch. Stop that run before
+      // reconfiguring it for the next buyer, otherwise Android correctly refuses to
+      // start a second equipment_sell task while the first one is busy.
+      this.#command(leg.seller, "cancel_automation", {
+        accountIndex: leg.seller.accountIndex });
+      this.state.route.splice(this.state.legIndex + 1, 1);
+      this.state.buyerStarted = false;
+      this.state.sellerReleased = false;
+      this.state.sellerCleaned = false;
+      this.state.sellerCleanupDueAt = 0;
+      this.state.mainBuySeen = false;
+      if (this.state.route.length <= this.state.legIndex + 1) {
+        return this.#intervene("跳过异常账号后已无下一账号", account.accountLabel);
+      }
+      this.state.phase = "starting_leg";
+      this.#startCurrentLeg();
+      return this.snapshot();
+    }
+    return this.#intervene(message, account.accountLabel);
   }
 
   #captureInventory(account, automation) {
@@ -327,6 +423,19 @@ export class EightAccountPlan {
     this.#command(account, "run_auction_buy", { accountIndex: account.accountIndex });
   }
 
+  #startStandaloneMain(account) {
+    Object.assign(this.state, { phase: "standalone_main_running", phaseStartedAt: this.now(),
+      updatedAt: this.now(), equipmentHolderLabel: account.accountLabel });
+    this.#command(account, "configure_inventory_monitor", {
+      accountIndex: account.accountIndex, items: [...this.state.resourceItems] });
+    this.#command(account, "configure_dungeon_sequence", {
+      accountIndex: account.accountIndex, items: [...this.state.dungeonItems] });
+    this.#command(account, "configure_return_hang", {
+      accountIndex: account.accountIndex, map: this.state.returnMap });
+    this.#command(account, "switch_account", { accountIndex: account.accountIndex });
+    this.#command(account, "run_dungeon_sequence", { accountIndex: account.accountIndex });
+  }
+
   #configureResourcesAndReturn(account) {
     this.#command(account, "configure_auto_auction", { accountIndex: account.accountIndex,
       enabled: false, items: [...this.state.resourceItems], buyer: "hao",
@@ -348,6 +457,7 @@ export class EightAccountPlan {
     this.state.buyerStarted = false;
     this.state.sellerReleased = false;
     this.state.sellerCleaned = false;
+    this.state.sellerCleanupDueAt = 0;
     this.state.mainBuySeen = false;
     this.state.phase = "starting_leg";
     this.#startCurrentLeg();
@@ -368,7 +478,9 @@ export class EightAccountPlan {
     const leg = this.#currentLeg();
     if (!leg) return this.#intervene("计划交接序号无效", "系统");
     this.state.sellerReleased = false;
+    this.state.sellerCleanupDueAt = 0;
     this.state.phaseStartedAt = this.now();
+    this.state.equipmentHolderLabel = leg.seller.accountLabel;
     const common = { items: [...this.state.items], price: this.state.price };
     this.#command(leg.seller, "configure_equipment_transfer", {
       accountIndex: leg.seller.accountIndex, ...common, buyer: leg.buyer.accountLabel });
