@@ -47,6 +47,19 @@ android {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
+        macParallel {
+            // Stable Mac development line. It can coexist with the Windows-signed
+            // v1.9+ release and keeps its own WebView cookies/account sessions.
+            applicationIdSuffix '.macparallel'
+            versionNameSuffix '-mac'
+            resValue 'string', 'app_name', 'Play Keeper Mac 平行版'
+            if (signingConfigs.preservedDebug.storeFile != null) {
+                signingConfig signingConfigs.preservedDebug
+            }
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            matchingFallbacks = ['release']
+        }
     }
 
     compileOptions {

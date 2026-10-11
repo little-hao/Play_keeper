@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $fallbackJdk = Join-Path $env:TEMP 'playkeeper-microsoft-jdk17\jdk-17.0.20.1+1'
 $fallbackSdk = Join-Path $env:TEMP 'playkeeper-android-sdk'
+$expectedSigningHash = 'BC351381BA0CF1846CAD1408373A7B55F6F757F400D941BA3F9EDACB14799C9F'
 
 if (-not $env:JAVA_HOME -and (Test-Path -LiteralPath $fallbackJdk)) {
     $env:JAVA_HOME = $fallbackJdk
@@ -23,6 +24,20 @@ if (-not (Test-Path -LiteralPath (Join-Path $env:JAVA_HOME 'bin\java.exe'))) {
 }
 if (-not (Test-Path -LiteralPath $env:ANDROID_HOME)) {
     throw 'Android SDK not found. Set ANDROID_HOME.'
+}
+
+$repositoryKey = Join-Path $projectRoot 'signing\debug.keystore'
+$userKey = Join-Path $env:USERPROFILE '.android\debug.keystore'
+$signingKey = if (Test-Path -LiteralPath $repositoryKey) {
+    $repositoryKey
+} elseif (Test-Path -LiteralPath $userKey) {
+    $userKey
+} else {
+    throw 'The preserved v1.9+ signing key was not found.'
+}
+$actualSigningHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $signingKey).Hash
+if ($actualSigningHash -ne $expectedSigningHash) {
+    throw "Signing key mismatch. Refusing to build an APK that cannot upgrade v1.10.3. Key: $signingKey"
 }
 
 $env:Path = "$(Join-Path $env:JAVA_HOME 'bin');$env:Path"
