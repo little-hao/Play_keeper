@@ -49,6 +49,7 @@ small { color: var(--muted); }
 .global-control-row label { margin: 0; }
 .global-control-row select, .plan-settings input, .plan-settings select { display: block; width: 100%; margin-top: 4px; padding: 10px; color: #f3f6fa; background: #090c12; border: 1px solid #343b48; border-radius: 9px; }
 .daily-plan-panel h2 { margin: 3px 0 0; }
+.plan-subtitle { margin: 14px 0 6px; color: #eef3f9; font-size: 14px; }
 .daily-plan-panel .section-title > div { min-width: 0; }
 .daily-plan-panel .automation-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .plan-progress { height: 8px; overflow: hidden; background: #090c12; border: 1px solid var(--line); border-radius: 999px; }
@@ -62,6 +63,14 @@ small { color: var(--muted); }
 .quick-account-actions button { width: 100%; }
 .daily-plan-panel .automation-actions small { align-self: center; }
 .plan-intervention { margin-top: 10px; padding: 10px; color: #ffe1aa; background: #422d0c; border: 1px solid #9d7027; border-radius: 9px; font-size: 13px; }
+.resume-confirmation { display: grid; grid-template-columns: minmax(180px, 280px) 1fr; align-items: end; gap: 10px; margin-top: 12px; padding: 12px; background: #172033; border: 1px solid #3b5c8c; border-radius: 10px; }
+.resume-confirmation label { margin: 0; }
+.resume-confirmation select { display: block; width: 100%; margin-top: 4px; padding: 10px; color: #fff; background: #090c12; border: 1px solid #486b9d; border-radius: 9px; }
+.resume-confirmation small { padding-bottom: 9px; line-height: 1.5; }
+.plan-quick-tools { margin: 12px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; }
+.plan-quick-tools > summary { cursor: pointer; font-weight: 700; }
+.plan-quick-tools[open] > summary { margin-bottom: 10px; }
+.plan-quick-tools .quick-account-actions { margin: 0; }
 .device-card { padding: 16px; }
 .device-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .device-heading > div { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 0 8px; }
@@ -152,6 +161,8 @@ small { color: var(--muted); }
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .account-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .global-control-row, .plan-settings, .quick-account-actions { grid-template-columns: 1fr; }
+  .resume-confirmation { grid-template-columns: 1fr; align-items: stretch; }
+  .resume-confirmation small { padding-bottom: 0; }
   .plan-settings .span-2 { grid-column: span 1; }
   .button-grid { grid-template-columns: repeat(3, 1fr); }
   .daily-monitor-row { grid-template-columns: 1fr 1.4fr; }

@@ -132,7 +132,7 @@ test("waits indefinitely for manual intervention when the equipment is on the ab
   clock += 24 * 60 * 60 * 1_000;
   plan.tick();
   assert.equal(plan.snapshot().status, "intervention");
-  assert.match(plan.snapshot().error, /情改套装当前在该账号/);
+  assert.match(plan.snapshot().error, /厄菲斯神套装可能在该账号/);
 });
 
 test("restores an interrupted run and resumes from the account holding the equipment", () => {
@@ -152,14 +152,22 @@ test("restores an interrupted run and resumes from the account holding the equip
   restored.restore(first.snapshot());
   assert.equal(restored.snapshot().status, "intervention");
   assert.equal(restored.snapshot().equipmentHolderLabel, "hao1");
-  restored.resume(route());
+  restored.resume(route(), "hao1");
   assert.equal(restored.snapshot().status, "running");
-  assert.equal(restored.snapshot().phase, "buyer_running");
+  assert.equal(restored.snapshot().phase, "seller_running");
+  assert.equal(restored.snapshot().route[0].accountLabel, "hao1");
   assert.equal(actions.at(-2).command, "switch_account");
   assert.equal(actions.at(-2).accountLabel, "hao1");
-  assert.equal(actions.at(-1).command, "run_equipment_buy");
+  assert.equal(actions.at(-1).command, "run_equipment_sell");
   assert.equal(actions.at(-1).accountLabel, "hao1");
-  assert.equal(actions.some((action) => action.command === "run_equipment_sell"), false);
+  assert.equal(restored.snapshot().equipmentHolderLabel, "hao1");
+});
+
+test("requires manual confirmation of the equipment holder before resuming", () => {
+  const plan = new EightAccountPlan({ now: () => 10_000 });
+  plan.start(route());
+  plan.cancel("人工中断");
+  assert.throws(() => plan.resume(route()), /人工确认厄菲斯神套装所在账号/);
 });
 
 test("restores a running saved state as an indefinite intervention", () => {
@@ -259,7 +267,9 @@ test("auctions resources from all small accounts, buys on hao, then hangs all ac
   const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action),
     now: () => ++clock });
   const sweepRoute = route().slice(1);
-  plan.startResourceSweep(sweepRoute);
+  plan.startResourceSweep(sweepRoute, { resourceReserveCount: 0 });
+  assert.equal(actions.find((action) => action.command === "configure_auto_auction")
+    .parameters.reserveCount, 0);
   for (const account of sweepRoute.slice(0, 7)) {
     assert.equal(actions.at(-1).command, "run_auto_auction");
     plan.onTelemetry(account.deviceId, telemetry(account.accountIndex, {

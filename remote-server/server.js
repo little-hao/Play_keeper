@@ -73,6 +73,8 @@ const commandValidators = {
       && /^[A-Za-z0-9_.-]{1,30}$/.test(parameters.buyer)
       && (parameters.price === undefined || (Number.isInteger(parameters.price)
         && parameters.price >= 1 && parameters.price <= 9_999_999))
+      && (parameters.reserveCount === undefined
+        || (Number.isInteger(parameters.reserveCount) && [0, 1].includes(parameters.reserveCount)))
       && Number.isInteger(parameters.intervalHours)
       && parameters.intervalHours >= 1
       && parameters.intervalHours <= 168;
@@ -222,7 +224,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.10.5" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "1.10.6" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -255,9 +257,19 @@ async function serveHttp(request, response) {
 function normalizePlanOptions(value) {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const resourceItems = Array.isArray(source.resourceItems) ? source.resourceItems : undefined;
+  const inventoryItems = Array.isArray(source.inventoryItems)
+    ? source.inventoryItems : (resourceItems ?? undefined);
+  const resourceReserveCount = source.resourceReserveCount === undefined
+    ? 1 : Number(source.resourceReserveCount);
   const dungeonItems = Array.isArray(source.dungeonItems) ? source.dungeonItems : [...DEFAULT_DUNGEONS];
   if (resourceItems !== undefined && !validItemList(resourceItems, 10)) {
     throw new Error("道具组合无效");
+  }
+  if (inventoryItems !== undefined && !validItemList(inventoryItems, 20)) {
+    throw new Error("统一背包检查项目无效");
+  }
+  if (!Number.isInteger(resourceReserveCount) || ![0, 1].includes(resourceReserveCount)) {
+    throw new Error("道具保留数量只能是0或1");
   }
   if (!validItemList(dungeonItems, 20)) throw new Error("副本组合无效");
   const returnMap = typeof source.returnMap === "string" ? source.returnMap.trim() : "圣兽云殿";
@@ -265,7 +277,8 @@ function normalizePlanOptions(value) {
   const reportEmail = typeof source.reportEmail === "string"
     ? source.reportEmail.trim() : "konghao0920@gmail.com";
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) throw new Error("报告邮箱格式无效");
-  return { resourceItems, dungeonItems, returnMap, reportEmail };
+  return { resourceItems, resourceReserveCount, inventoryItems,
+    dungeonItems, returnMap, reportEmail };
 }
 
 function defaultPlanSchedule() {
@@ -439,6 +452,8 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
     const route = resolveEightAccountRoute(summaries);
     return eightAccountPlan.start(route, {
       resourceItems: Array.isArray(options.resourceItems) ? options.resourceItems : undefined,
+      resourceReserveCount: options.resourceReserveCount,
+      inventoryItems: Array.isArray(options.inventoryItems) ? options.inventoryItems : undefined,
       dungeonItems: Array.isArray(options.dungeonItems) ? options.dungeonItems : undefined,
       returnMap: typeof options.returnMap === "string" ? options.returnMap : undefined,
       reportEmail: typeof options.reportEmail === "string" ? options.reportEmail : undefined
@@ -450,6 +465,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
     const route = resolveResourceSweepRoute(summaries);
     return eightAccountPlan.startResourceSweep(route, {
       resourceItems: Array.isArray(options.resourceItems) ? options.resourceItems : undefined,
+      resourceReserveCount: options.resourceReserveCount,
       returnMap: typeof options.returnMap === "string" ? options.returnMap : undefined
     });
   }
@@ -622,7 +638,9 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         try {
           const summaries = [...devices.values()].map(deviceSummary);
           const route = resolveEightAccountRoute(summaries);
-          const payload = eightAccountPlan.resume(route);
+          const holder = typeof message.equipmentHolder === "string"
+            ? message.equipmentHolder.trim() : "";
+          const payload = eightAccountPlan.resume(route, holder);
           publishPlan(payload);
         } catch (error) {
           sendJson(socket, { type: "plan.error", message: String(error?.message || error) });

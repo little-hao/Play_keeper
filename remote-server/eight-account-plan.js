@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 
 export const EQUIPMENT_ITEMS = Object.freeze([
-  "柔情方巾·改", "轻罗流萤衫·改", "逢羡履·改", "君我剑·改", "佳人之恋·改",
-  "三生戒·改", "比翼·改", "相望镯·改", "尾生之泪·改", "龙神印记·庆"
+  "厄菲斯神剑", "厄菲斯神铠", "厄菲斯神冠", "厄菲斯神靴", "厄菲斯神链",
+  "厄菲斯神戒", "厄菲斯神翼", "厄菲斯神镯", "厄菲斯神玉", "厄菲斯神印"
 ]);
 
 export const RESOURCE_ITEMS = Object.freeze([
@@ -67,7 +67,8 @@ export class EightAccountPlan {
       buyerStarted: false, sellerReleased: false, sellerCleaned: false, mainBuySeen: false,
       sellerCleanupDueAt: 0, equipmentHolderLabel: "hao",
       route: [], items: [...EQUIPMENT_ITEMS],
-      resourceItems: [...RESOURCE_ITEMS], price: 920, returnMap: "圣兽云殿",
+      resourceItems: [...RESOURCE_ITEMS], inventoryItems: [...RESOURCE_ITEMS],
+      resourceReserveCount: 1, price: 920, returnMap: "圣兽云殿",
       dungeonItems: ["绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"],
       reportEmail: "konghao0920@gmail.com", error: "", errorAccount: "",
       interventionDeadlineAt: 0, emailStatus: "pending", inventoryByAccount: {}, history: [] };
@@ -82,9 +83,14 @@ export class EightAccountPlan {
     const route = Array.isArray(savedState.route) ? savedState.route : [];
     this.state = { ...this.#idleState(), ...savedState,
       route: route.map((entry) => ({ ...entry })),
-      items: Array.isArray(savedState.items) ? [...savedState.items] : [...EQUIPMENT_ITEMS],
+      // A persisted v1.10.5 interruption may still contain the retired 情改 set.  Resuming an
+      // interrupted run after upgrading must always use the current, fixed ten-piece set.
+      items: [...EQUIPMENT_ITEMS],
       resourceItems: Array.isArray(savedState.resourceItems)
         ? [...savedState.resourceItems] : [...RESOURCE_ITEMS],
+      inventoryItems: Array.isArray(savedState.inventoryItems)
+        ? [...savedState.inventoryItems] : (Array.isArray(savedState.resourceItems)
+          ? [...savedState.resourceItems] : [...RESOURCE_ITEMS]),
       dungeonItems: Array.isArray(savedState.dungeonItems)
         ? [...savedState.dungeonItems] : [...this.#idleState().dungeonItems],
       history: Array.isArray(savedState.history) ? [...savedState.history] : [],
@@ -94,7 +100,7 @@ export class EightAccountPlan {
     if (this.state.status === "running") {
       this.state.resumePhase = this.state.phase;
       this.state.status = "intervention";
-      this.state.error = `服务恢复后已暂停；情改套装当前在${this.state.equipmentHolderLabel || "未知账号"}`;
+      this.state.error = `服务恢复后已暂停；请人工确认厄菲斯神套装所在账号`;
       this.state.errorAccount = this.state.equipmentHolderLabel || "当前账号";
     }
     if (this.state.status === "intervention") this.state.interventionDeadlineAt = 0;
@@ -108,6 +114,8 @@ export class EightAccountPlan {
     const price = options.price ?? 920;
     const items = options.items ?? EQUIPMENT_ITEMS;
     const resourceItems = options.resourceItems ?? RESOURCE_ITEMS;
+    const inventoryItems = options.inventoryItems ?? resourceItems;
+    const resourceReserveCount = options.resourceReserveCount ?? 1;
     const dungeonItems = options.dungeonItems
       ?? ["绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"];
     const returnMap = options.returnMap ?? "圣兽云殿";
@@ -115,11 +123,15 @@ export class EightAccountPlan {
     if (!Number.isInteger(price) || price < 1 || price > 9_999_999) throw new Error("交易单价无效");
     if (!Array.isArray(items) || items.length !== 10 || new Set(items).size !== 10
         || EQUIPMENT_ITEMS.some((item) => !items.includes(item))) {
-      throw new Error("装备清单必须是指定的十件情改装备");
+      throw new Error("装备清单必须是指定的十件厄菲斯神套装");
     }
     if (!Array.isArray(resourceItems) || resourceItems.length < 1 || resourceItems.length > 10) {
       throw new Error("道具组合需包含1–10项");
     }
+    if (!Array.isArray(inventoryItems) || inventoryItems.length < 1 || inventoryItems.length > 20) {
+      throw new Error("统一背包检查项目需包含1–20项");
+    }
+    if (![0, 1].includes(resourceReserveCount)) throw new Error("道具保留数量只能是0或1");
     if (!Array.isArray(dungeonItems) || dungeonItems.length < 1 || dungeonItems.length > 20) {
       throw new Error("副本组合需包含1–20项");
     }
@@ -137,6 +149,8 @@ export class EightAccountPlan {
       startedAt: now, updatedAt: now, phaseStartedAt: now, legIndex: 0,
       phase: "starting_leg", route: activeRoute.map((entry) => ({ ...entry })), items: [...items],
       resourceItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
+      inventoryItems: [...new Set(inventoryItems.map((item) => String(item).trim()).filter(Boolean))],
+      resourceReserveCount,
       dungeonItems: [...new Set(dungeonItems.map((item) => String(item).trim()).filter(Boolean))],
       price, returnMap: returnMap.trim(), reportEmail: reportEmail.trim() };
     this.state.history.push(...skippedCompleted.map((entry) => ({ account: entry.accountLabel,
@@ -158,10 +172,12 @@ export class EightAccountPlan {
       throw new Error("资源归集需要 hao1–hao7 与 hao 全部在线");
     }
     const resourceItems = options.resourceItems ?? RESOURCE_ITEMS;
+    const resourceReserveCount = options.resourceReserveCount ?? 1;
     const returnMap = String(options.returnMap ?? "圣兽云殿").trim();
     if (!Array.isArray(resourceItems) || resourceItems.length < 1 || resourceItems.length > 10) {
       throw new Error("道具组合需包含1–10项");
     }
+    if (![0, 1].includes(resourceReserveCount)) throw new Error("道具保留数量只能是0或1");
     if (!returnMap || returnMap.length > 30) throw new Error("返回挂机副本无效");
     const now = this.now();
     this.state = { ...this.#idleState(), status: "running", mode: "resource_sweep",
@@ -169,7 +185,8 @@ export class EightAccountPlan {
       legIndex: 0, phase: "resource_auction_running",
       route: route.map((entry) => ({ ...entry })),
       resourceItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
-      price: 920, returnMap };
+      inventoryItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
+      resourceReserveCount, price: 920, returnMap };
     this.#startResourceAuction(this.state.route[0]);
     return this.snapshot();
   }
@@ -211,11 +228,27 @@ export class EightAccountPlan {
     return this.snapshot();
   }
 
-  resume(liveRoute) {
+  resume(liveRoute, confirmedHolderLabel = "") {
     if (!["intervention", "error", "cancelled"].includes(this.state.status)) {
       throw new Error("当前计划不需要恢复");
     }
     this.#refreshRouteBindings(liveRoute);
+    if (this.state.mode === "daily") {
+      if (!confirmedHolderLabel) throw new Error("请先人工确认厄菲斯神套装所在账号");
+      const holderIndex = liveRoute.findIndex((entry, index) =>
+        index < liveRoute.length - 1 && entry.accountLabel === confirmedHolderLabel);
+      if (holderIndex < 0) throw new Error(`确认的套装账号 ${confirmedHolderLabel} 不在当前路线中`);
+      this.state.route = liveRoute.slice(holderIndex).map((entry) => ({ ...entry }));
+      this.state.legIndex = 0;
+      this.state.equipmentHolderLabel = confirmedHolderLabel;
+      this.state.phase = "seller_running";
+      this.state.resumePhase = "seller_running";
+      this.state.buyerStarted = false;
+      this.state.sellerReleased = false;
+      this.state.sellerCleaned = false;
+      this.state.sellerCleanupDueAt = 0;
+      this.state.mainBuySeen = false;
+    }
     if (this.state.status !== "intervention") {
       const phase = this.state.resumePhase;
       if (!phase || ["idle", "complete", "cancelled", "error"].includes(phase)) {
@@ -405,7 +438,7 @@ export class EightAccountPlan {
 
   #handleAccountFailure(account, message, { sellerCleanup = false } = {}) {
     if (account.accountLabel === this.state.equipmentHolderLabel) {
-      return this.#intervene(`${message}；情改套装当前在该账号，请人工处理`,
+      return this.#intervene(`${message}；厄菲斯神套装可能在该账号，请人工确认`,
         account.accountLabel);
     }
     this.state.history.push({ account: account.accountLabel, completedAt: this.now(),
@@ -475,7 +508,7 @@ export class EightAccountPlan {
     const source = automation.inventoryCounts && typeof automation.inventoryCounts === "object"
       ? automation.inventoryCounts : {};
     const counts = {};
-    for (const item of this.state.resourceItems) counts[item] = Number(source[item]) || 0;
+    for (const item of this.state.inventoryItems) counts[item] = Number(source[item]) || 0;
     this.state.inventoryByAccount[account.accountLabel] = counts;
   }
 
@@ -503,7 +536,7 @@ export class EightAccountPlan {
     Object.assign(this.state, { phase: "standalone_main_running", phaseStartedAt: this.now(),
       updatedAt: this.now(), equipmentHolderLabel: account.accountLabel });
     this.#command(account, "configure_inventory_monitor", {
-      accountIndex: account.accountIndex, items: [...this.state.resourceItems] });
+      accountIndex: account.accountIndex, items: [...this.state.inventoryItems] });
     this.#command(account, "configure_dungeon_sequence", {
       accountIndex: account.accountIndex, items: [...this.state.dungeonItems] });
     this.#command(account, "configure_return_hang", {
@@ -515,7 +548,8 @@ export class EightAccountPlan {
   #configureResourcesAndReturn(account) {
     this.#command(account, "configure_auto_auction", { accountIndex: account.accountIndex,
       enabled: false, items: [...this.state.resourceItems], buyer: "hao",
-      price: this.state.price, intervalHours: 24 });
+      price: this.state.price, reserveCount: this.state.resourceReserveCount,
+      intervalHours: 24 });
     this.#command(account, "configure_return_hang", {
       accountIndex: account.accountIndex, map: this.state.returnMap });
   }
@@ -563,7 +597,7 @@ export class EightAccountPlan {
     this.#command(leg.buyer, "configure_equipment_transfer", {
       accountIndex: leg.buyer.accountIndex, ...common, buyer: "" });
     this.#command(leg.buyer, "configure_inventory_monitor", {
-      accountIndex: leg.buyer.accountIndex, items: [...this.state.resourceItems] });
+      accountIndex: leg.buyer.accountIndex, items: [...this.state.inventoryItems] });
     this.#command(leg.buyer, "configure_dungeon_sequence", {
       accountIndex: leg.buyer.accountIndex, items: [...this.state.dungeonItems] });
     this.#command(leg.buyer, "configure_return_hang", {

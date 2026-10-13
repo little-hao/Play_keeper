@@ -24,9 +24,14 @@ const elements = {
   retryDailyPlan: document.querySelector("#retryDailyPlan"),
   cancelDailyPlan: document.querySelector("#cancelDailyPlan"),
   planIntervention: document.querySelector("#planIntervention"),
+  resumeConfirmation: document.querySelector("#resumeConfirmation"),
+  resumeEquipmentHolder: document.querySelector("#resumeEquipmentHolder"),
   planResourcePreset: document.querySelector("#planResourcePreset"),
   planResourceItems: document.querySelector("#planResourceItems"),
+  planResourceReserve: document.querySelector("#planResourceReserve"),
+  planDungeonPreset: document.querySelector("#planDungeonPreset"),
   planDungeonItems: document.querySelector("#planDungeonItems"),
+  planInventoryItems: document.querySelector("#planInventoryItems"),
   planReturnMap: document.querySelector("#planReturnMap"),
   planReportEmail: document.querySelector("#planReportEmail"),
   planScheduleEnabled: document.querySelector("#planScheduleEnabled"),
@@ -60,8 +65,9 @@ const auctionPresets = {
   one: "曙光印记,进化宝石,强化丹A,强化丹B,天仙玉露",
   two: "黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石"
 };
-const defaultEquipmentItems = "柔情方巾·改,轻罗流萤衫·改,逢羡履·改,君我剑·改,佳人之恋·改,"
-  + "三生戒·改,比翼·改,相望镯·改,尾生之泪·改,龙神印记·庆";
+const defaultDungeonItems = "绘画小屋,伊苏王的神墓,火龙王的宫殿,史芬克斯密穴";
+const defaultEquipmentItems = "厄菲斯神剑,厄菲斯神铠,厄菲斯神冠,厄菲斯神靴,厄菲斯神链,"
+  + "厄菲斯神戒,厄菲斯神翼,厄菲斯神镯,厄菲斯神玉,厄菲斯神印";
 let socket;
 let manuallyClosed = false;
 let reconnectTimer;
@@ -89,7 +95,15 @@ elements.startDailyPlan.addEventListener("click", () => {
 });
 elements.retryDailyPlan.addEventListener("click", () => {
   if (socket?.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ type: "plan.retry", plan: "eight_account_daily" }));
+    if (dailyPlan.mode !== "daily") {
+      socket.send(JSON.stringify({ type: "plan.retry", plan: "eight_account_daily" }));
+      return;
+    }
+    const equipmentHolder = elements.resumeEquipmentHolder.value;
+    if (!equipmentHolder) return addLog("请先确认厄菲斯神套装所在账号");
+    if (!window.confirm(`已人工确认厄菲斯神十件套当前在 ${equipmentHolder}？继续后将由该账号作为卖方重新运行本段。`)) return;
+    socket.send(JSON.stringify({ type: "plan.retry", plan: "eight_account_daily",
+      equipmentHolder }));
   }
 });
 elements.cancelDailyPlan.addEventListener("click", () => {
@@ -115,11 +129,30 @@ elements.planResourceItems.addEventListener("input", () => {
   elements.planResourcePreset.value = Object.entries(auctionPresets)
     .find(([, value]) => value === elements.planResourceItems.value.trim())?.[0] ?? "custom";
 });
+elements.planDungeonPreset.addEventListener("change", () => {
+  if (elements.planDungeonPreset.value === "default") {
+    elements.planDungeonItems.value = defaultDungeonItems;
+  }
+});
+elements.planDungeonItems.addEventListener("input", () => {
+  elements.planDungeonPreset.value = elements.planDungeonItems.value.trim() === defaultDungeonItems
+    ? "default" : "custom";
+});
 elements.startKeepPlayer.addEventListener("click", () => runKeepPlayerCommand("keep_player_start"));
 elements.exitKeepPlayer.addEventListener("click", () => runKeepPlayerCommand("keep_player_exit"));
 elements.refreshAllInventory.addEventListener("click", () => {
-  for (const deviceId of devices.keys()) sendCommand(deviceId, "request_status", {});
-  addLog("已刷新全部设备状态；可在账号行单独刷新背包数量");
+  const items = planInventoryItems();
+  if (!items) return;
+  let refreshed = 0;
+  for (const label of ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7"]) {
+    const target = accountTarget(label);
+    if (!target) continue;
+    sendCommand(target.deviceId, "configure_inventory_monitor", {
+      accountIndex: target.accountIndex, items });
+    sendCommand(target.deviceId, "run_inventory_snapshot", { accountIndex: target.accountIndex });
+    refreshed++;
+  }
+  addLog(`已按统一清单刷新 ${refreshed}/8 个在线账号背包`);
 });
 elements.quickAuctionToMain.addEventListener("click", () => {
   const target = accountTarget(elements.quickAuctionAccount.value);
@@ -128,7 +161,8 @@ elements.quickAuctionToMain.addEventListener("click", () => {
   if (!items) return;
   const returnMap = elements.planReturnMap.value.trim() || "圣兽云殿";
   sendCommand(target.deviceId, "configure_auto_auction", { accountIndex: target.accountIndex,
-    enabled: false, items, buyer: "hao", price: 920, intervalHours: 24 });
+    enabled: false, items, buyer: "hao", price: 920, intervalHours: 24,
+    reserveCount: Number(elements.planResourceReserve.value) });
   sendCommand(target.deviceId, "configure_return_hang", {
     accountIndex: target.accountIndex, map: returnMap });
   sendCommand(target.deviceId, "switch_account", { accountIndex: target.accountIndex });
@@ -143,7 +177,8 @@ elements.quickMainBuy.addEventListener("click", () => {
   if (!items) return;
   const returnMap = elements.planReturnMap.value.trim() || "圣兽云殿";
   sendCommand(target.deviceId, "configure_auto_auction", { accountIndex: target.accountIndex,
-    enabled: false, items, buyer: "hao", price: 920, intervalHours: 24 });
+    enabled: false, items, buyer: "hao", price: 920, intervalHours: 24,
+    reserveCount: Number(elements.planResourceReserve.value) });
   sendCommand(target.deviceId, "configure_return_hang", {
     accountIndex: target.accountIndex, map: returnMap });
   sendCommand(target.deviceId, "switch_account", { accountIndex: target.accountIndex });
@@ -156,7 +191,8 @@ elements.quickSweepAll.addEventListener("click", () => {
   const resourceItems = planResourceItems();
   if (!resourceItems) return;
   socket.send(JSON.stringify({ type: "plan.resource_sweep.start", options: {
-    resourceItems, returnMap: elements.planReturnMap.value.trim() || "圣兽云殿"
+    resourceItems, resourceReserveCount: Number(elements.planResourceReserve.value),
+    returnMap: elements.planReturnMap.value.trim() || "圣兽云殿"
   } }));
   addLog("已启动 hao1–hao7 逐号拍卖、hao统一购买及全部账号回挂机副本");
 });
@@ -329,7 +365,25 @@ function renderDailyPlan() {
   elements.dailyPlanProgress.style.width = `${Math.min(100, completed * 100 / total)}%`;
   elements.startDailyPlan.disabled = ["running", "intervention"].includes(dailyPlan.status);
   elements.retryDailyPlan.disabled = !["intervention", "error", "cancelled"].includes(dailyPlan.status);
-  elements.retryDailyPlan.textContent = `从 ${holder} 继续任务`;
+  const resumable = ["intervention", "error", "cancelled"].includes(dailyPlan.status);
+  const needsHolderConfirmation = resumable && dailyPlan.mode !== "resource_sweep";
+  elements.resumeConfirmation.classList.toggle("hidden", !needsHolderConfirmation);
+  if (needsHolderConfirmation) {
+    const selected = elements.resumeEquipmentHolder.value || holder;
+    elements.resumeEquipmentHolder.replaceChildren();
+    for (const label of ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7"]) {
+      const option = document.createElement("option");
+      option.value = label;
+      option.textContent = accountTarget(label) ? label : `${label}（离线）`;
+      option.disabled = !accountTarget(label);
+      elements.resumeEquipmentHolder.append(option);
+    }
+    if ([...elements.resumeEquipmentHolder.options].some((option) => option.value === selected && !option.disabled)) {
+      elements.resumeEquipmentHolder.value = selected;
+    }
+  }
+  elements.retryDailyPlan.textContent = needsHolderConfirmation
+    ? "确认套装账号并继续" : "重试当前步骤";
   elements.cancelDailyPlan.disabled = !["running", "intervention"].includes(dailyPlan.status);
   if (["intervention", "error", "cancelled"].includes(dailyPlan.status)) {
     elements.planIntervention.textContent = `报错账号：${dailyPlan.errorAccount || "当前账号"}；装备所在：${holder}；${dailyPlan.error || "任务已中断"}。现场会持续保留，人工处理后可从装备所在账号继续。`;
@@ -344,6 +398,9 @@ function readPlanOptions() {
     .map((item) => item.trim()).filter(Boolean);
   const dungeonItems = elements.planDungeonItems.value.split(/[,，\n]/)
     .map((item) => item.trim()).filter(Boolean);
+  const inventoryItems = planInventoryItems();
+  if (!inventoryItems) return null;
+  const resourceReserveCount = Number(elements.planResourceReserve.value);
   const reportEmail = elements.planReportEmail.value.trim();
   const returnMap = elements.planReturnMap.value.trim();
   if (!resourceItems.length || resourceItems.length > 10) {
@@ -356,7 +413,8 @@ function readPlanOptions() {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) {
     addLog("完成报告邮箱格式无效"); return null;
   }
-  return { resourceItems, dungeonItems, returnMap, reportEmail };
+  return { resourceItems, resourceReserveCount, dungeonItems, inventoryItems,
+    returnMap, reportEmail };
 }
 
 function renderPlanSchedule() {
@@ -364,7 +422,13 @@ function renderPlanSchedule() {
   elements.planScheduleTime.value = planSchedule.time || "04:00";
   const options = planSchedule.options ?? {};
   if (Array.isArray(options.resourceItems)) elements.planResourceItems.value = options.resourceItems.join(",");
+  if (Number.isInteger(options.resourceReserveCount)) {
+    elements.planResourceReserve.value = String(options.resourceReserveCount);
+  }
   if (Array.isArray(options.dungeonItems)) elements.planDungeonItems.value = options.dungeonItems.join(",");
+  elements.planDungeonPreset.value = elements.planDungeonItems.value.trim() === defaultDungeonItems
+    ? "default" : "custom";
+  if (Array.isArray(options.inventoryItems)) elements.planInventoryItems.value = options.inventoryItems.join(",");
   if (typeof options.returnMap === "string") elements.planReturnMap.value = options.returnMap;
   if (typeof options.reportEmail === "string") elements.planReportEmail.value = options.reportEmail;
   elements.planResourcePreset.value = Object.entries(auctionPresets)
@@ -449,6 +513,16 @@ function planResourceItems() {
     .map((item) => item.trim()).filter(Boolean);
   if (!items.length || items.length > 10) {
     addLog("道具组合需填写1–10项");
+    return null;
+  }
+  return items;
+}
+
+function planInventoryItems() {
+  const items = elements.planInventoryItems.value.split(/[,，\n]/)
+    .map((item) => item.trim()).filter(Boolean);
+  if (!items.length || items.length > 20 || items.some((item) => item.length > 30)) {
+    addLog("统一背包检查项目需填写1–20项，每项不超过30字");
     return null;
   }
   return items;
@@ -641,6 +715,7 @@ function renderDevices() {
     const auctionPreset = card.querySelector(".auction-preset");
     const auctionBuyer = card.querySelector(".auction-buyer");
     const auctionPrice = card.querySelector(".auction-price");
+    const auctionReserve = card.querySelector(".auction-reserve");
     const storeSellEnabled = card.querySelector(".store-sell-enabled");
     const storeSellItem = card.querySelector(".store-sell-item");
     const templeEnabled = card.querySelector(".temple-enabled");
@@ -674,6 +749,7 @@ function renderDevices() {
       ? automation.auctionBuyer : (automation.sellBuyer || "hao");
     auctionPrice.value = String(Number.isInteger(automation.auctionPrice)
       ? automation.auctionPrice : 920);
+    auctionReserve.value = String(automation.auctionReserveCount === 0 ? 0 : 1);
     storeSellEnabled.checked = automation.storeSellEnabled === true;
     storeSellItem.value = "金币券";
     templeEnabled.checked = automation.templeEnabled === true;
@@ -713,6 +789,7 @@ function renderDevices() {
       const intervalHours = Number.parseInt(auctionHours.value, 10);
       const buyer = auctionBuyer.value.trim();
       const itemAuctionPrice = Number.parseInt(auctionPrice.value, 10);
+      const reserveCount = Number.parseInt(auctionReserve.value, 10);
       const equipmentItems = equipmentItemsInput.value.split(/[,，\n]/)
         .map((item) => item.trim()).filter(Boolean);
       const equipmentPrice = Number.parseInt(equipmentPriceInput.value, 10);
@@ -766,6 +843,7 @@ function renderDevices() {
         items,
         buyer,
         price: itemAuctionPrice,
+        reserveCount,
         intervalHours
       });
       sendCommand(device.deviceId, "configure_store_sell", {

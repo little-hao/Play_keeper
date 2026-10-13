@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css?v=1.10.3">
+  <link rel="stylesheet" href="/styles.css?v=1.10.6">
 </head>
 <body>
   <main class="shell">
@@ -59,6 +59,7 @@
           <strong id="dailyPlanStatus" class="state offline">未运行</strong>
         </div>
         <p id="dailyPlanDetail">路线：hao → hao1 → hao2 → hao3 → hao4 → hao5 → hao6 → hao7 → hao</p>
+        <h3 class="plan-subtitle">运行内容</h3>
         <div class="plan-settings">
           <label>道具组合
             <select id="planResourcePreset">
@@ -68,13 +69,22 @@
             </select>
           </label>
           <label>道具名称<input id="planResourceItems" value="曙光印记,进化宝石,强化丹A,强化丹B,天仙玉露"></label>
+          <label>卖方道具保留数量
+            <select id="planResourceReserve"><option value="1" selected>保留1个</option><option value="0">保留0个（全部拍卖）</option></select>
+          </label>
+          <label>副本组合模板
+            <select id="planDungeonPreset"><option value="default">默认四副本</option><option value="custom">自定义</option></select>
+          </label>
           <label class="span-2">副本组合<input id="planDungeonItems" value="绘画小屋,伊苏王的神墓,火龙王的宫殿,史芬克斯密穴"></label>
+          <label class="span-2">统一背包检查项目<input id="planInventoryItems" value="进化宝石,曙光印记,强化丹A,强化丹B,天仙玉露"></label>
           <label>结束后挂机副本<input id="planReturnMap" value="圣兽云殿" maxlength="30"></label>
           <label>完成报告邮箱<input id="planReportEmail" type="email" value="konghao0920@gmail.com"></label>
           <label class="toggle-row"><input id="planScheduleEnabled" type="checkbox"> 每天定时运行</label>
           <label>运行时间（北京时间）<input id="planScheduleTime" type="time" value="04:00"></label>
         </div>
-        <div class="quick-account-actions">
+        <details class="plan-quick-tools">
+          <summary>单账号与批量快捷操作</summary>
+          <div class="quick-account-actions">
           <label>小号道具拍卖
             <select id="quickAuctionAccount"></select>
           </label>
@@ -84,18 +94,23 @@
           <label>挂机账号<select id="quickHangAccount"></select></label>
           <label>挂机副本<input id="quickHangMap" value="圣兽云殿" maxlength="30"></label>
           <button id="quickStartHang" class="secondary">该账号开始挂机</button>
-        </div>
+          </div>
+        </details>
         <div class="plan-progress"><span id="dailyPlanProgress"></span></div>
+        <div id="resumeConfirmation" class="resume-confirmation hidden">
+          <label>人工确认套装所在账号<select id="resumeEquipmentHolder"></select></label>
+          <small>请先在手机画面确认厄菲斯神十件套所在账号；继续后该账号会作为卖方重新开始本段。</small>
+        </div>
         <div class="automation-actions action-grid">
           <button id="startDailyPlan" class="primary">多用户挂机</button>
-          <button id="retryDailyPlan" class="secondary" disabled>从中断账号继续</button>
+          <button id="retryDailyPlan" class="secondary" disabled>确认套装账号并继续</button>
           <button id="cancelDailyPlan" class="secondary" disabled>中断计划</button>
         </div>
         <div class="automation-actions">
           <button id="savePlanSchedule" class="secondary">保存每日定时</button>
           <small id="planScheduleStatus">每日定时未启用</small>
         </div>
-        <p class="automation-help">每个小号完成装备、副本、背包刷新后，仅上架数量大于1的组合道具并保留1件；最后由 hao 购买。</p>
+        <p class="automation-help">每个账号统一按上方清单检查背包；卖方按所选保留数量上架组合道具，最后由 hao 购买。</p>
         <div id="planIntervention" class="plan-intervention hidden" role="alert"></div>
       </section>
       <div id="deviceList" class="device-list"></div>
@@ -168,8 +183,9 @@
           <legend><span class="group-index">1</span> 道具拍卖与商店卖出</legend>
           <p class="group-help">道具拍卖走道具交易所；金币券卖出走道具商店。</p>
           <div class="automation-grid">
-            <label class="toggle-row"><input class="auction-enabled" type="checkbox"> 定时拍卖（保留1个）</label>
+            <label class="toggle-row"><input class="auction-enabled" type="checkbox"> 定时拍卖</label>
             <label class="toggle-row"><input class="store-sell-enabled" type="checkbox"> 定时卖出金币券</label>
+            <label>卖方保留数量<select class="auction-reserve"><option value="1">保留1个</option><option value="0">保留0个</option></select></label>
             <label>拍卖快捷组合
               <select class="auction-preset">
                 <option value="custom">自定义</option>
@@ -193,7 +209,7 @@
           <legend><span class="group-index">2</span> 装备定向转移</legend>
           <p class="group-help">装备交易所每批最多5件，可配置最多10件。</p>
           <div class="automation-grid">
-            <label class="span-2">装备组合（逗号分隔，保存后按账号记忆）<input class="equipment-items" type="text" value="柔情方巾·改,轻罗流萤衫·改,逢羡履·改,君我剑·改,佳人之恋·改,三生戒·改,比翼·改,相望镯·改,尾生之泪·改,龙神印记·庆"></label>
+            <label class="span-2">装备组合（厄菲斯神十件套）<input class="equipment-items" type="text" value="厄菲斯神剑,厄菲斯神铠,厄菲斯神冠,厄菲斯神靴,厄菲斯神链,厄菲斯神戒,厄菲斯神翼,厄菲斯神镯,厄菲斯神玉,厄菲斯神印"></label>
             <label>单价（金币）<input class="equipment-price" type="number" min="1" max="9999999" value="920"></label>
             <label>指定买家ID<input class="equipment-buyer" type="text" maxlength="30" placeholder="上架时必填"></label>
           </div>
@@ -239,6 +255,6 @@
       <div id="selectOptions" class="select-options" role="radiogroup"></div>
     </section>
   </div>
-  <script type="module" src="/app.js?v=1.10.3"></script>
+  <script type="module" src="/app.js?v=1.10.6"></script>
 </body>
 </html>

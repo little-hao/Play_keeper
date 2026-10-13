@@ -127,6 +127,8 @@ test("saves a daily full-route schedule with configurable dungeons", async (cont
   control.send(JSON.stringify({ type: "plan.schedule.update", payload: {
     enabled: true, time: "03:30", options: {
       resourceItems: ["曙光印记", "进化宝石"],
+      resourceReserveCount: 0,
+      inventoryItems: ["进化宝石", "曙光印记", "黑暗徽章"],
       dungeonItems: ["绘画小屋", "史芬克斯密穴"],
       returnMap: "圣兽云殿", reportEmail: "konghao0920@gmail.com"
     }
@@ -134,5 +136,8 @@ test("saves a daily full-route schedule with configurable dungeons", async (cont
   const [message] = await update;
   assert.equal(message.payload.enabled, true);
   assert.equal(message.payload.time, "03:30");
+  assert.equal(message.payload.options.resourceReserveCount, 0);
+  assert.deepEqual(message.payload.options.inventoryItems,
+    ["进化宝石", "曙光印记", "黑暗徽章"]);
   assert.deepEqual(message.payload.options.dungeonItems, ["绘画小屋", "史芬克斯密穴"]);
 });

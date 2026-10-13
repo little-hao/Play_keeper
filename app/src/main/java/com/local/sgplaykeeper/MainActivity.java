@@ -614,9 +614,14 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         CheckBox auctionEnabled = new CheckBox(this);
-        auctionEnabled.setText("每隔固定时间自动拍卖（保留1个）");
+        auctionEnabled.setText("每隔固定时间自动拍卖");
         auctionEnabled.setChecked(automationCoordinator.isAuctionEnabled(accountIndex));
         form.addView(auctionEnabled);
+
+        CheckBox auctionKeepOne = new CheckBox(this);
+        auctionKeepOne.setText("卖方每种道具保留1个（关闭则保留0个）");
+        auctionKeepOne.setChecked(automationCoordinator.auctionReserveCount(accountIndex) == 1);
+        form.addView(auctionKeepOne);
 
         form.addView(formLabel("拍卖道具（逗号分隔，可自行修改）"));
         EditText auctionItems = new EditText(this);
@@ -740,7 +745,7 @@ public final class MainActivity extends Activity {
         form.addView(notice);
 
         java.util.function.BooleanSupplier saveAll = () -> saveAutomationForm(
-                accountIndex, auctionEnabled, auctionItems, buyer, auctionPrice, hours,
+                accountIndex, auctionEnabled, auctionKeepOne, auctionItems, buyer, auctionPrice, hours,
                 storeEnabled, templeEnabled, warehouseEnabled, warehouseItem,
                 warehouseStoreAll,
                 dungeonItems, prestigeEnabled, prestigeItems, equipmentItems,
@@ -822,6 +827,7 @@ public final class MainActivity extends Activity {
     }
 
     private boolean saveAutomationForm(int accountIndex, CheckBox auctionEnabled,
+                                       CheckBox auctionKeepOne,
                                        EditText auctionItems,
                                        EditText buyer, EditText auctionPrice, EditText hours,
                                        CheckBox storeEnabled, CheckBox templeEnabled,
@@ -839,7 +845,7 @@ public final class MainActivity extends Activity {
             String storeItems = "金币券";
             automationCoordinator.configureAuction(accountIndex, auctionEnabled.isChecked(),
                     auctionItemText, buyer.getText().toString(), intervalHours,
-                    itemAuctionPrice);
+                    itemAuctionPrice, auctionKeepOne.isChecked() ? 1 : 0);
             automationCoordinator.configureStoreSell(accountIndex, storeEnabled.isChecked(),
                     storeItems, intervalHours);
             automationCoordinator.configureTemple(accountIndex, templeEnabled.isChecked());
@@ -1123,7 +1129,8 @@ public final class MainActivity extends Activity {
                             parameters.optBoolean("enabled", false), itemText.toString(),
                             parameters.optString("buyer", "hao"),
                             parameters.optInt("intervalHours", 12),
-                            parameters.optInt("price", 920));
+                            parameters.optInt("price", 920),
+                            parameters.optInt("reserveCount", 1));
                     success = true;
                     resultMessage = "定时拍卖设置已更新";
                     break;

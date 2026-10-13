@@ -35,7 +35,7 @@ public class EquipmentTransferAuditTest {
 
         EquipmentTransferAudit.Result result = EquipmentTransferAudit.evaluate(
                 EquipmentTransferAudit.PetScope.MAIN, actual,
-                Collections.singleton("柔情方巾·改"));
+                Collections.singleton("厄菲斯神冠"));
 
         assertFalse(result.allTransferred());
         assertEquals(10, result.items().size());
@@ -78,7 +78,7 @@ public class EquipmentTransferAuditTest {
                 .filter(item -> "身体".equals(item.slot))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("body slot result missing"));
-        assertEquals("轻罗流萤衫·改", body.expectedName);
+        assertEquals("厄菲斯神铠", body.expectedName);
         assertEquals("暗夜女神·影【神】", body.actualName);
         assertEquals(EquipmentTransferAudit.ItemStatus.WRONG_ITEM_IN_SLOT, body.status);
     }
@@ -97,16 +97,16 @@ public class EquipmentTransferAuditTest {
 
     private static Map<String, String> completeTargetSet() {
         Map<String, String> actual = new LinkedHashMap<>();
-        actual.put("头部", "柔情方巾·改");
-        actual.put("身体", "轻罗流萤衫·改");
-        actual.put("脚部", "逢羡履·改");
-        actual.put("武器", "君我剑·改");
-        actual.put("项链", "佳人之恋·改");
-        actual.put("戒指", "三生戒·改");
-        actual.put("翅膀", "比翼·改");
-        actual.put("手镯", "相望镯·改");
-        actual.put("宝石", "尾生之泪·改");
-        actual.put("道具", "龙神印记·庆");
+        actual.put("头部", "厄菲斯神冠");
+        actual.put("身体", "厄菲斯神铠");
+        actual.put("脚部", "厄菲斯神靴");
+        actual.put("武器", "厄菲斯神剑");
+        actual.put("项链", "厄菲斯神链");
+        actual.put("戒指", "厄菲斯神戒");
+        actual.put("翅膀", "厄菲斯神翼");
+        actual.put("手镯", "厄菲斯神镯");
+        actual.put("宝石", "厄菲斯神玉");
+        actual.put("道具", "厄菲斯神印");
         return actual;
     }
 }

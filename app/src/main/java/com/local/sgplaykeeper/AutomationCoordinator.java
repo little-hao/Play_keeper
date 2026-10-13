@@ -76,6 +76,9 @@ final class AutomationCoordinator {
             "进化宝石,曙光印记,强化丹A,强化丹B,天仙玉露";
     static final String DEFAULT_EQUIPMENT_ITEMS =
             String.join(",", EquipmentTransferAudit.targetNames());
+    private static final Set<String> LEGACY_EQUIPMENT_ITEMS = new LinkedHashSet<>(Arrays.asList(
+            "柔情方巾·改", "轻罗流萤衫·改", "逢羡履·改", "君我剑·改", "佳人之恋·改",
+            "三生戒·改", "比翼·改", "相望镯·改", "尾生之泪·改", "龙神印记·庆"));
     private static final int DEFAULT_EQUIPMENT_PRICE = 920;
     private static final int EQUIPMENT_ACTIVE_LIMIT = 5;
     private static final long EQUIPMENT_WAIT_INTERVAL_MS = 10_000L;
@@ -96,6 +99,7 @@ final class AutomationCoordinator {
     private static final String PREF_SELL_ITEMS = "automation_sell_items_";
     private static final String PREF_SELL_BUYER = "automation_sell_buyer_";
     private static final String PREF_AUCTION_PRICE = "automation_auction_price_";
+    private static final String PREF_AUCTION_RESERVE = "automation_auction_reserve_";
     private static final String PREF_SELL_INTERVAL = "automation_sell_interval_";
     private static final String PREF_SELL_LAST = "automation_sell_last_";
     private static final String PREF_STORE_ITEMS = "automation_store_items_";
@@ -238,6 +242,11 @@ final class AutomationCoordinator {
                 PREF_AUCTION_PRICE + accountIndex, DEFAULT_EQUIPMENT_PRICE)));
     }
 
+    int auctionReserveCount(int accountIndex) {
+        return Math.max(0, Math.min(1, preferences.getInt(
+                PREF_AUCTION_RESERVE + accountIndex, 1)));
+    }
+
     String storeSellItemsText(int accountIndex) {
         List<String> items = parseAllowedItems(preferences.getString(
                 PREF_STORE_ITEMS + accountIndex, DEFAULT_STORE_ITEMS), ALLOWED_STORE_ITEMS);
@@ -253,6 +262,12 @@ final class AutomationCoordinator {
     String equipmentItemsText(int accountIndex) {
         List<String> items = parseEquipmentItems(preferences.getString(
                 PREF_EQUIPMENT_ITEMS + accountIndex, DEFAULT_EQUIPMENT_ITEMS));
+        if (items.size() == LEGACY_EQUIPMENT_ITEMS.size()
+                && new LinkedHashSet<>(items).equals(LEGACY_EQUIPMENT_ITEMS)) {
+            preferences.edit().putString(PREF_EQUIPMENT_ITEMS + accountIndex,
+                    DEFAULT_EQUIPMENT_ITEMS).apply();
+            return DEFAULT_EQUIPMENT_ITEMS;
+        }
         return items.isEmpty() ? DEFAULT_EQUIPMENT_ITEMS : String.join(",", items);
     }
 
@@ -268,11 +283,17 @@ final class AutomationCoordinator {
     void configureAuction(int accountIndex, boolean enabled, String itemText,
                           String buyer, int intervalHours) {
         configureAuction(accountIndex, enabled, itemText, buyer, intervalHours,
-                auctionPrice(accountIndex));
+                auctionPrice(accountIndex), auctionReserveCount(accountIndex));
     }
 
     void configureAuction(int accountIndex, boolean enabled, String itemText,
                           String buyer, int intervalHours, int price) {
+        configureAuction(accountIndex, enabled, itemText, buyer, intervalHours, price,
+                auctionReserveCount(accountIndex));
+    }
+
+    void configureAuction(int accountIndex, boolean enabled, String itemText,
+                          String buyer, int intervalHours, int price, int reserveCount) {
         requireAccount(accountIndex);
         List<String> items = parseAuctionItems(itemText);
         if (items.isEmpty()) {
@@ -286,11 +307,15 @@ final class AutomationCoordinator {
         if (price < 1 || price > 9_999_999) {
             throw new IllegalArgumentException("拍卖单价需为1–9999999金币");
         }
+        if (reserveCount < 0 || reserveCount > 1) {
+            throw new IllegalArgumentException("拍卖保留数量只能是0或1");
+        }
         preferences.edit()
                 .putBoolean(PREF_SELL_ENABLED + accountIndex, enabled)
                 .putString(PREF_SELL_ITEMS + accountIndex, String.join(",", items))
                 .putString(PREF_SELL_BUYER + accountIndex, safeBuyer)
                 .putInt(PREF_AUCTION_PRICE + accountIndex, price)
+                .putInt(PREF_AUCTION_RESERVE + accountIndex, reserveCount)
                 .putLong(PREF_SELL_INTERVAL + accountIndex,
                         safeHours * 60L * 60L * 1000L)
                 .apply();
@@ -531,6 +556,7 @@ final class AutomationCoordinator {
         automation.put("auctionItems", new JSONArray(auctionItems));
         automation.put("auctionBuyer", auctionBuyer(accountIndex));
         automation.put("auctionPrice", auctionPrice(accountIndex));
+        automation.put("auctionReserveCount", auctionReserveCount(accountIndex));
         automation.put("auctionIntervalHours", auctionIntervalHours(accountIndex));
         automation.put("auctionLastRunAt", preferences.getLong(
                 PREF_SELL_LAST + accountIndex, 0L));
@@ -1498,17 +1524,19 @@ final class AutomationCoordinator {
         if (itemIndex >= items.size()) {
             preferences.edit().putLong(PREF_SELL_LAST + accountIndex,
                     System.currentTimeMillis()).apply();
+            int reserveCount = auctionReserveCount(accountIndex);
             String completed = states[accountIndex].auctionListedCount == 0
-                    ? "组合道具数量均小于等于1，已跳过道具拍卖"
+                    ? "组合道具数量均未超过保留数量" + reserveCount + "，已跳过道具拍卖"
                     : "拍卖检查完成，已上架"
                     + states[accountIndex].auctionListedCount + "条";
             completeAuctionAndReturn(accountIndex, manual, completed);
             return;
         }
         String itemName = items.get(itemIndex);
+        int reserveCount = auctionReserveCount(accountIndex);
         updateState(accountIndex, "正在检查 " + itemName);
         String script = "(function(){"
-                + "const target=" + JSONObject.quote(itemName) + ";"
+                + "const target=" + JSONObject.quote(itemName) + ",reserve=" + reserveCount + ";"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
                 + "const boxes=Array.from(document.querySelectorAll('.cont-box'));"
                 + "const box=boxes.find(e=>/\u80cc\u5305\u9053\u5177\u6570/.test(e.textContent||''));"
@@ -1520,17 +1548,17 @@ final class AutomationCoordinator {
                 + "const cells=Array.from(row.children).map(e=>(e.textContent||'').trim());"
                 + "const count=parseInt((cells[3]||'').replace(/[^0-9-]/g,''),10);"
                 + "if(!Number.isFinite(count))return JSON.stringify({status:'bad_count'});"
-                + "if(count<=1)return JSON.stringify({status:'kept',count});"
+                + "if(count<=reserve)return JSON.stringify({status:'kept',count,reserve});"
                 + "row.scrollIntoView({block:'nearest'});row.click();"
                 + "const sell=Array.from(document.querySelectorAll('button,uni-button,[role=button]'))"
                 + ".find(e=>(e.textContent||'').trim()==='\u5356\u51fa');"
                 + "if(!sell)return JSON.stringify({status:'no_sell'});"
-                + "sell.click();return JSON.stringify({status:'dialog',count,quantity:count-1});})()";
+                + "sell.click();return JSON.stringify({status:'dialog',count,quantity:count-reserve});})()";
         view.evaluateJavascript(script, encoded -> {
             JSONObject result = decodeObject(encoded);
             String status = result == null ? "invalid" : result.optString("status");
             if ("kept".equals(status) || "missing".equals(status)) {
-                String detail = "kept".equals(status) ? "已保留1个" : "背包无此道具";
+                String detail = "kept".equals(status) ? "已按设置保留" + reserveCount + "个" : "背包无此道具";
                 updateState(accountIndex, itemName + "：" + detail);
                 handler.postDelayed(() -> processAuctionItem(
                         accountIndex, view, items, itemIndex + 1, manual), 350L);
@@ -1612,8 +1640,8 @@ final class AutomationCoordinator {
                 return;
             }
             updateState(accountIndex, String.format(Locale.ROOT,
-                    "%s：已按%d金币提交%d个，保留1个",
-                    itemName, configuredPrice, quantity));
+                    "%s：已按%d金币提交%d个，保留%d个",
+                    itemName, configuredPrice, quantity, auctionReserveCount(accountIndex)));
             states[accountIndex].auctionListedCount++;
             handler.postDelayed(() -> verifySellAndContinue(accountIndex, view, items,
                     itemIndex, itemName, manual, 0), 3_000L);
@@ -2161,10 +2189,10 @@ final class AutomationCoordinator {
                 if (!allPurchased || !state.equipmentSkippedNames.isEmpty() || !audit.allTransferred()
                         || filled < requiredSlots || requiredSlots <= 0) {
                     finish(accountIndex, "equipment_buy", "error",
-                            "脱装再穿装后仍未通过十件情改套装滚动复核，已停止副本操作", manual);
+                            "脱装再穿装后仍未通过十件厄菲斯神套装滚动复核，已停止副本操作", manual);
                     return;
                 }
-                updateState(accountIndex, "先脱后穿完成，装备栏滚动检查十件情改套装全部穿戴");
+                updateState(accountIndex, "先脱后穿完成，装备栏滚动检查十件厄菲斯神套装全部穿戴");
                 preferences.edit().putLong(PREF_EQUIPMENT_TRANSFER_LAST + accountIndex,
                         System.currentTimeMillis()).apply();
                 handler.postDelayed(() -> returnToAfkForDungeons(
@@ -2175,7 +2203,7 @@ final class AutomationCoordinator {
                         accountIndex, view, items, manual, attempt + 1), 1_500L);
             } else {
                 finish(accountIndex, "equipment_buy", "error",
-                        "无法完成先脱后穿及装备栏十件情改套装复核", manual);
+                        "无法完成先脱后穿及装备栏十件厄菲斯神套装复核", manual);
             }
         });
     }

@@ -66,16 +66,16 @@ final class EquipmentTransferAudit {
 
     static {
         LinkedHashMap<String, String> targets = new LinkedHashMap<>();
-        targets.put("头部", "柔情方巾·改");
-        targets.put("身体", "轻罗流萤衫·改");
-        targets.put("脚部", "逢羡履·改");
-        targets.put("武器", "君我剑·改");
-        targets.put("项链", "佳人之恋·改");
-        targets.put("戒指", "三生戒·改");
-        targets.put("翅膀", "比翼·改");
-        targets.put("手镯", "相望镯·改");
-        targets.put("宝石", "尾生之泪·改");
-        targets.put("道具", "龙神印记·庆");
+        targets.put("头部", "厄菲斯神冠");
+        targets.put("身体", "厄菲斯神铠");
+        targets.put("脚部", "厄菲斯神靴");
+        targets.put("武器", "厄菲斯神剑");
+        targets.put("项链", "厄菲斯神链");
+        targets.put("戒指", "厄菲斯神戒");
+        targets.put("翅膀", "厄菲斯神翼");
+        targets.put("手镯", "厄菲斯神镯");
+        targets.put("宝石", "厄菲斯神玉");
+        targets.put("道具", "厄菲斯神印");
         TARGETS_BY_SLOT = Collections.unmodifiableMap(targets);
     }
 

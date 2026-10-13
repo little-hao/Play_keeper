@@ -261,8 +261,8 @@ test("device telemetry and browser command complete a round trip", async (contex
     command: "configure_equipment_transfer",
     parameters: {
       accountIndex: 2,
-      items: ["柔情方巾·改", "轻罗流萤衫·改", "逢羡履·改", "君我剑·改", "佳人之恋·改",
-        "三生戒·改", "比翼·改", "相望镯·改", "尾生之泪·改", "龙神印记·庆"],
+      items: ["厄菲斯神剑", "厄菲斯神铠", "厄菲斯神冠", "厄菲斯神靴", "厄菲斯神链",
+        "厄菲斯神戒", "厄菲斯神翼", "厄菲斯神镯", "厄菲斯神玉", "厄菲斯神印"],
       price: 920,
       buyer: "buyer@id"
     }
@@ -359,7 +359,7 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    ok: true, service: "play-keeper-relay", version: "1.10.5"
+    ok: true, service: "play-keeper-relay", version: "1.10.6"
   });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);
