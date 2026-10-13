@@ -42,4 +42,15 @@ public final class EquipmentListingReconcilerTest {
         assertEquals(1, result.activeCount());
         assertEquals(5, result.resumeIndex);
     }
+
+    @Test
+    public void enhancedMarketNameReconcilesWithConfiguredBaseName() {
+        List<String> configured = Arrays.asList("厄菲斯神剑", "厄菲斯神铠");
+
+        EquipmentListingReconciler.Result result = EquipmentListingReconciler.reconcile(
+                configured, 0, Arrays.asList("厄菲斯神剑(+4)"));
+
+        assertEquals(1, result.activeCount());
+        assertEquals(1, result.resumeIndex);
+    }
 }

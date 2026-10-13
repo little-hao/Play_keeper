@@ -95,6 +95,17 @@ public class EquipmentTransferAuditTest {
         assertEquals(10, result.items().size());
     }
 
+    @Test
+    public void enhancedEquipmentSuffixStillMatchesTheConfiguredSetName() {
+        Map<String, String> actual = completeTargetSet();
+        actual.put("武器", "厄菲斯神剑(+4)");
+
+        EquipmentTransferAudit.Result result = EquipmentTransferAudit.evaluate(
+                EquipmentTransferAudit.PetScope.MAIN, actual, Collections.emptySet());
+
+        assertTrue(result.allTransferred());
+    }
+
     private static Map<String, String> completeTargetSet() {
         Map<String, String> actual = new LinkedHashMap<>();
         actual.put("头部", "厄菲斯神冠");

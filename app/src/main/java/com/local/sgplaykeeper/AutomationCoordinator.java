@@ -992,14 +992,16 @@ final class AutomationCoordinator {
                                          int itemIndex, String itemName, boolean manual) {
         String script = "(function(){const target=" + JSONObject.quote(itemName) + ";"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
+                + "const clean=v=>(v||'').replace(/\\s+/g,'').trim();"
+                + "const base=v=>clean(v).replace(/[（(][+＋]?\\d+[）)]$/,'');"
                 + "const boxes=Array.from(document.querySelectorAll('.cont-box'));"
                 + "const box=boxes.find(e=>(e.textContent||'').includes('装备数：'));"
                 + "if(!box)return JSON.stringify({status:'not_ready'});"
                 + "const rows=Array.from(box.querySelectorAll('.ul .li'));"
                 + "const rowName=e=>{const named=e.querySelector('.item-name,.name,[data-name]');"
                 + "if(named)return(named.getAttribute('data-name')||named.textContent||'').trim();"
-                + "const c=Array.from(e.children);return c.find(x=>(x.textContent||'').trim()===target)?.textContent?.trim()||'';};"
-                + "const matches=rows.filter(e=>rowName(e)===target);"
+                + "const c=Array.from(e.children);return c.find(x=>base(x.textContent)===base(target))?.textContent?.trim()||'';};"
+                + "const matches=rows.filter(e=>base(rowName(e))===base(target));"
                 + "if(!matches.length){const refresh=Array.from(document.querySelectorAll('button,uni-button,[role=button],a,view'))"
                 + ".find(e=>visible(e)&&(e.textContent||'').replace(/\\s+/g,'')==='点击刷新');"
                 + "if(refresh)refresh.click();return JSON.stringify({status:'missing'});}"
@@ -1044,25 +1046,53 @@ final class AutomationCoordinator {
                                           boolean manual, int attempt) {
         if (stopped || !states[accountIndex].busy
                 || !"equipment_sell".equals(states[accountIndex].task)) return;
-        String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
+        String script = "(function(){const target=" + JSONObject.quote(itemName) + ";"
+                + "const visible=e=>e&&e.getClientRects().length>0;"
                 + "const text=e=>(e?.textContent||'').replace(/\\s+/g,'').trim();"
+                + "const label=e=>((e?.getAttribute?.('name')||e?.getAttribute?.('aria-label')||"
+                + "e?.getAttribute?.('title')||text(e))).replace(/\\s+/g,'').trim();"
+                + "const base=v=>(v||'').replace(/\\s+/g,'').trim().replace(/[（(][+＋]?\\d+[）)]$/,'');"
                 + "const modal=Array.from(document.querySelectorAll('.sell-modal,[role=dialog],.uni-popup__wrapper'))"
                 + ".find(visible);if(modal)return JSON.stringify({status:'dialog_open'});"
-                + "const controls=Array.from(document.querySelectorAll('button,uni-button,[role=button],a,view')).filter(visible);"
-                + "const sell=controls.find(e=>['卖出','出售','上架'].includes(text(e)));"
-                + "if(!sell)return JSON.stringify({status:'no_sell'});sell.click();"
+                + "const boxes=Array.from(document.querySelectorAll('.cont-box')).filter(visible);"
+                + "const backpack=boxes.find(e=>(e.textContent||'').includes('装备数：'));"
+                + "if(!backpack)return JSON.stringify({status:'not_exchange'});"
+                + "const rows=Array.from(backpack.querySelectorAll('.ul .li'));"
+                + "const rowName=e=>{const named=e.querySelector('.item-name,.name,[data-name]');"
+                + "if(named)return(named.getAttribute('data-name')||named.textContent||'').trim();"
+                + "return Array.from(e.children).map(x=>(x.textContent||'').trim())"
+                + ".find(v=>base(v)===base(target))||'';};"
+                + "const matches=rows.filter(e=>base(rowName(e))===base(target));"
+                + "if(matches.length!==1)return JSON.stringify({status:matches.length?'ambiguous':'missing'});"
+                + "const row=matches[0];if(!row.classList.contains('active')){row.click();"
+                + "return JSON.stringify({status:'reselected',name:rowName(row)});}"
+                + "const market=boxes.find(e=>e!==backpack&&e.querySelector('.footer-box .d-f'));"
+                + "if(!market)return JSON.stringify({status:'no_market'});"
+                + "const controls=Array.from(market.querySelectorAll('.footer-box .d-f button,.footer-box .d-f uni-button,.footer-box .d-f [role=button]')).filter(visible);"
+                + "let sell=controls.find(e=>['卖出','出售','上架'].includes(label(e)));"
+                + "if(!sell&&controls.length===2&&label(controls[0])==='购买')sell=controls[1];"
+                + "if(!sell)return JSON.stringify({status:'no_sell',controls:controls.map(label).join('|')});sell.click();"
                 + "return JSON.stringify({status:'sell_clicked'});})()";
         view.evaluateJavascript(script, encoded -> {
             JSONObject result = decodeObject(encoded);
             String status = result == null ? "invalid" : result.optString("status");
-            if (("no_sell".equals(status) || "invalid".equals(status)) && attempt < 8) {
+            if (("no_sell".equals(status) || "no_market".equals(status)
+                    || "reselected".equals(status) || "invalid".equals(status)) && attempt < 8) {
                 handler.postDelayed(() -> clickEquipmentSellButton(accountIndex, view, items,
                         itemIndex, itemName, before, manual, attempt + 1), 500L);
                 return;
             }
+            if ("not_exchange".equals(status)) {
+                updateState(accountIndex, itemName + "：页面被刷新，正在重新进入装备交易所");
+                handler.postDelayed(() -> navigateToEquipmentExchange(
+                        accountIndex, view, items, itemIndex, true, manual, 0), 800L);
+                return;
+            }
             if (!"sell_clicked".equals(status) && !"dialog_open".equals(status)) {
+                String detail = result == null ? "" : result.optString("controls");
                 finish(accountIndex, "equipment_sell", "error",
-                        itemName + "：选中装备后未找到卖出按钮（" + status + "）", manual);
+                        itemName + "：选中装备后未找到卖出按钮（" + status
+                                + (detail.isBlank() ? "" : "；控件=" + detail) + "）", manual);
                 return;
             }
             handler.postDelayed(() -> fillAndConfirmEquipmentSell(accountIndex, view, items,
@@ -1126,11 +1156,12 @@ final class AutomationCoordinator {
         if (stopped || !states[accountIndex].busy
                 || !"equipment_sell".equals(states[accountIndex].task)) return;
         String script = "(function(){const target=" + JSONObject.quote(itemName) + ";"
+                + "const base=v=>(v||'').replace(/\\s+/g,'').trim().replace(/[（(][+＋]?\\d+[）)]$/,'');"
                 + "const modal=Array.from(document.querySelectorAll('.sell-modal')).find(e=>e.getClientRects().length>0);"
                 + "const box=Array.from(document.querySelectorAll('.cont-box'))"
                 + ".find(e=>(e.textContent||'').includes('装备数：'));"
                 + "const count=box?Array.from(box.querySelectorAll('.ul .li')).filter(e=>{"
-                + "const c=Array.from(e.children);return c.length>=2&&(c[1].textContent||'').trim()===target;}).length:-1;"
+                + "const c=Array.from(e.children);return c.length>=2&&base(c[1].textContent)===base(target);}).length:-1;"
                 + "return JSON.stringify({modal:!!modal,count});})()";
         view.evaluateJavascript(script, encoded -> {
             JSONObject result = decodeObject(encoded);
@@ -1242,6 +1273,8 @@ final class AutomationCoordinator {
         String names = new JSONArray(state.equipmentBatchNames).toString();
         String script = "(function(){const names=new Set(" + names + "),price=" + price + ";"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
+                + "const base=v=>(v||'').replace(/\\s+/g,'').trim().replace(/[（(][+＋]?\\d+[）)]$/,'');"
+                + "const wanted=new Set(Array.from(names).map(base));"
                 + "const box=Array.from(document.querySelectorAll('.cont-box'))"
                 + ".find(e=>visible(e)&&(e.textContent||'').includes('价格(金币)'));"
                 + "if(!box)return JSON.stringify({status:'not_ready'});"
@@ -1249,7 +1282,7 @@ final class AutomationCoordinator {
                 + "for(const row of rows){const c=Array.from(row.children);if(c.length<3)continue;"
                 + "const n=(c[1].textContent||'').trim();"
                 + "const p=parseInt((c[2].textContent||'').replace(/[^0-9]/g,''),10);"
-                + "if(names.has(n)&&p===price)count++;}"
+                + "if(wanted.has(base(n))&&p===price)count++;}"
                 + "const refresh=Array.from(document.querySelectorAll('button,uni-button,[role=button],a,view'))"
                 + ".find(e=>visible(e)&&(e.textContent||'').replace(/\\s+/g,'')==='点击刷新');"
                 + "if(refresh)refresh.click();return JSON.stringify({status:'ok',count});})()";
@@ -1330,17 +1363,18 @@ final class AutomationCoordinator {
         int price = equipmentPrice(accountIndex);
         String script = "(function(){const target=" + JSONObject.quote(itemName)
                 + ",price=" + price + ";const visible=e=>e&&e.getClientRects().length>0;"
+                + "const base=v=>(v||'').replace(/\\s+/g,'').trim().replace(/[（(][+＋]?\\d+[）)]$/,'');"
                 + "const box=Array.from(document.querySelectorAll('.cont-box'))"
                 + ".find(e=>(e.textContent||'').includes('价格(金币)'));"
                 + "if(!box)return JSON.stringify({status:'not_ready'});"
                 + "const backpack=Array.from(document.querySelectorAll('.cont-box'))"
                 + ".find(e=>(e.textContent||'').includes('装备数：'));"
                 + "const owned=backpack?Array.from(backpack.querySelectorAll('.ul .li')).some(e=>{"
-                + "const c=Array.from(e.children);return c.length>=2&&(c[1].textContent||'').trim()===target;}):false;"
+                + "const c=Array.from(e.children);return c.length>=2&&base(c[1].textContent)===base(target);}):false;"
                 + "const rows=Array.from(box.querySelectorAll('.ul .li'));"
                 + "const matches=rows.filter(e=>{const c=Array.from(e.children);if(c.length<3)return false;"
                 + "const n=(c[1].textContent||'').trim();const p=parseInt((c[2].textContent||'').replace(/[^0-9]/g,''),10);"
-                + "return n===target&&p===price;});"
+                + "return base(n)===base(target)&&p===price;});"
                 + "if(!matches.length&&owned)return JSON.stringify({status:'owned'});"
                 + "if(!matches.length){const refresh=Array.from(document.querySelectorAll('button,uni-button,[role=button],a,view'))"
                 + ".find(e=>visible(e)&&(e.textContent||'').replace(/\\s+/g,'')==='点击刷新');"
@@ -1407,13 +1441,14 @@ final class AutomationCoordinator {
         if (stopped || !states[accountIndex].busy) return;
         int price = equipmentPrice(accountIndex);
         String script = "(function(){const target=" + JSONObject.quote(itemName)
-                + ",price=" + price + ";const modal=Array.from(document.querySelectorAll('.sell-modal'))"
+                + ",price=" + price + ";const base=v=>(v||'').replace(/\\s+/g,'').trim().replace(/[（(][+＋]?\\d+[）)]$/,'');"
+                + "const modal=Array.from(document.querySelectorAll('.sell-modal'))"
                 + ".find(e=>e.getClientRects().length>0"
                 + "&&(e.querySelector('.modal-title')?.textContent||'').trim()==='购买装备确认');"
                 + "if(!modal)return JSON.stringify({status:'no_dialog'});"
                 + "const name=(modal.querySelector('.item-name')?.textContent||'').trim();"
                 + "const actual=parseInt((modal.querySelector('.pre')?.textContent||'').replace(/[^0-9]/g,''),10);"
-                + "if(name!==target||actual!==price)return JSON.stringify({status:'verify_failed',name,actual});"
+                + "if(base(name)!==base(target)||actual!==price)return JSON.stringify({status:'verify_failed',name,actual});"
                 + "const confirm=Array.from(modal.querySelectorAll('button,uni-button,[role=button]'))"
                 + ".find(e=>(e.textContent||'').trim()==='确认购买');"
                 + "if(!confirm)return JSON.stringify({status:'no_confirm'});confirm.click();"

@@ -101,7 +101,7 @@ final class EquipmentTransferAudit {
             String expectedName = target.getValue();
             String actualName = actual.get(slot);
             ItemStatus status;
-            if (expectedName.equals(actualName)) {
+            if (normalizeEquipmentName(expectedName).equals(normalizeEquipmentName(actualName))) {
                 status = ItemStatus.TRANSFERRED;
             } else if (skipped.contains(expectedName)) {
                 status = ItemStatus.SKIPPED_MISSING;
@@ -113,5 +113,11 @@ final class EquipmentTransferAudit {
             results.add(new ItemResult(slot, expectedName, actualName, status));
         }
         return new Result(results);
+    }
+
+    private static String normalizeEquipmentName(String value) {
+        if (value == null) return "";
+        return value.replaceAll("\\s+", "")
+                .replaceFirst("[（(][+＋]?\\d+[）)]$", "");
     }
 }
