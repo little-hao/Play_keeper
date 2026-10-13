@@ -996,16 +996,16 @@ final class AutomationCoordinator {
                 + "const box=boxes.find(e=>(e.textContent||'').includes('装备数：'));"
                 + "if(!box)return JSON.stringify({status:'not_ready'});"
                 + "const rows=Array.from(box.querySelectorAll('.ul .li'));"
-                + "const matches=rows.filter(e=>{const c=Array.from(e.children);"
-                + "return c.length>=2&&(c[1].textContent||'').trim()===target;});"
+                + "const rowName=e=>{const named=e.querySelector('.item-name,.name,[data-name]');"
+                + "if(named)return(named.getAttribute('data-name')||named.textContent||'').trim();"
+                + "const c=Array.from(e.children);return c.find(x=>(x.textContent||'').trim()===target)?.textContent?.trim()||'';};"
+                + "const matches=rows.filter(e=>rowName(e)===target);"
                 + "if(!matches.length){const refresh=Array.from(document.querySelectorAll('button,uni-button,[role=button],a,view'))"
                 + ".find(e=>visible(e)&&(e.textContent||'').replace(/\\s+/g,'')==='点击刷新');"
                 + "if(refresh)refresh.click();return JSON.stringify({status:'missing'});}"
+                + "if(matches.length>1)return JSON.stringify({status:'ambiguous',count:matches.length});"
                 + "const row=matches[0];row.scrollIntoView({block:'nearest'});row.click();"
-                + "const sell=Array.from(document.querySelectorAll('button,uni-button,[role=button]'))"
-                + ".find(e=>visible(e)&&(e.textContent||'').trim()==='卖出');"
-                + "if(!sell)return JSON.stringify({status:'no_sell'});sell.click();"
-                + "return JSON.stringify({status:'dialog',before:matches.length});})()";
+                + "return JSON.stringify({status:'selected',before:matches.length});})()";
         view.evaluateJavascript(script, encoded -> {
             JSONObject result = decodeObject(encoded);
             String status = result == null ? "invalid" : result.optString("status");
@@ -1023,14 +1023,50 @@ final class AutomationCoordinator {
                         accountIndex, view, items, itemIndex, true, manual, 0), 4_000L);
                 return;
             }
-            if (!"dialog".equals(status)) {
+            if ("ambiguous".equals(status)) {
                 finish(accountIndex, "equipment_sell", "error",
-                        itemName + "：无法打开上架弹窗（" + status + "）", manual);
+                        itemName + "：背包出现多条同名装备，已停止以避免选错", manual);
+                return;
+            }
+            if (!"selected".equals(status)) {
+                finish(accountIndex, "equipment_sell", "error",
+                        itemName + "：无法选中装备（" + status + "）", manual);
                 return;
             }
             int before = result.optInt("before", 1);
+            handler.postDelayed(() -> clickEquipmentSellButton(accountIndex, view, items,
+                    itemIndex, itemName, before, manual, 0), 600L);
+        });
+    }
+
+    private void clickEquipmentSellButton(int accountIndex, WebView view, List<String> items,
+                                          int itemIndex, String itemName, int before,
+                                          boolean manual, int attempt) {
+        if (stopped || !states[accountIndex].busy
+                || !"equipment_sell".equals(states[accountIndex].task)) return;
+        String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
+                + "const text=e=>(e?.textContent||'').replace(/\\s+/g,'').trim();"
+                + "const modal=Array.from(document.querySelectorAll('.sell-modal,[role=dialog],.uni-popup__wrapper'))"
+                + ".find(visible);if(modal)return JSON.stringify({status:'dialog_open'});"
+                + "const controls=Array.from(document.querySelectorAll('button,uni-button,[role=button],a,view')).filter(visible);"
+                + "const sell=controls.find(e=>['卖出','出售','上架'].includes(text(e)));"
+                + "if(!sell)return JSON.stringify({status:'no_sell'});sell.click();"
+                + "return JSON.stringify({status:'sell_clicked'});})()";
+        view.evaluateJavascript(script, encoded -> {
+            JSONObject result = decodeObject(encoded);
+            String status = result == null ? "invalid" : result.optString("status");
+            if (("no_sell".equals(status) || "invalid".equals(status)) && attempt < 8) {
+                handler.postDelayed(() -> clickEquipmentSellButton(accountIndex, view, items,
+                        itemIndex, itemName, before, manual, attempt + 1), 500L);
+                return;
+            }
+            if (!"sell_clicked".equals(status) && !"dialog_open".equals(status)) {
+                finish(accountIndex, "equipment_sell", "error",
+                        itemName + "：选中装备后未找到卖出按钮（" + status + "）", manual);
+                return;
+            }
             handler.postDelayed(() -> fillAndConfirmEquipmentSell(accountIndex, view, items,
-                    itemIndex, itemName, before, manual, 0), 700L);
+                    itemIndex, itemName, before, manual, 0), 800L);
         });
     }
 
@@ -1043,12 +1079,16 @@ final class AutomationCoordinator {
         String buyer = equipmentBuyer(accountIndex);
         String script = "(function(){const target=" + JSONObject.quote(itemName)
                 + ",buyer=" + JSONObject.quote(buyer) + ",price=" + price + ";"
-                + "const modal=Array.from(document.querySelectorAll('.sell-modal'))"
-                + ".find(e=>e.getClientRects().length>0"
-                + "&&(e.querySelector('.modal-title')?.textContent||'').trim()==='上架装备拍卖');"
+                + "const visible=e=>e&&e.getClientRects().length>0;"
+                + "const dialogs=Array.from(document.querySelectorAll('.sell-modal,[role=dialog],.uni-popup__wrapper')).filter(visible);"
+                + "const modal=dialogs.find(e=>{const title=(e.querySelector('.modal-title,.uni-popup__title')?.textContent||'').trim();"
+                + "const body=(e.textContent||'').trim();return /(上架|出售|卖出)/.test(title+body)&&/(装备|拍卖)/.test(title+body);});"
                 + "if(!modal)return JSON.stringify({status:'no_dialog'});"
-                + "const name=(modal.querySelector('.item-name')?.textContent||'').trim();"
-                + "if(name!==target)return JSON.stringify({status:'wrong_item',name});"
+                + "const name=(modal.querySelector('.item-name,.name,[data-name]')?.textContent||'').trim();"
+                + "if(name&&name!==target&&!((modal.textContent||'').includes(target)))"
+                + "return JSON.stringify({status:'wrong_item',name});"
+                + "if(!name&&!((modal.textContent||'').includes(target)))"
+                + "return JSON.stringify({status:'target_missing'});"
                 + "const inputs=Array.from(modal.querySelectorAll('input')).filter(e=>e.type!=='hidden'&&!e.disabled);"
                 + "const p=inputs.find(e=>e.type==='number')||inputs[0];"
                 + "const b=inputs.find(e=>e!==p&&(e.type==='text'||/ID|买家|玩家/i.test(e.placeholder||'')))||inputs[1];"
@@ -1056,8 +1096,8 @@ final class AutomationCoordinator {
                 + "const d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');"
                 + "const set=(e,v)=>{d.set.call(e,String(v));e.dispatchEvent(new Event('input',{bubbles:true}));"
                 + "e.dispatchEvent(new Event('change',{bubbles:true}));};set(p,price);set(b,buyer);"
-                + "const confirm=Array.from(modal.querySelectorAll('button,uni-button,[role=button]'))"
-                + ".find(e=>(e.textContent||'').trim()==='确认上架');"
+                + "const confirm=Array.from(modal.querySelectorAll('button,uni-button,[role=button],view')).filter(visible)"
+                + ".find(e=>['确认上架','确认出售','上架'].includes((e.textContent||'').replace(/\\s+/g,'').trim()));"
                 + "if(!confirm)return JSON.stringify({status:'no_confirm'});"
                 + "if(parseInt(p.value,10)!==price||b.value!==buyer)"
                 + "return JSON.stringify({status:'verify_failed',pv:p.value,bv:b.value});"
@@ -1066,7 +1106,7 @@ final class AutomationCoordinator {
             JSONObject result = decodeObject(encoded);
             String status = result == null ? "invalid" : result.optString("status");
             if (!"submitted".equals(status)) {
-                if (("no_dialog".equals(status) || "inputs_missing".equals(status)) && attempt < 4) {
+                if (("no_dialog".equals(status) || "inputs_missing".equals(status)) && attempt < 10) {
                     handler.postDelayed(() -> fillAndConfirmEquipmentSell(accountIndex, view,
                             items, itemIndex, itemName, before, manual, attempt + 1), 500L);
                     return;

@@ -479,7 +479,7 @@ function accountTarget(label) {
 }
 
 function renderQuickAccountControls() {
-  const auctionSelected = elements.quickAuctionAccount.value || "hao1";
+  const auctionSelected = elements.quickAuctionAccount.value;
   const hangSelected = elements.quickHangAccount.value || "hao";
   elements.quickAuctionAccount.replaceChildren();
   elements.quickHangAccount.replaceChildren();
@@ -487,10 +487,21 @@ function renderQuickAccountControls() {
   allOption.value = "all";
   allOption.textContent = "所有账号";
   elements.quickHangAccount.append(allOption);
-  for (const label of ["hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7"]) {
+  const reportedLabels = [];
+  for (const device of devices.values()) {
+    const accounts = Array.isArray(device.telemetry?.accounts) ? device.telemetry.accounts : [];
+    for (const account of accounts) {
+      const label = typeof account?.label === "string" ? account.label.trim() : "";
+      if (label && Number.isInteger(account?.index) && !reportedLabels.includes(label)) {
+        reportedLabels.push(label);
+      }
+    }
+  }
+  reportedLabels.sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+  for (const label of reportedLabels) {
     const option = document.createElement("option");
     option.value = label;
-    option.textContent = accountTarget(label) ? label : `${label}（离线）`;
+    option.textContent = label;
     elements.quickAuctionAccount.append(option);
   }
   for (const label of ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7"]) {
@@ -499,7 +510,7 @@ function renderQuickAccountControls() {
     option.textContent = accountTarget(label) ? label : `${label}（离线）`;
     elements.quickHangAccount.append(option);
   }
-  elements.quickAuctionAccount.value = auctionSelected;
+  if (reportedLabels.includes(auctionSelected)) elements.quickAuctionAccount.value = auctionSelected;
   elements.quickHangAccount.value = hangSelected;
   const disabled = devices.size === 0;
   elements.quickAuctionToMain.disabled = disabled;

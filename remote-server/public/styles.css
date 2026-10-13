@@ -61,6 +61,10 @@ small { color: var(--muted); }
 .quick-account-actions label { margin: 0; }
 .quick-account-actions input, .quick-account-actions select { display: block; width: 100%; margin-top: 4px; padding: 10px; color: #f3f6fa; background: #090c12; border: 1px solid #343b48; border-radius: 9px; }
 .quick-account-actions button { width: 100%; }
+.quick-auction-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr); align-items: end; gap: 8px; margin: 12px 0; }
+.quick-auction-row label { margin: 0; }
+.quick-auction-row select { display: block; width: 100%; margin-top: 4px; padding: 10px; color: #f3f6fa; background: #090c12; border: 1px solid #343b48; border-radius: 9px; }
+.quick-auction-row button { width: 100%; }
 .daily-plan-panel .automation-actions small { align-self: center; }
 .plan-intervention { margin-top: 10px; padding: 10px; color: #ffe1aa; background: #422d0c; border: 1px solid #9d7027; border-radius: 9px; font-size: 13px; }
 .resume-confirmation { display: grid; grid-template-columns: minmax(180px, 280px) 1fr; align-items: end; gap: 10px; margin-top: 12px; padding: 12px; background: #172033; border: 1px solid #3b5c8c; border-radius: 10px; }
@@ -160,7 +164,7 @@ small { color: var(--muted); }
   .device-heading strong { overflow-wrap: anywhere; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .account-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .global-control-row, .plan-settings, .quick-account-actions { grid-template-columns: 1fr; }
+  .global-control-row, .plan-settings, .quick-account-actions, .quick-auction-row { grid-template-columns: 1fr; }
   .resume-confirmation { grid-template-columns: 1fr; align-items: stretch; }
   .resume-confirmation small { padding-bottom: 0; }
   .plan-settings .span-2 { grid-column: span 1; }
