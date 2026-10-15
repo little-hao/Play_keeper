@@ -39,6 +39,18 @@ test("resolves the required route from the two live device account labels", () =
     ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"]);
 });
 
+test("accepts a user-selected closed equipment route and custom ten-piece set", () => {
+  const actions = [];
+  const customRoute = [route()[0], route()[1], route()[2], route()[4], route().at(-1)];
+  const loverSet = ["柔情方巾·改", "轻罗流萤衫·改", "逢羡履·改", "君我剑·改", "佳人之恋·改",
+    "三生戒·改", "比翼·改", "相望镯·改", "尾生之泪·改", "龙神印记·庆"];
+  const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => 1_000 });
+  const snapshot = plan.start(customRoute, { items: loverSet });
+  assert.deepEqual(snapshot.route.map((entry) => entry.accountLabel),
+    ["hao", "hao1", "hao2", "hao4", "hao"]);
+  assert.deepEqual(actions[0].parameters.items, loverSet);
+});
+
 test("runs all eight relay legs and returns the equipment to hao", () => {
   const actions = [];
   let clock = 1_000;

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css?v=1.10.8">
+  <link rel="stylesheet" href="/styles.css?v=2.0.0-rc1">
 </head>
 <body>
   <main class="shell">
@@ -19,10 +19,11 @@
 
     <section id="loginPanel" class="panel login">
       <h2>连接服务器</h2>
-      <p>输入部署服务时设置的管理密钥。密钥只保留在本页会话中，关闭页面后自动清除。</p>
-      <label for="adminToken">管理密钥</label>
+      <p>使用自己的控制台账号登录；管理员首次部署也可使用原管理密钥兼容登录。</p>
+      <label for="loginUser">用户名</label>
       <div class="login-row">
-        <input id="adminToken" type="password" autocomplete="current-password" placeholder="ADMIN_TOKEN">
+        <input id="loginUser" autocomplete="username" placeholder="用户名（兼容模式可留空）">
+        <input id="adminToken" type="password" autocomplete="current-password" placeholder="密码或管理密钥">
         <button id="connectButton" class="primary">连接</button>
       </div>
       <p id="loginError" class="error" role="alert"></p>
@@ -34,6 +35,19 @@
         <button id="refreshStatus" class="secondary">刷新状态</button>
         <button id="disconnectButton" class="secondary">断开</button>
       </div>
+      <section id="userAdminPanel" class="panel hidden">
+        <div class="section-title"><div><p class="eyebrow">ADMIN</p><h2>用户与设备归属</h2></div></div>
+        <div class="plan-settings">
+          <label>用户名<input id="newUsername" placeholder="3–32位字母或数字"></label>
+          <label>初始/重置密码<input id="newUserPassword" type="password" minlength="8"></label>
+          <label>角色<select id="newUserRole"><option value="user">普通用户</option><option value="admin">管理员</option></select></label>
+          <button id="saveUser" class="secondary">创建或重置用户</button>
+          <label>在线设备<select id="assignDevice"></select></label>
+          <label>分配给用户<select id="assignUser"></select></label>
+          <button id="assignDeviceButton" class="secondary">保存设备归属</button>
+        </div>
+        <p id="userAdminStatus" class="automation-help">普通用户只能查看和操作分配给自己的设备。</p>
+      </section>
       <section class="panel global-control-panel">
         <div class="section-title">
           <div><p class="eyebrow">HIGH RISK</p><h2>KeepPlayer 进程控制</h2></div>
@@ -61,6 +75,19 @@
         <p id="dailyPlanDetail">路线：hao → hao1 → hao2 → hao3 → hao4 → hao5 → hao6 → hao7 → hao</p>
         <h3 class="plan-subtitle">运行内容</h3>
         <div class="plan-settings">
+          <label class="span-2">装备转移循环（用 → 或逗号分隔）
+            <input id="planRoute" value="hao → hao1 → hao2 → hao3 → hao4 → hao5 → hao6 → hao7 → hao">
+          </label>
+          <label>装备套装模板
+            <select id="planEquipmentPreset">
+              <option value="ephis">厄菲斯神套装</option>
+              <option value="lover">情人套装</option>
+              <option value="custom">自定义</option>
+            </select>
+          </label>
+          <label class="span-2">装备转移清单
+            <input id="planEquipmentItems" value="厄菲斯神剑,厄菲斯神铠,厄菲斯神冠,厄菲斯神靴,厄菲斯神链,厄菲斯神戒,厄菲斯神翼,厄菲斯神镯,厄菲斯神玉,厄菲斯神印">
+          </label>
           <label>道具组合
             <select id="planResourcePreset">
               <option value="one">组合1：曙光/进化/强化丹A/B/天仙玉露</option>
@@ -101,7 +128,7 @@
         <div class="plan-progress"><span id="dailyPlanProgress"></span></div>
         <div id="resumeConfirmation" class="resume-confirmation hidden">
           <label>人工确认套装所在账号<select id="resumeEquipmentHolder"></select></label>
-          <small>请先在手机画面确认厄菲斯神十件套所在账号；继续后该账号会作为卖方重新开始本段。</small>
+          <small>请先在手机画面确认当前所选十件套所在账号；继续后该账号会作为卖方重新开始本段。</small>
         </div>
         <div class="automation-actions action-grid">
           <button id="startDailyPlan" class="primary">多用户挂机</button>
@@ -163,7 +190,13 @@
           <p class="preview-placeholder">点击“加载画面”查看当前账号页面</p>
           <img class="preview-image hidden" alt="手机当前网页预览，可直接点击操作">
         </div>
-        <p class="preview-help">画面最高每秒更新一次。点击画面会在当前 WebView 的对应位置执行一次单击。</p>
+        <div class="preview-gesture-actions">
+          <button data-swipe="up" class="secondary">上滑</button>
+          <button data-swipe="down" class="secondary">下滑</button>
+          <button data-swipe="left" class="secondary">左滑</button>
+          <button data-swipe="right" class="secondary">右滑</button>
+        </div>
+        <p class="preview-help">可点击或直接拖动画面；人工操作时流畅画质临时提高到每秒3帧。</p>
       </section>
       <details class="automation-panel">
         <summary>当前账号高级操作</summary>
@@ -257,6 +290,6 @@
       <div id="selectOptions" class="select-options" role="radiogroup"></div>
     </section>
   </div>
-  <script type="module" src="/app.js?v=1.10.8"></script>
+  <script type="module" src="/app.js?v=2.0.0-rc1"></script>
 </body>
 </html>

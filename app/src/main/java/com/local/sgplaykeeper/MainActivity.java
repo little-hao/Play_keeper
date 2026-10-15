@@ -93,7 +93,7 @@ public final class MainActivity extends Activity {
     private static final int PREVIEW_DEFAULT_WIDTH = 720;
     private static final int PREVIEW_MAX_WIDTH = 2_560;
     private static final int PREVIEW_MAX_ENCODED_BYTES = 2_500 * 1024;
-    private static final long PREVIEW_MIN_INTERVAL_MS = 1_000L;
+    private static final long PREVIEW_MIN_INTERVAL_MS = 333L;
     private static final String USERNAME_DETECTION_SCRIPT =
             "(function(){const clean=v=>(v||'').replace(/\\s+/g,' ').trim();"
                     + "const blocked=/^(用户名|账号|昵称|登录|未登录|user|username|运行中|待机|进入主游戏|曙光口袋助手|Lv\\d+)$/i;"
@@ -1110,6 +1110,10 @@ public final class MainActivity extends Activity {
                     handlePreviewTap(commandId, parameters);
                     return;
                 }
+                case "pointer_swipe": {
+                    handlePreviewSwipe(commandId, parameters);
+                    return;
+                }
                 case "select_option":
                     handleSelectOption(commandId, parameters);
                     return;
@@ -1598,6 +1602,30 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void handlePreviewSwipe(String commandId, JSONObject parameters) {
+        try {
+            int accountIndex = requiredAccountIndex(parameters);
+            double x1 = parameters.optDouble("x1", -1d);
+            double y1 = parameters.optDouble("y1", -1d);
+            double x2 = parameters.optDouble("x2", -1d);
+            double y2 = parameters.optDouble("y2", -1d);
+            int durationMs = parameters.optInt("durationMs", 360);
+            long frameSequence = parameters.optLong("frameSequence", -1L);
+            validatePreviewTap(accountIndex, x1, y1, frameSequence);
+            validatePreviewTap(accountIndex, x2, y2, frameSequence);
+            if (durationMs < 120 || durationMs > 1_500) {
+                throw new IllegalArgumentException("滑动时间无效");
+            }
+            Session session = getOrCreateSession(accountIndex);
+            dispatchSwipe(session.webView, x1, y1, x2, y2, durationMs);
+            remoteConnectionManager.sendCommandResult(commandId, true, "远程滑动已执行");
+            mainHandler.postDelayed(this::capturePreviewFrame, 120L);
+        } catch (RuntimeException error) {
+            remoteConnectionManager.sendCommandResult(commandId, false,
+                    error.getMessage() == null ? "滑动处理失败" : error.getMessage());
+        }
+    }
+
     private JSONObject decodeSelectInteraction(String encodedResult) throws JSONException {
         if (encodedResult == null || "null".equals(encodedResult)) {
             return null;
@@ -1632,6 +1660,41 @@ public final class MainActivity extends Activity {
         } finally {
             down.recycle();
             up.recycle();
+        }
+    }
+
+    private void dispatchSwipe(WebView view, double x1, double y1,
+                               double x2, double y2, int durationMs) {
+        if (view.getWidth() <= 0 || view.getHeight() <= 0) {
+            throw new IllegalStateException("网页尚未完成布局");
+        }
+        final float startX = (float) (x1 * view.getWidth());
+        final float startY = (float) (y1 * view.getHeight());
+        final float endX = (float) (x2 * view.getWidth());
+        final float endY = (float) (y2 * view.getHeight());
+        final long downTime = SystemClock.uptimeMillis();
+        view.requestFocus();
+        MotionEvent down = MotionEvent.obtain(downTime, downTime,
+                MotionEvent.ACTION_DOWN, startX, startY, 0);
+        view.dispatchTouchEvent(down);
+        down.recycle();
+        int steps = Math.max(4, Math.min(24, durationMs / 25));
+        for (int step = 1; step <= steps; step++) {
+            final int currentStep = step;
+            mainHandler.postDelayed(() -> {
+                float fraction = currentStep / (float) steps;
+                float x = startX + (endX - startX) * fraction;
+                float y = startY + (endY - startY) * fraction;
+                int action = currentStep == steps
+                        ? MotionEvent.ACTION_UP : MotionEvent.ACTION_MOVE;
+                MotionEvent event = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(),
+                        action, x, y, 0);
+                try {
+                    view.dispatchTouchEvent(event);
+                } finally {
+                    event.recycle();
+                }
+            }, (long) durationMs * step / steps);
         }
     }
 

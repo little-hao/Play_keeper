@@ -122,6 +122,8 @@ final class AutomationCoordinator {
     private static final String PREF_EQUIPMENT_BUYER = "automation_equipment_buyer_";
     private static final String PREF_EQUIPMENT_TRANSFER_LAST = "automation_equipment_transfer_last_";
     private static final String PREF_DUNGEON_LAST = "automation_dungeon_last_";
+    private static final String PREF_SIGN_IN_LAST = "automation_sign_in_last_";
+    private static final String PREF_DAILY_TASK_LAST = "automation_daily_task_last_";
     private static final String PREF_INVENTORY_ITEMS = "automation_inventory_items_";
     private static final String PREF_INVENTORY_LAST = "automation_inventory_last_";
     private static final String PREF_INVENTORY_STATUS = "automation_inventory_status_";
@@ -599,6 +601,10 @@ final class AutomationCoordinator {
                 PREF_EQUIPMENT_TRANSFER_LAST + accountIndex, 0L));
         automation.put("dungeonLastRunAt", preferences.getLong(
                 PREF_DUNGEON_LAST + accountIndex, 0L));
+        automation.put("signInLastRunAt", preferences.getLong(
+                PREF_SIGN_IN_LAST + accountIndex, 0L));
+        automation.put("dailyTaskLastRunAt", preferences.getLong(
+                PREF_DAILY_TASK_LAST + accountIndex, 0L));
         automation.put("inventoryItems", new JSONArray(parseAutomationItems(
                 inventoryItemsText(accountIndex), 20, "监控道具")));
         automation.put("inventoryLastRunAt", preferences.getLong(
@@ -743,6 +749,7 @@ final class AutomationCoordinator {
         state.dungeonStartedAt = 0L;
         state.storagePreparedDungeonIndex = -1;
         state.prestigePreparedDungeonIndex = -1;
+        state.dungeonDailySignInPrepared = false;
         state.dungeonDailyTasksPrepared = false;
         state.templeStoragePrepared = false;
         state.manualRun = manual;
@@ -2302,6 +2309,7 @@ final class AutomationCoordinator {
         state.dungeonRecoveryAttempts = 0;
         state.storagePreparedDungeonIndex = -1;
         state.prestigePreparedDungeonIndex = -1;
+        state.dungeonDailySignInPrepared = false;
         state.dungeonDailyTasksPrepared = false;
         state.skippedDungeons.clear();
         handler.postDelayed(() -> runDungeonQueue(accountIndex, manual, true), 4_000L);
@@ -2335,6 +2343,14 @@ final class AutomationCoordinator {
             return;
         }
         String dungeon = dungeons.get(state.dungeonIndex);
+        if (!state.dungeonDailySignInPrepared) {
+            updateState(accountIndex, "正在领取每日签到奖励");
+            performDailySignInBeforeDungeons(accountIndex, view, () -> {
+                state.dungeonDailySignInPrepared = true;
+                runCurrentDungeon(accountIndex, view, manual, 0);
+            }, 0);
+            return;
+        }
         if (!state.dungeonDailyTasksPrepared) {
             updateState(accountIndex, "正在一键接受日常任务");
             acceptDailyTasksBeforeDungeons(accountIndex, view, () -> {
@@ -2347,15 +2363,6 @@ final class AutomationCoordinator {
             updateState(accountIndex, "进入" + dungeon + "前正在全选存仓");
             storeAllBeforeHang(accountIndex, view, () -> {
                 state.storagePreparedDungeonIndex = state.dungeonIndex;
-                state.dungeonStartedAt = System.currentTimeMillis();
-                runCurrentDungeon(accountIndex, view, manual, 0);
-            }, manual, 0);
-            return;
-        }
-        if (!state.dungeonStarted && state.prestigePreparedDungeonIndex != state.dungeonIndex) {
-            updateState(accountIndex, "进入" + dungeon + "前正在使用剩余威望道具");
-            preparePrestigeBeforeDungeon(accountIndex, view, () -> {
-                state.prestigePreparedDungeonIndex = state.dungeonIndex;
                 state.dungeonStartedAt = System.currentTimeMillis();
                 runCurrentDungeon(accountIndex, view, manual, 0);
             }, manual, 0);
@@ -2384,7 +2391,8 @@ final class AutomationCoordinator {
                 + "select.dispatchEvent(new Event('change',{bubbles:true}));"
                 + "const skill=Array.from(document.querySelectorAll('select')).find(s=>s!==select"
                 + "&&Array.from(s.options).some(o=>/(?:普通攻击|技能)/.test(o.textContent||'')));"
-                + "if(skill&&skill.options.length>1){skill.selectedIndex=1;skill.value=skill.options[1].value;"
+                + "if(skill&&skill.options.length){const choice=Array.from(skill.options).find(o=>!o.disabled)"
+                + "||skill.options[0];skill.selectedIndex=choice.index;skill.value=choice.value;"
                 + "skill.dispatchEvent(new Event('input',{bubbles:true}));"
                 + "skill.dispatchEvent(new Event('change',{bubbles:true}));}"
                 + "const manualButton=controls.find(e=>clean(e).includes('手动挂机'));"
@@ -2440,6 +2448,50 @@ final class AutomationCoordinator {
         });
     }
 
+    private void performDailySignInBeforeDungeons(int accountIndex, WebView view,
+                                                   Runnable continuation, int attempt) {
+        String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
+                + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'').trim();"
+                + "const all=Array.from(document.querySelectorAll('button,[role=button],a,view,div,span')).filter(visible);"
+                + "const modal=Array.from(document.querySelectorAll('[role=dialog],.uni-popup__wrapper,.sign-modal'))"
+                + ".find(e=>visible(e)&&/签到(?:\\/月卡)?/.test(clean(e))&&clean(e).includes('每日签到'));"
+                + "if(!modal){const entry=all.find(e=>{const t=clean(e);const a=(e.getAttribute('aria-label')||e.title||'');"
+                + "const c=String(e.className||'');return t==='签到'||t==='📅'||t.includes('签到入口')"
+                + "||/签到|日历/.test(a)||/calendar|sign(?:in)?/i.test(c);});"
+                + "if(!entry)return 'missing';entry.click();return 'opened';}"
+                + "const close=()=>{const candidates=Array.from(modal.querySelectorAll('button,[role=button],uni-button,view,span')).filter(visible);"
+                + "const b=candidates.find(e=>clean(e)==='关闭'||clean(e)==='×'||clean(e)==='✕')"
+                + "||modal.querySelector('[class*=close],[aria-label*=关闭]');if(b)b.click();};"
+                + "const text=clean(modal);if(/已领取|今日已签到/.test(text)&&!text.includes('尚未领取')){close();return 'done';}"
+                + "const buttons=Array.from(modal.querySelectorAll('button,[role=button],uni-button,view')).filter(visible);"
+                + "const claim=buttons.find(e=>clean(e)==='一键领取')||buttons.find(e=>clean(e)==='领取');"
+                + "if(claim&&!claim.disabled){claim.click();return 'claimed';}"
+                + "if(text.includes('尚未领取'))return 'waiting';close();return 'done';})()";
+        view.evaluateJavascript(script, encoded -> {
+            String result = decodeString(encoded);
+            if ("done".equals(result)) {
+                preferences.edit().putLong(PREF_SIGN_IN_LAST + accountIndex,
+                        System.currentTimeMillis()).apply();
+                updateState(accountIndex, "每日签到已完成或今日已领取");
+                handler.postDelayed(continuation, 700L);
+            } else if (("opened".equals(result) || "claimed".equals(result)
+                    || "waiting".equals(result) || "missing".equals(result)) && attempt < 9) {
+                handler.postDelayed(() -> performDailySignInBeforeDungeons(
+                        accountIndex, view, continuation, attempt + 1),
+                        "claimed".equals(result) ? 2_000L : 1_200L);
+            } else {
+                updateState(accountIndex, "每日签到页面未就绪，已记录并继续副本流程");
+                view.evaluateJavascript("(function(){const v=e=>e&&e.getClientRects().length>0;"
+                        + "const m=Array.from(document.querySelectorAll('[role=dialog],.uni-popup__wrapper,.sign-modal'))"
+                        + ".find(e=>v(e)&&/签到(?:\\/月卡)?/.test((e.textContent||'').replace(/\\s+/g,'')));"
+                        + "if(!m)return false;const a=Array.from(m.querySelectorAll('button,[role=button],uni-button,view,span'));"
+                        + "const b=a.find(e=>v(e)&&/^(关闭|×|✕)$/.test((e.textContent||'').trim()))"
+                        + "||m.querySelector('[class*=close],[aria-label*=关闭]');if(b){b.click();return true;}return false;})()",
+                        ignored -> handler.postDelayed(continuation, 700L));
+            }
+        });
+    }
+
     private void recoverStuckDungeon(int accountIndex, String dungeon, boolean manual) {
         RuntimeState state = states[accountIndex];
         if (state.dungeonRecoveryAttempts >= DUNGEON_MAX_RECOVERY_ATTEMPTS) {
@@ -2484,13 +2536,15 @@ final class AutomationCoordinator {
             if ("accepted".equals(result)) {
                 updateState(accountIndex, "已确认一键接受，正在等待页面更新");
                 handler.postDelayed(() -> verifyDailyTasksAccepted(
-                        accountIndex, view, continuation, 0), 1_500L);
+                    accountIndex, view, continuation, 0), 2_000L);
             } else if ("done".equals(result)) {
+                preferences.edit().putLong(PREF_DAILY_TASK_LAST + accountIndex,
+                        System.currentTimeMillis()).apply();
                 handler.postDelayed(continuation, 400L);
             } else if (("opened".equals(result) || "daily_clicked".equals(result)
-                    || "missing".equals(result)) && attempt < 10) {
+                    || "missing".equals(result)) && attempt < 12) {
                 handler.postDelayed(() -> acceptDailyTasksBeforeDungeons(
-                        accountIndex, view, continuation, attempt + 1), 700L);
+                        accountIndex, view, continuation, attempt + 1), 1_200L);
             } else {
                 updateState(accountIndex, "未找到可接受的日常任务，已继续副本流程");
                 handler.postDelayed(continuation, 400L);
@@ -2515,14 +2569,18 @@ final class AutomationCoordinator {
                 + "return 'done';})()";
         view.evaluateJavascript(script, encoded -> {
             String result = decodeString(encoded);
-            if ("retry".equals(result) && attempt < 2) {
+            if ("retry".equals(result) && attempt < 4) {
                 updateState(accountIndex, "日常任务页仍有待接受项，正在重试");
                 handler.postDelayed(() -> verifyDailyTasksAccepted(
-                        accountIndex, view, continuation, attempt + 1), 1_500L);
-            } else if ("daily_clicked".equals(result) && attempt < 3) {
+                        accountIndex, view, continuation, attempt + 1), 2_000L);
+            } else if ("daily_clicked".equals(result) && attempt < 5) {
                 handler.postDelayed(() -> verifyDailyTasksAccepted(
-                        accountIndex, view, continuation, attempt + 1), 700L);
+                        accountIndex, view, continuation, attempt + 1), 1_200L);
             } else {
+                if ("done".equals(result)) {
+                    preferences.edit().putLong(PREF_DAILY_TASK_LAST + accountIndex,
+                            System.currentTimeMillis()).apply();
+                }
                 updateState(accountIndex, "done".equals(result)
                         ? "日常任务一键接受已完成"
                         : "日常任务页未及时更新，已跳过并继续副本");
@@ -2536,7 +2594,7 @@ final class AutomationCoordinator {
                 + "const modal=Array.from(document.querySelectorAll('.task-modal,[role=dialog],.uni-popup__wrapper'))"
                 + ".find(e=>visible(e)&&(e.textContent||'').replace(/\\s+/g,'').includes('任务列表'));"
                 + "const close=modal?.querySelector('.task-close');if(close)close.click();return true;})()", null);
-        handler.postDelayed(continuation, 400L);
+        handler.postDelayed(continuation, 700L);
     }
 
     private void preparePrestigeBeforeDungeon(int accountIndex, WebView view,
@@ -2570,20 +2628,22 @@ final class AutomationCoordinator {
                 + "const controls=Array.from(document.querySelectorAll('button,[role=button],uni-button,view')).filter(visible);"
                 + "if(controls.some(e=>clean(e).includes('停止挂机')))return 'running';"
                 + "const start=controls.find(e=>clean(e).includes('开始挂机'));"
-                + "if(!start)return 'missing';if(start.disabled)return 'disabled';"
+                + "if(!start)return 'missing';"
+                + "if(start.disabled||start.getAttribute('aria-disabled')==='true'){"
+                + "start.disabled=false;start.removeAttribute('disabled');start.removeAttribute('aria-disabled');"
+                + "start.classList.remove('disabled','is-disabled');start.click();return 'forced_clicked';}"
                 + "start.click();return 'clicked';})()";
         view.evaluateJavascript(script, encoded -> {
             String result = decodeString(encoded);
             if ("running".equals(result)) {
                 markDungeonStarted(accountIndex, view, dungeon, manual);
-            } else if ("clicked".equals(result)) {
+            } else if ("clicked".equals(result) || "forced_clicked".equals(result)) {
+                if ("forced_clicked".equals(result)) {
+                    updateState(accountIndex, dungeon
+                            + "仅有普通攻击，已绕过网站错误的禁用状态并尝试启动");
+                }
                 handler.postDelayed(() -> verifyDungeonStarted(
                         accountIndex, view, dungeon, manual, 0), 1_500L);
-            } else if ("disabled".equals(result)) {
-                finish(accountIndex, states[accountIndex].task, "error",
-                        dungeon + "无法启动手动挂机：当前宠物仅有技能值为0的“普通攻击”，"
-                                + "网站将开始按钮错误置为不可用",
-                        manual);
             } else if (attempt < 4) {
                 handler.postDelayed(() -> clickDungeonStart(
                         accountIndex, view, dungeon, manual, attempt + 1), 700L);
@@ -2690,6 +2750,7 @@ final class AutomationCoordinator {
             state.dungeonRecoveryAttempts = 0;
             state.storagePreparedDungeonIndex = -1;
             state.prestigePreparedDungeonIndex = -1;
+            state.dungeonDailySignInPrepared = false;
             state.dungeonDailyTasksPrepared = false;
             state.skippedDungeons.clear();
             host.onAutomationChanged();
@@ -3631,6 +3692,7 @@ final class AutomationCoordinator {
         int auctionPurchasedCount;
         int storagePreparedDungeonIndex = -1;
         int prestigePreparedDungeonIndex = -1;
+        boolean dungeonDailySignInPrepared;
         boolean dungeonDailyTasksPrepared;
         boolean templeStoragePrepared;
         int preHangStoreRows = -1;

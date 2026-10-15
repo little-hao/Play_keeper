@@ -1,5 +1,6 @@
 const elements = {
   loginPanel: document.querySelector("#loginPanel"),
+  loginUser: document.querySelector("#loginUser"),
   dashboard: document.querySelector("#dashboard"),
   adminToken: document.querySelector("#adminToken"),
   connectButton: document.querySelector("#connectButton"),
@@ -27,6 +28,9 @@ const elements = {
   resumeConfirmation: document.querySelector("#resumeConfirmation"),
   resumeEquipmentHolder: document.querySelector("#resumeEquipmentHolder"),
   planResourcePreset: document.querySelector("#planResourcePreset"),
+  planRoute: document.querySelector("#planRoute"),
+  planEquipmentPreset: document.querySelector("#planEquipmentPreset"),
+  planEquipmentItems: document.querySelector("#planEquipmentItems"),
   planResourceItems: document.querySelector("#planResourceItems"),
   planResourceReserve: document.querySelector("#planResourceReserve"),
   planDungeonPreset: document.querySelector("#planDungeonPreset"),
@@ -50,6 +54,15 @@ const elements = {
   exitKeepPlayer: document.querySelector("#exitKeepPlayer"),
   globalDailyMonitor: document.querySelector("#globalDailyMonitor"),
   refreshAllInventory: document.querySelector("#refreshAllInventory")
+  ,userAdminPanel: document.querySelector("#userAdminPanel"),
+  newUsername: document.querySelector("#newUsername"),
+  newUserPassword: document.querySelector("#newUserPassword"),
+  newUserRole: document.querySelector("#newUserRole"),
+  saveUser: document.querySelector("#saveUser"),
+  assignDevice: document.querySelector("#assignDevice"),
+  assignUser: document.querySelector("#assignUser"),
+  assignDeviceButton: document.querySelector("#assignDeviceButton"),
+  userAdminStatus: document.querySelector("#userAdminStatus")
 };
 
 const devices = new Map();
@@ -60,6 +73,10 @@ const previewProfiles = {
   "720": { maxWidth: 720, fps: 1, label: "流畅" },
   "1280": { maxWidth: 1280, fps: 0.33, label: "高清" },
   "2560": { maxWidth: 2560, fps: 0.1, label: "超清" }
+};
+const equipmentPresets = {
+  ephis: "厄菲斯神剑,厄菲斯神铠,厄菲斯神冠,厄菲斯神靴,厄菲斯神链,厄菲斯神戒,厄菲斯神翼,厄菲斯神镯,厄菲斯神玉,厄菲斯神印",
+  lover: "柔情方巾·改,轻罗流萤衫·改,逢羡履·改,君我剑·改,佳人之恋·改,三生戒·改,比翼·改,相望镯·改,尾生之泪·改,龙神印记·庆"
 };
 const auctionPresets = {
   one: "曙光印记,进化宝石,强化丹A,强化丹B,天仙玉露",
@@ -75,9 +92,12 @@ let connectionGeneration = 0;
 let pendingSelect;
 let dailyPlan = { status: "idle", legIndex: -1, phase: "idle", history: [] };
 let planSchedule = { enabled: false, time: "04:00", options: {} };
+let signedInUser = null;
+let adminSnapshot = { users: [], deviceOwners: {} };
 const openAdvancedDevices = new Set();
 
-elements.adminToken.value = sessionStorage.getItem("playKeeperAdminToken") ?? "";
+elements.loginUser.value = sessionStorage.getItem("playKeeperUser") ?? "";
+elements.adminToken.value = sessionStorage.getItem("playKeeperCredential") ?? "";
 elements.connectButton.addEventListener("click", connect);
 elements.adminToken.addEventListener("keydown", (event) => { if (event.key === "Enter") connect(); });
 elements.disconnectButton.addEventListener("click", disconnect);
@@ -85,6 +105,18 @@ elements.refreshStatus.addEventListener("click", () => {
   for (const deviceId of devices.keys()) sendCommand(deviceId, "request_status", {});
 });
 elements.clearLog.addEventListener("click", () => elements.eventLog.replaceChildren());
+elements.saveUser.addEventListener("click", () => {
+  if (socket?.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ type: "admin.user.upsert",
+    username: elements.newUsername.value.trim(), password: elements.newUserPassword.value,
+    role: elements.newUserRole.value }));
+  elements.newUserPassword.value = "";
+});
+elements.assignDeviceButton.addEventListener("click", () => {
+  if (socket?.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ type: "admin.device.assign",
+    deviceId: elements.assignDevice.value, username: elements.assignUser.value }));
+});
 elements.closeSelect.addEventListener("click", closeSelectDialog);
 elements.startDailyPlan.addEventListener("click", () => {
   if (socket?.readyState !== WebSocket.OPEN) return addLog("控制台尚未连接");
@@ -137,6 +169,14 @@ elements.planDungeonPreset.addEventListener("change", () => {
 elements.planDungeonItems.addEventListener("input", () => {
   elements.planDungeonPreset.value = elements.planDungeonItems.value.trim() === defaultDungeonItems
     ? "default" : "custom";
+});
+elements.planEquipmentPreset.addEventListener("change", () => {
+  const preset = equipmentPresets[elements.planEquipmentPreset.value];
+  if (preset) elements.planEquipmentItems.value = preset;
+});
+elements.planEquipmentItems.addEventListener("input", () => {
+  elements.planEquipmentPreset.value = Object.entries(equipmentPresets)
+    .find(([, value]) => value === elements.planEquipmentItems.value.trim())?.[0] ?? "custom";
 });
 elements.startKeepPlayer.addEventListener("click", () => runKeepPlayerCommand("keep_player_start"));
 elements.exitKeepPlayer.addEventListener("click", () => runKeepPlayerCommand("keep_player_exit"));
@@ -228,8 +268,10 @@ document.addEventListener("visibilitychange", () => {
 
 function connect() {
   const token = elements.adminToken.value.trim();
-  if (!token) return showError("请输入管理密钥");
-  sessionStorage.setItem("playKeeperAdminToken", token);
+  const username = elements.loginUser.value.trim();
+  if (!token) return showError("请输入密码或管理密钥");
+  sessionStorage.setItem("playKeeperUser", username);
+  sessionStorage.setItem("playKeeperCredential", token);
   manuallyClosed = false;
   const generation = ++connectionGeneration;
   clearTimeout(reconnectTimer);
@@ -238,7 +280,9 @@ function connect() {
   showError("");
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";
   socket = new WebSocket(`${scheme}//${location.host}/control`);
-  socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "control.hello", token })));
+  socket.addEventListener("open", () => socket.send(JSON.stringify({
+    type: "control.hello", username, password: token, token
+  })));
   socket.addEventListener("message", (event) => {
     if (generation !== connectionGeneration) return;
     try { handleMessage(JSON.parse(event.data)); } catch { addLog("收到无法识别的服务器消息"); }
@@ -258,7 +302,7 @@ function disconnect() {
   manuallyClosed = true;
   connectionGeneration += 1;
   clearTimeout(reconnectTimer);
-  sessionStorage.removeItem("playKeeperAdminToken");
+  sessionStorage.removeItem("playKeeperCredential");
   devices.clear();
   previewFrames.clear();
   activePreviews.clear();
@@ -272,15 +316,17 @@ function disconnect() {
 function handleMessage(message) {
   switch (message.type) {
     case "control.accepted":
+      signedInUser = message.user ?? { username: "admin", role: "admin" };
       setConnectionState("online", "已连接");
       elements.loginPanel.classList.add("hidden");
       elements.dashboard.classList.remove("hidden");
       addLog("控制台已安全连接");
+      elements.userAdminPanel.classList.toggle("hidden", signedInUser.role !== "admin");
       break;
     case "control.rejected":
       manuallyClosed = true;
       showError("管理密钥错误");
-      sessionStorage.removeItem("playKeeperAdminToken");
+      sessionStorage.removeItem("playKeeperCredential");
       socket?.close();
       break;
     case "devices.snapshot":
@@ -342,7 +388,40 @@ function handleMessage(message) {
     case "plan.error":
       addLog(`每日计划无法启动：${message.message}`);
       break;
+    case "admin.snapshot":
+      adminSnapshot = message.payload ?? adminSnapshot;
+      renderAdminPanel();
+      break;
   }
+}
+
+function renderAdminPanel() {
+  if (signedInUser?.role !== "admin") return;
+  const selectedDevice = elements.assignDevice.value;
+  const selectedUser = elements.assignUser.value;
+  elements.assignDevice.replaceChildren();
+  for (const deviceId of devices.keys()) {
+    const option = document.createElement("option");
+    option.value = deviceId;
+    option.textContent = deviceId;
+    elements.assignDevice.append(option);
+  }
+  elements.assignUser.replaceChildren();
+  for (const user of adminSnapshot.users || []) {
+    if (user.disabled) continue;
+    const option = document.createElement("option");
+    option.value = user.username;
+    option.textContent = `${user.username}（${user.role === "admin" ? "管理员" : "普通用户"}）`;
+    elements.assignUser.append(option);
+  }
+  if ([...elements.assignDevice.options].some((o) => o.value === selectedDevice)) {
+    elements.assignDevice.value = selectedDevice;
+  }
+  if ([...elements.assignUser.options].some((o) => o.value === selectedUser)) {
+    elements.assignUser.value = selectedUser;
+  }
+  const assignments = Object.entries(adminSnapshot.deviceOwners || {}).length;
+  elements.userAdminStatus.textContent = `已有 ${adminSnapshot.users?.length || 0} 个用户，${assignments} 台设备已分配。`;
 }
 
 function renderDailyPlan() {
@@ -371,7 +450,10 @@ function renderDailyPlan() {
   if (needsHolderConfirmation) {
     const selected = elements.resumeEquipmentHolder.value || holder;
     elements.resumeEquipmentHolder.replaceChildren();
-    for (const label of ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7"]) {
+    const resumeLabels = [...new Set((dailyPlan.route || []).map((entry) => entry?.accountLabel)
+      .filter((label) => typeof label === "string" && label.length > 0))];
+    if (resumeLabels.length === 0) resumeLabels.push("hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7");
+    for (const label of resumeLabels) {
       const option = document.createElement("option");
       option.value = label;
       option.textContent = accountTarget(label) ? label : `${label}（离线）`;
@@ -403,24 +485,40 @@ function readPlanOptions() {
   const resourceReserveCount = Number(elements.planResourceReserve.value);
   const reportEmail = elements.planReportEmail.value.trim();
   const returnMap = elements.planReturnMap.value.trim();
+  const routeLabels = elements.planRoute.value.split(/\s*(?:→|->|,|，)\s*/)
+    .map((label) => label.trim()).filter(Boolean);
+  const equipmentItems = elements.planEquipmentItems.value.split(/[,，\n]/)
+    .map((item) => item.trim()).filter(Boolean);
   if (!resourceItems.length || resourceItems.length > 10) {
     addLog("道具组合需填写1–10项"); return null;
   }
   if (!dungeonItems.length || dungeonItems.length > 20) {
     addLog("副本组合需填写1–20项"); return null;
   }
+  if (routeLabels.length < 3 || routeLabels[0] !== "hao" || routeLabels.at(-1) !== "hao"
+      || new Set(routeLabels.slice(0, -1)).size !== routeLabels.length - 1
+      || routeLabels.slice(1, -1).some((label) => !/^hao[1-7]$/.test(label))) {
+    addLog("装备路线必须为 hao → 所选且不重复的小号 → hao"); return null;
+  }
+  if (equipmentItems.length !== 10 || new Set(equipmentItems).size !== 10) {
+    addLog("装备转移清单必须正好包含十件不重复装备"); return null;
+  }
   if (!returnMap) { addLog("请填写流程结束后的挂机副本"); return null; }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) {
     addLog("完成报告邮箱格式无效"); return null;
   }
   return { resourceItems, resourceReserveCount, dungeonItems, inventoryItems,
-    returnMap, reportEmail };
+    routeLabels, equipmentItems, returnMap, reportEmail };
 }
 
 function renderPlanSchedule() {
   elements.planScheduleEnabled.checked = planSchedule.enabled === true;
   elements.planScheduleTime.value = planSchedule.time || "04:00";
   const options = planSchedule.options ?? {};
+  if (Array.isArray(options.routeLabels)) elements.planRoute.value = options.routeLabels.join(" → ");
+  if (Array.isArray(options.equipmentItems)) elements.planEquipmentItems.value = options.equipmentItems.join(",");
+  elements.planEquipmentPreset.value = Object.entries(equipmentPresets)
+    .find(([, value]) => value === elements.planEquipmentItems.value.trim())?.[0] ?? "custom";
   if (Array.isArray(options.resourceItems)) elements.planResourceItems.value = options.resourceItems.join(",");
   if (Number.isInteger(options.resourceReserveCount)) {
     elements.planResourceReserve.value = String(options.resourceReserveCount);
@@ -565,8 +663,12 @@ function renderGlobalDailyMonitor() {
     const status = document.createElement("span");
     const transferDone = isToday(monitor.equipmentTransferLastRunAt);
     const dungeonDone = isToday(monitor.dungeonLastRunAt);
-    status.className = transferDone && dungeonDone ? "daily-ok" : "daily-pending";
-    status.textContent = `装备${transferDone ? "✓" : "—"} · 副本${dungeonDone ? "✓" : "—"}`;
+    const signInDone = isToday(monitor.signInLastRunAt);
+    const dailyTaskDone = isToday(monitor.dailyTaskLastRunAt);
+    status.className = transferDone && dungeonDone && signInDone && dailyTaskDone
+      ? "daily-ok" : "daily-pending";
+    status.textContent = `签到${signInDone ? "✓" : "—"} · 日常${dailyTaskDone ? "✓" : "—"}`
+      + ` · 装备${transferDone ? "✓" : "—"} · 副本${dungeonDone ? "✓" : "—"}`;
     const inventory = document.createElement("small");
     const counts = monitor.inventoryCounts && typeof monitor.inventoryCounts === "object"
       ? Object.entries(monitor.inventoryCounts).map(([name, count]) => `${name} ${count}`).join(" · ") : "";
@@ -608,6 +710,7 @@ function renderGlobalDailyMonitor() {
 function renderDevices() {
   elements.deviceCount.textContent = String(devices.size);
   renderGlobalControls();
+  renderAdminPanel();
   renderGlobalDailyMonitor();
   elements.deviceList.replaceChildren();
   if (devices.size === 0) {
@@ -699,26 +802,74 @@ function renderDevices() {
       previewFrames.delete(device.deviceId);
       showPreviewPlaceholder(card, "预览已停止");
     });
-    card.querySelector(".preview-image").addEventListener("click", (event) => {
-      const frame = previewFrames.get(device.deviceId);
-      if (!frame) return addLog("尚未收到可点击的手机画面");
-      const rectangle = event.currentTarget.getBoundingClientRect();
+    const previewImage = card.querySelector(".preview-image");
+    let dragStart = null;
+    const normalizedPoint = (event, frame) => {
+      const rectangle = previewImage.getBoundingClientRect();
       const imageRatio = frame.width / frame.height;
       const boxRatio = rectangle.width / rectangle.height;
       const contentWidth = boxRatio > imageRatio ? rectangle.height * imageRatio : rectangle.width;
       const contentHeight = boxRatio > imageRatio ? rectangle.height : rectangle.width / imageRatio;
       const contentLeft = rectangle.left + (rectangle.width - contentWidth) / 2;
       const contentTop = rectangle.top + (rectangle.height - contentHeight) / 2;
-      const x = (event.clientX - contentLeft) / contentWidth;
-      const y = (event.clientY - contentTop) / contentHeight;
-      if (x < 0 || x > 1 || y < 0 || y > 1) return addLog("请点击画面内容区域");
-      sendCommand(device.deviceId, "pointer_tap", {
-        accountIndex: frame.accountIndex,
-        x: Math.max(0, Math.min(1, x)),
-        y: Math.max(0, Math.min(1, y)),
-        frameSequence: frame.sequence
-      });
+      return { x: (event.clientX - contentLeft) / contentWidth,
+        y: (event.clientY - contentTop) / contentHeight };
+    };
+    const sendSwipe = (frame, start, end, durationMs = 360) => sendCommand(device.deviceId,
+      "pointer_swipe", { accountIndex: frame.accountIndex,
+        x1: Math.max(0, Math.min(1, start.x)), y1: Math.max(0, Math.min(1, start.y)),
+        x2: Math.max(0, Math.min(1, end.x)), y2: Math.max(0, Math.min(1, end.y)),
+        durationMs, frameSequence: frame.sequence });
+    const boostPreview = () => {
+      const frame = previewFrames.get(device.deviceId);
+      if (!frame || !activePreviews.has(device.deviceId)) return;
+      sendCommand(device.deviceId, "preview_start", {
+        accountIndex: frame.accountIndex, maxWidth: 720, fps: 3 });
+      clearTimeout(card.previewBoostTimer);
+      card.previewBoostTimer = setTimeout(() => {
+        if (activePreviews.has(device.deviceId)) sendCommand(device.deviceId, "preview_start", {
+          accountIndex: frame.accountIndex, maxWidth: 720, fps: 1 });
+      }, 10_000);
+    };
+    previewImage.addEventListener("pointerdown", (event) => {
+      const frame = previewFrames.get(device.deviceId);
+      if (!frame) return addLog("尚未收到可点击的手机画面");
+      const point = normalizedPoint(event, frame);
+      if (point.x < 0 || point.x > 1 || point.y < 0 || point.y > 1) {
+        return addLog("请在画面内容区域操作");
+      }
+      event.currentTarget.setPointerCapture(event.pointerId);
+      dragStart = { ...point, at: Date.now(), frame };
+      boostPreview();
     });
+    previewImage.addEventListener("pointerup", (event) => {
+      if (!dragStart) return;
+      const end = normalizedPoint(event, dragStart.frame);
+      const dx = end.x - dragStart.x;
+      const dy = end.y - dragStart.y;
+      const elapsed = Math.max(120, Math.min(1_500, Date.now() - dragStart.at));
+      if (Math.hypot(dx, dy) < 0.025) {
+        sendCommand(device.deviceId, "pointer_tap", { accountIndex: dragStart.frame.accountIndex,
+          x: dragStart.x, y: dragStart.y, frameSequence: dragStart.frame.sequence });
+      } else {
+        sendSwipe(dragStart.frame, dragStart, end, elapsed);
+      }
+      dragStart = null;
+    });
+    previewImage.addEventListener("pointercancel", () => { dragStart = null; });
+    for (const button of card.querySelectorAll("[data-swipe]")) {
+      button.addEventListener("click", () => {
+        const frame = previewFrames.get(device.deviceId);
+        if (!frame) return addLog("请先加载手机画面");
+        const directions = { up: [{ x: .5, y: .75 }, { x: .5, y: .25 }],
+          down: [{ x: .5, y: .25 }, { x: .5, y: .75 }],
+          left: [{ x: .78, y: .5 }, { x: .22, y: .5 }],
+          right: [{ x: .22, y: .5 }, { x: .78, y: .5 }] };
+        const [start, end] = directions[button.dataset.swipe];
+        boostPreview();
+        sendSwipe(frame, start, end, 420);
+      });
+    }
 
     const auctionEnabled = card.querySelector(".auction-enabled");
     const auctionHours = card.querySelector(".auction-hours");

@@ -150,6 +150,18 @@ test("device telemetry and browser command complete a round trip", async (contex
   assert.equal(tap.command, "pointer_tap");
   assert.equal(tap.parameters.x, 0.25);
 
+  const swipePromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "pointer_swipe",
+    parameters: { accountIndex: 2, x1: 0.5, y1: 0.8, x2: 0.5, y2: 0.2,
+      durationMs: 420, frameSequence: 7 }
+  }));
+  const swipe = await swipePromise;
+  assert.equal(swipe.command, "pointer_swipe");
+  assert.equal(swipe.parameters.durationMs, 420);
+
   const automationPromise = nextJson(device, "command.request");
   control.send(JSON.stringify({
     type: "command.send",
@@ -359,7 +371,7 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    ok: true, service: "play-keeper-relay", version: "1.10.8"
+    ok: true, service: "play-keeper-relay", version: "2.0.0-rc1"
   });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);

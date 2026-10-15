@@ -34,7 +34,7 @@ export function resolveResourceSweepRoute(deviceSummaries) {
     ["hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"]);
 }
 
-function resolveAccountRoute(deviceSummaries, labels) {
+export function resolveAccountRoute(deviceSummaries, labels) {
   const accounts = [];
   for (const device of deviceSummaries) {
     const reported = Array.isArray(device?.telemetry?.accounts) ? device.telemetry.accounts : [];
@@ -83,9 +83,8 @@ export class EightAccountPlan {
     const route = Array.isArray(savedState.route) ? savedState.route : [];
     this.state = { ...this.#idleState(), ...savedState,
       route: route.map((entry) => ({ ...entry })),
-      // A persisted v1.10.5 interruption may still contain the retired 情改 set.  Resuming an
-      // interrupted run after upgrading must always use the current, fixed ten-piece set.
-      items: [...EQUIPMENT_ITEMS],
+      items: Array.isArray(savedState.items) && savedState.items.length === 10
+        ? [...savedState.items] : [...EQUIPMENT_ITEMS],
       resourceItems: Array.isArray(savedState.resourceItems)
         ? [...savedState.resourceItems] : [...RESOURCE_ITEMS],
       inventoryItems: Array.isArray(savedState.inventoryItems)
@@ -111,6 +110,9 @@ export class EightAccountPlan {
   start(route, options = {}) {
     if (["running", "intervention"].includes(this.state.status)) throw new Error("多用户挂机已在运行");
     this.#validateRoute(route);
+    if (route.length < 3 || route[0].accountLabel !== "hao") {
+      throw new Error("新计划必须从 hao 开始并最终返回 hao");
+    }
     const price = options.price ?? 920;
     const items = options.items ?? EQUIPMENT_ITEMS;
     const resourceItems = options.resourceItems ?? RESOURCE_ITEMS;
@@ -122,8 +124,8 @@ export class EightAccountPlan {
     const reportEmail = options.reportEmail ?? "konghao0920@gmail.com";
     if (!Number.isInteger(price) || price < 1 || price > 9_999_999) throw new Error("交易单价无效");
     if (!Array.isArray(items) || items.length !== 10 || new Set(items).size !== 10
-        || EQUIPMENT_ITEMS.some((item) => !items.includes(item))) {
-      throw new Error("装备清单必须是指定的十件厄菲斯神套装");
+        || items.some((item) => typeof item !== "string" || !item.trim() || item.length > 30)) {
+      throw new Error("装备清单必须包含十件不重复装备");
     }
     if (!Array.isArray(resourceItems) || resourceItems.length < 1 || resourceItems.length > 10) {
       throw new Error("道具组合需包含1–10项");
@@ -622,9 +624,10 @@ export class EightAccountPlan {
 
   #validateRoute(route) {
     const labels = Array.isArray(route) ? route.map((entry) => entry?.accountLabel) : [];
-    if (REQUIRED_ROUTE.length !== labels.length
-        || !REQUIRED_ROUTE.every((label, index) => labels[index] === label)) {
-      throw new Error("账号路线无效");
+    if (labels.length < 2 || labels.length > 9 || labels.at(-1) !== "hao"
+        || new Set(labels.slice(0, -1)).size !== labels.length - 1
+        || labels.slice(0, -1).some((label) => !/^hao(?:[1-7])?$/.test(label))) {
+      throw new Error("账号路线必须最终返回 hao，且参与账号不能重复");
     }
     route.forEach((entry, index) => {
       if (!entry || typeof entry.deviceId !== "string" || !Number.isInteger(entry.accountIndex)
