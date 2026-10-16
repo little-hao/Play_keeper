@@ -8,6 +8,7 @@ import static org.junit.Assert.assertTrue;
 import java.util.AbstractMap;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -104,6 +105,34 @@ public class EquipmentTransferAuditTest {
                 EquipmentTransferAudit.PetScope.MAIN, actual, Collections.emptySet());
 
         assertTrue(result.allTransferred());
+    }
+
+    @Test
+    public void matchingIsExactAndOnlyAcceptsEnhancementOneThroughFifteen() {
+        assertTrue(EquipmentTransferAudit.matchesEquipmentName(
+                "君我剑§恋§", "君我剑§恋§(+15)"));
+        assertTrue(EquipmentTransferAudit.matchesEquipmentName(
+                "比翼§恋§", "比翼§恋§（＋1）"));
+        assertFalse(EquipmentTransferAudit.matchesEquipmentName(
+                "君我剑§恋§", "仿制君我剑§恋§(+15)"));
+        assertFalse(EquipmentTransferAudit.matchesEquipmentName(
+                "君我剑§恋§", "君我剑§恋§(+16)"));
+    }
+
+    @Test
+    public void ninePieceLoverRomanceSetCanBeAudited() {
+        List<String> expected = List.of("柔情方巾§恋§", "轻罗流萤衫§恋§", "逢羡履§恋§",
+                "君我剑§恋§", "佳人之恋§恋§", "三生戒§恋§", "比翼§恋§",
+                "相望镯§恋§", "尾生之泪§恋§");
+        String[] slots = {"头部", "身体", "脚部", "武器", "项链", "戒指", "翅膀", "手镯", "宝石"};
+        Map<String, String> actual = new LinkedHashMap<>();
+        for (int index = 0; index < expected.size(); index++) actual.put(slots[index], expected.get(index));
+        actual.put("武器", "君我剑§恋§(+15)");
+
+        EquipmentTransferAudit.Result result = EquipmentTransferAudit.evaluate(
+                EquipmentTransferAudit.PetScope.MAIN, expected, actual, Collections.emptySet());
+        assertTrue(result.allTransferred());
+        assertEquals(9, result.items().size());
     }
 
     private static Map<String, String> completeTargetSet() {

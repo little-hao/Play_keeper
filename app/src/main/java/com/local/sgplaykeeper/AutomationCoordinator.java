@@ -76,6 +76,9 @@ final class AutomationCoordinator {
             "进化宝石,曙光印记,强化丹A,强化丹B,天仙玉露";
     static final String DEFAULT_EQUIPMENT_ITEMS =
             String.join(",", EquipmentTransferAudit.targetNames());
+    static final String LOVER_ROMANCE_EQUIPMENT_ITEMS =
+            "柔情方巾§恋§,轻罗流萤衫§恋§,逢羡履§恋§,君我剑§恋§,佳人之恋§恋§,"
+                    + "三生戒§恋§,比翼§恋§,相望镯§恋§,尾生之泪§恋§";
     private static final Set<String> LEGACY_EQUIPMENT_ITEMS = new LinkedHashSet<>(Arrays.asList(
             "柔情方巾·改", "轻罗流萤衫·改", "逢羡履·改", "君我剑·改", "佳人之恋·改",
             "三生戒·改", "比翼·改", "相望镯·改", "尾生之泪·改", "龙神印记·庆"));
@@ -302,7 +305,7 @@ final class AutomationCoordinator {
             throw new IllegalArgumentException("至少需要一种拍卖道具");
         }
         String safeBuyer = sanitizeBuyer(buyer);
-        if (safeBuyer.isBlank()) {
+        if (enabled && safeBuyer.isBlank()) {
             throw new IllegalArgumentException("指定买家不能为空");
         }
         int safeHours = Math.max(1, Math.min(168, intervalHours));
@@ -641,6 +644,7 @@ final class AutomationCoordinator {
         automation.put("equipmentBatchNames", new JSONArray(state.equipmentBatchNames));
         automation.put("equipmentAllTransferred", EquipmentTransferAudit.evaluate(
                 EquipmentTransferAudit.PetScope.MAIN,
+                parseEquipmentItems(equipmentItemsText(accountIndex)),
                 state.equipmentEquippedBySlot, state.equipmentSkippedNames).allTransferred());
         account.put("automation", automation);
     }
@@ -915,6 +919,8 @@ final class AutomationCoordinator {
         String targets = new JSONArray(items).toString();
         String script = "(function(){const targets=new Set(" + targets + "),price=" + price + ";"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
+                + "const base=v=>(v||'').replace(/\\s+/g,'').trim().replace(/[（(][+＋](?:[1-9]|1[0-5])[）)]$/,'');"
+                + "const wanted=new Set(Array.from(targets).map(base));"
                 + "const box=Array.from(document.querySelectorAll('.cont-box'))"
                 + ".find(e=>visible(e)&&(e.textContent||'').includes('价格(金币)'));"
                 + "if(!box)return JSON.stringify({status:'not_ready'});"
@@ -922,7 +928,7 @@ final class AutomationCoordinator {
                 + "const c=Array.from(row.children);if(c.length<3)continue;"
                 + "const name=(c[1].textContent||'').trim();"
                 + "const rowPrice=parseInt((c[2].textContent||'').replace(/[^0-9]/g,''),10);"
-                + "if(targets.has(name)&&rowPrice===price&&!names.includes(name))names.push(name);}"
+                + "if(wanted.has(base(name))&&rowPrice===price&&!names.includes(name))names.push(name);}"
                 + "return JSON.stringify({status:'ok',names});})()";
         view.evaluateJavascript(script, encoded -> {
             JSONObject result = decodeObject(encoded);
@@ -1000,7 +1006,7 @@ final class AutomationCoordinator {
         String script = "(function(){const target=" + JSONObject.quote(itemName) + ";"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
                 + "const clean=v=>(v||'').replace(/\\s+/g,'').trim();"
-                + "const base=v=>clean(v).replace(/[（(][+＋]?\\d+[）)]$/,'');"
+                + "const base=v=>clean(v).replace(/[（(][+＋](?:[1-9]|1[0-5])[）)]$/,'');"
                 + "const boxes=Array.from(document.querySelectorAll('.cont-box'));"
                 + "const box=boxes.find(e=>(e.textContent||'').includes('装备数：'));"
                 + "if(!box)return JSON.stringify({status:'not_ready'});"
@@ -1058,7 +1064,7 @@ final class AutomationCoordinator {
                 + "const text=e=>(e?.textContent||'').replace(/\\s+/g,'').trim();"
                 + "const label=e=>((e?.getAttribute?.('name')||e?.getAttribute?.('aria-label')||"
                 + "e?.getAttribute?.('title')||text(e))).replace(/\\s+/g,'').trim();"
-                + "const base=v=>(v||'').replace(/\\s+/g,'').trim().replace(/[（(][+＋]?\\d+[）)]$/,'');"
+                + "const base=v=>(v||'').replace(/\\s+/g,'').trim().replace(/[（(][+＋](?:[1-9]|1[0-5])[）)]$/,'');"
                 + "const modal=Array.from(document.querySelectorAll('.sell-modal,[role=dialog],.uni-popup__wrapper'))"
                 + ".find(visible);if(modal)return JSON.stringify({status:'dialog_open'});"
                 + "const boxes=Array.from(document.querySelectorAll('.cont-box')).filter(visible);"
@@ -1163,7 +1169,7 @@ final class AutomationCoordinator {
         if (stopped || !states[accountIndex].busy
                 || !"equipment_sell".equals(states[accountIndex].task)) return;
         String script = "(function(){const target=" + JSONObject.quote(itemName) + ";"
-                + "const base=v=>(v||'').replace(/\\s+/g,'').trim().replace(/[（(][+＋]?\\d+[）)]$/,'');"
+                + "const base=v=>(v||'').replace(/\\s+/g,'').trim().replace(/[（(][+＋](?:[1-9]|1[0-5])[）)]$/,'');"
                 + "const modal=Array.from(document.querySelectorAll('.sell-modal')).find(e=>e.getClientRects().length>0);"
                 + "const box=Array.from(document.querySelectorAll('.cont-box'))"
                 + ".find(e=>(e.textContent||'').includes('装备数：'));"
@@ -1280,7 +1286,7 @@ final class AutomationCoordinator {
         String names = new JSONArray(state.equipmentBatchNames).toString();
         String script = "(function(){const names=new Set(" + names + "),price=" + price + ";"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
-                + "const base=v=>(v||'').replace(/\\s+/g,'').trim().replace(/[（(][+＋]?\\d+[）)]$/,'');"
+                + "const base=v=>(v||'').replace(/\\s+/g,'').trim().replace(/[（(][+＋](?:[1-9]|1[0-5])[）)]$/,'');"
                 + "const wanted=new Set(Array.from(names).map(base));"
                 + "const box=Array.from(document.querySelectorAll('.cont-box'))"
                 + ".find(e=>visible(e)&&(e.textContent||'').includes('价格(金币)'));"
@@ -1370,7 +1376,7 @@ final class AutomationCoordinator {
         int price = equipmentPrice(accountIndex);
         String script = "(function(){const target=" + JSONObject.quote(itemName)
                 + ",price=" + price + ";const visible=e=>e&&e.getClientRects().length>0;"
-                + "const base=v=>(v||'').replace(/\\s+/g,'').trim().replace(/[（(][+＋]?\\d+[）)]$/,'');"
+                + "const base=v=>(v||'').replace(/\\s+/g,'').trim().replace(/[（(][+＋](?:[1-9]|1[0-5])[）)]$/,'');"
                 + "const box=Array.from(document.querySelectorAll('.cont-box'))"
                 + ".find(e=>(e.textContent||'').includes('价格(金币)'));"
                 + "if(!box)return JSON.stringify({status:'not_ready'});"
@@ -1448,7 +1454,7 @@ final class AutomationCoordinator {
         if (stopped || !states[accountIndex].busy) return;
         int price = equipmentPrice(accountIndex);
         String script = "(function(){const target=" + JSONObject.quote(itemName)
-                + ",price=" + price + ";const base=v=>(v||'').replace(/\\s+/g,'').trim().replace(/[（(][+＋]?\\d+[）)]$/,'');"
+                + ",price=" + price + ";const base=v=>(v||'').replace(/\\s+/g,'').trim().replace(/[（(][+＋](?:[1-9]|1[0-5])[）)]$/,'');"
                 + "const modal=Array.from(document.querySelectorAll('.sell-modal'))"
                 + ".find(e=>e.getClientRects().length>0"
                 + "&&(e.querySelector('.modal-title')?.textContent||'').trim()==='购买装备确认');"
@@ -1525,6 +1531,10 @@ final class AutomationCoordinator {
         List<String> items = parseAuctionItems(auctionItemsText(accountIndex));
         if (items.isEmpty()) {
             finish(accountIndex, "auction", "error", "拍卖道具列表为空", manual);
+            return;
+        }
+        if (auctionBuyer(accountIndex).isBlank()) {
+            finish(accountIndex, "auction", "error", "请先填写指定买家", manual);
             return;
         }
         state.busy = true;
@@ -2222,6 +2232,7 @@ final class AutomationCoordinator {
         String targets = new JSONArray(items).toString();
         String script = "(function(){const targets=" + targets + ";"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
+                + "const base=v=>(v||'').replace(/\\s+/g,'').trim().replace(/[（(][+＋](?:[1-9]|1[0-5])[）)]$/,'');"
                 + "const close=Array.from(document.querySelectorAll('.close-btn')).find(visible);"
                 + "if(!close){const open=document.querySelector('[name=\"装备\"]');"
                 + "if(!visible(open))return JSON.stringify({status:'panel_missing'});"
@@ -2229,7 +2240,7 @@ final class AutomationCoordinator {
                 + "const rows=Array.from(document.querySelectorAll('.item'));"
                 + "const slotNames=['头部','身体','脚部','武器','项链','戒指','翅膀','手镯','宝石','道具'];"
                 + "for(const target of targets){"
-                + "const row=rows.find(r=>Array.from(r.children).some(c=>(c.textContent||'').trim()===target));"
+                + "const row=rows.find(r=>Array.from(r.children).some(c=>base(c.textContent)===base(target)));"
                 + "if(!row)continue;"
                 + "const slot=Array.from(row.children).map(c=>(c.textContent||'').trim())"
                 + ".find(value=>slotNames.includes(value))||'';"
@@ -2256,7 +2267,7 @@ final class AutomationCoordinator {
             if ("checked".equals(status)) {
                 RuntimeState state = states[accountIndex];
                 state.equipmentEquippedBySlot.clear();
-                List<String> expectedNames = EquipmentTransferAudit.targetNames();
+                List<String> expectedNames = new ArrayList<>(items);
                 String[] slots = {"头部", "身体", "脚部", "武器", "项链",
                         "戒指", "翅膀", "手镯", "宝石", "道具"};
                 for (int index = 0; index < slots.length && index < expectedNames.size(); index++) {
@@ -2264,6 +2275,7 @@ final class AutomationCoordinator {
                 }
                 EquipmentTransferAudit.Result audit = EquipmentTransferAudit.evaluate(
                         EquipmentTransferAudit.PetScope.MAIN,
+                        expectedNames,
                         state.equipmentEquippedBySlot,
                         state.equipmentSkippedNames);
                 int filled = result.optInt("filled", -1);
@@ -2271,10 +2283,10 @@ final class AutomationCoordinator {
                 if (!allPurchased || !state.equipmentSkippedNames.isEmpty() || !audit.allTransferred()
                         || filled < requiredSlots || requiredSlots <= 0) {
                     finish(accountIndex, "equipment_buy", "error",
-                            "脱装再穿装后仍未通过十件厄菲斯神套装滚动复核，已停止副本操作", manual);
+                            "脱装再穿装后仍未通过" + requiredSlots + "件目标套装复核，已停止副本操作", manual);
                     return;
                 }
-                updateState(accountIndex, "先脱后穿完成，装备栏滚动检查十件厄菲斯神套装全部穿戴");
+                updateState(accountIndex, "先脱后穿完成，装备栏检查" + requiredSlots + "件目标套装全部穿戴");
                 preferences.edit().putLong(PREF_EQUIPMENT_TRANSFER_LAST + accountIndex,
                         System.currentTimeMillis()).apply();
                 handler.postDelayed(() -> returnToAfkForDungeons(
@@ -2285,7 +2297,7 @@ final class AutomationCoordinator {
                         accountIndex, view, items, manual, attempt + 1), 1_500L);
             } else {
                 finish(accountIndex, "equipment_buy", "error",
-                        "无法完成先脱后穿及装备栏十件厄菲斯神套装复核", manual);
+                        "无法完成先脱后穿及装备栏" + requiredSlots + "件目标套装复核", manual);
             }
         });
     }
@@ -3614,13 +3626,13 @@ final class AutomationCoordinator {
 
     private String sanitizeBuyer(String value) {
         if (value == null) return "";
-        String safe = value.replaceAll("[^A-Za-z0-9_.-]", "").trim();
+        String safe = value.replaceAll("[\\r\\n\\t→,，]", "").trim();
         return safe.length() > 30 ? safe.substring(0, 30) : safe;
     }
 
     private String sanitizePlayerId(String value) {
         if (value == null) return "";
-        String safe = value.replaceAll("[^A-Za-z0-9@_.-]", "").trim();
+        String safe = value.replaceAll("[\\r\\n\\t→,，]", "").trim();
         return safe.length() > 30 ? safe.substring(0, 30) : safe;
     }
 

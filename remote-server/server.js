@@ -5,8 +5,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
-import { EightAccountPlan, resolveAccountRoute,
-  resolveResourceSweepRoute } from "./eight-account-plan.js";
+import { EightAccountPlan, resolveAccountRoute } from "./eight-account-plan.js";
 import { sendCompletionReport } from "./email-report.js";
 import { AuthStore } from "./auth-store.js";
 
@@ -80,7 +79,7 @@ const commandValidators = {
       && parameters.items.every((item) => typeof item === "string"
         && item.trim().length >= 1 && item.trim().length <= 30)
       && typeof parameters.buyer === "string"
-      && /^[A-Za-z0-9_.-]{1,30}$/.test(parameters.buyer)
+      && validAccountLabel(parameters.buyer, true)
       && (parameters.price === undefined || (Number.isInteger(parameters.price)
         && parameters.price >= 1 && parameters.price <= 9_999_999))
       && (parameters.reserveCount === undefined
@@ -143,7 +142,7 @@ const commandValidators = {
       && parameters.price >= 1
       && parameters.price <= 9_999_999
       && typeof parameters.buyer === "string"
-      && (/^[A-Za-z0-9@_.-]{0,30}$/).test(parameters.buyer);
+      && validAccountLabel(parameters.buyer, true);
   },
   run_equipment_sell: accountParameters,
   run_equipment_buy: accountParameters,
@@ -172,6 +171,13 @@ function validItemList(items, maximum) {
     && items.every((item) => typeof item === "string"
       && item.trim().length >= 1 && item.trim().length <= 30
       && !/[\r\n\t]/.test(item));
+}
+
+function validAccountLabel(value, allowEmpty = false) {
+  if (typeof value !== "string") return false;
+  const label = value.trim();
+  if (!label) return allowEmpty;
+  return label.length <= 30 && !/[\r\n\t→,，]/.test(label);
 }
 
 function validLegacyItem(item) {
@@ -234,7 +240,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.0-rc1" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.0-rc2" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -287,22 +293,21 @@ function normalizePlanOptions(value) {
     throw new Error("道具保留数量只能是0或1");
   }
   if (!validItemList(dungeonItems, 20)) throw new Error("副本组合无效");
-  if (routeLabels.length < 3 || routeLabels.length > 9 || routeLabels[0] !== "hao"
-      || routeLabels.at(-1) !== "hao"
+  if (routeLabels.length < 3 || routeLabels.length > 9
+      || routeLabels[0] !== routeLabels.at(-1)
       || new Set(routeLabels.slice(0, -1)).size !== routeLabels.length - 1
-      || routeLabels.slice(1, -1).some((label) => !/^hao[1-7]$/.test(label))) {
-    throw new Error("装备路线必须为 hao → 所选小号 → hao，且账号不能重复");
+      || routeLabels.slice(0, -1).some((label) => !validAccountLabel(label))) {
+    throw new Error("装备路线必须首尾为同一主号，且参与账号不能重复");
   }
   if (equipmentItems !== undefined
-      && (!validItemList(equipmentItems, 10) || equipmentItems.length !== 10
-        || new Set(equipmentItems).size !== 10)) {
-    throw new Error("装备套装必须包含十件不重复装备");
+      && (!validItemList(equipmentItems, 10) || new Set(equipmentItems).size !== equipmentItems.length)) {
+    throw new Error("装备套装必须包含1–10件不重复装备");
   }
   const returnMap = typeof source.returnMap === "string" ? source.returnMap.trim() : "圣兽云殿";
   if (!returnMap || returnMap.length > 30) throw new Error("返回挂机副本无效");
   const reportEmail = typeof source.reportEmail === "string"
-    ? source.reportEmail.trim() : "konghao0920@gmail.com";
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) throw new Error("报告邮箱格式无效");
+    ? source.reportEmail.trim() : "";
+  if (reportEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) throw new Error("报告邮箱格式无效");
   return { resourceItems, resourceReserveCount, inventoryItems,
     dungeonItems, routeLabels, equipmentItems, returnMap, reportEmail };
 }
@@ -321,6 +326,26 @@ function normalizePlanSchedule(value, previous = defaultPlanSchedule()) {
     lastAttemptAt: Number(source.lastAttemptAt ?? previous.lastAttemptAt) || 0,
     lastError: typeof source.lastError === "string" ? source.lastError.slice(0, 160) : "",
     options: normalizePlanOptions(source.options ?? previous.options) };
+}
+
+function normalizeWorkspace(value, schedule) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const routeLabels = schedule.options.routeLabels;
+  const accountLabels = [...new Set(routeLabels.slice(0, -1))];
+  const field = (name) => typeof source[name] === "string" ? source[name].trim() : "";
+  const quickAuctionAccount = field("quickAuctionAccount");
+  const quickHangAccount = field("quickHangAccount");
+  const auctionBuyer = field("auctionBuyer");
+  const equipmentBuyer = field("equipmentBuyer");
+  const quickHangMap = field("quickHangMap") || schedule.options.returnMap;
+  for (const label of [quickAuctionAccount, quickHangAccount, auctionBuyer, equipmentBuyer]) {
+    if (!validAccountLabel(label, true)) throw new Error("账号名称格式无效");
+  }
+  if (!quickHangMap || quickHangMap.length > 30 || /[\r\n\t]/.test(quickHangMap)) {
+    throw new Error("快捷挂机副本名称无效");
+  }
+  return { accountLabels, mainAccount: routeLabels[0], quickAuctionAccount,
+    quickHangAccount, quickHangMap, auctionBuyer, equipmentBuyer };
 }
 
 function loadPlanSchedule(file, logger) {
@@ -487,9 +512,11 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   }
 
   function sendSchedule(controller) {
-    if (controller.user?.role === "admin") {
-      sendJson(controller, { type: "plan.schedule", payload: { ...planSchedule } });
-    }
+    const settings = authStore.getSettings(controller.user);
+    const schedule = settings.planSchedule
+      ? normalizePlanSchedule(settings.planSchedule) : planSchedule;
+    sendJson(controller, { type: "user.settings", payload: settings });
+    sendJson(controller, { type: "plan.schedule", payload: schedule });
   }
 
   function accessibleSummaries(user) {
@@ -520,7 +547,9 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
 
   function startResourceSweep(options, user = { role: "admin" }) {
     const summaries = accessibleSummaries(user);
-    const route = resolveResourceSweepRoute(summaries);
+    const mainAccount = options.routeLabels[0];
+    const routeLabels = [...options.routeLabels.slice(1, -1), mainAccount];
+    const route = resolveAccountRoute(summaries, routeLabels);
     return eightAccountPlan.startResourceSweep(route, {
       resourceItems: Array.isArray(options.resourceItems) ? options.resourceItems : undefined,
       resourceReserveCount: options.resourceReserveCount,
@@ -540,9 +569,9 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
       try { message = JSON.parse(buffer.toString()); } catch { return socket.close(1007, "invalid json"); }
 
       if (!socket.authenticated) {
-        if (message.type !== "device.hello"
-            || !safeEqual(message.token, deviceToken)
-            || typeof message.deviceId !== "string"
+        const deviceOwner = message.type === "device.hello"
+          ? authStore.authenticateDeviceToken(message.token, deviceToken) : null;
+        if (!deviceOwner || typeof message.deviceId !== "string"
             || !/^PK-[A-Z0-9]{6,32}$/.test(message.deviceId)) {
           sendJson(socket, { type: "device.rejected", message: "authentication failed" });
           return socket.close(1008, "authentication failed");
@@ -552,6 +581,8 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         if (previous && previous.socket !== socket) previous.socket.close(4001, "new connection");
         socket.authenticated = true;
         socket.deviceId = message.deviceId;
+        socket.user = deviceOwner;
+        authStore.claimDevice(message.deviceId, deviceOwner);
         const entry = {
           deviceId: message.deviceId,
           appVersion: String(message.appVersion ?? "unknown").slice(0, 40),
@@ -647,7 +678,8 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
       try { message = JSON.parse(buffer.toString()); } catch { return socket.close(1007, "invalid json"); }
       if (!socket.authenticated) {
         const user = message.type === "control.hello"
-          ? authStore.authenticate(message.username, message.password, message.token) : null;
+          ? authStore.authenticate(message.username, message.password, message.token,
+            message.deviceToken) : null;
         if (!user) {
           sendJson(socket, { type: "control.rejected", message: "authentication failed" });
           return socket.close(1008, "authentication failed");
@@ -678,7 +710,8 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         if (socket.user?.role !== "admin") return sendJson(socket,
           { type: "command.error", message: "仅管理员可管理用户" });
         try {
-          authStore.upsertUser(message.username, message.password, message.role);
+          authStore.upsertUser(message.username, message.password, message.role,
+            message.deviceToken, message.accountLabels);
           sendJson(socket, { type: "admin.snapshot", payload: authStore.publicSnapshot() });
         } catch (error) {
           sendJson(socket, { type: "command.error", message: String(error?.message || error) });
@@ -719,18 +752,22 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         return;
       }
       if (message.type === "plan.schedule.update") {
-        if (socket.user?.role !== "admin") {
-          sendJson(socket, { type: "plan.error", message: "每日定时仅管理员可修改" });
-          return;
-        }
         try {
-          planSchedule = normalizePlanSchedule(message.payload, planSchedule);
-          savePlanSchedule(scheduleFile, planSchedule, logger);
-          for (const controller of controllers) {
-            if (controller.user?.role === "admin") {
-              sendJson(controller, { type: "plan.schedule", payload: { ...planSchedule } });
-            }
+          const previous = authStore.getSettings(socket.user).planSchedule || defaultPlanSchedule();
+          const userSchedule = normalizePlanSchedule(message.payload, previous);
+          const workspace = normalizeWorkspace(message.payload?.workspace, userSchedule);
+          let settings;
+          if (socket.user?.legacy) {
+            planSchedule = userSchedule;
+            savePlanSchedule(scheduleFile, planSchedule, logger);
+            settings = { ...authStore.getSettings(socket.user), ...workspace,
+              planSchedule: userSchedule };
+          } else {
+            settings = authStore.updateSettings(socket.user,
+              { ...workspace, planSchedule: userSchedule });
           }
+          sendJson(socket, { type: "user.settings", payload: settings });
+          sendJson(socket, { type: "plan.schedule", payload: userSchedule });
         } catch (error) {
           sendJson(socket, { type: "plan.error", message: String(error?.message || error) });
         }
@@ -845,24 +882,32 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   }, 1_000);
   planTicker.unref();
   const scheduleTicker = setInterval(() => {
-    if (!planSchedule.enabled || ["running", "intervention"].includes(
-      eightAccountPlan.snapshot().status)) return;
-    const local = zonedClock(Date.now(), planSchedule.timeZone);
-    if (local.minutes < timeToMinutes(planSchedule.time)
-        || planSchedule.lastRunDate === local.date
-        || Date.now() - Number(planSchedule.lastAttemptAt || 0) < 5 * 60_000) return;
-    planSchedule.lastAttemptAt = Date.now();
-    try {
-      const payload = startConfiguredPlan(planSchedule.options);
-      planSchedule.lastRunDate = local.date;
-      planSchedule.lastError = "";
-      savePlanSchedule(scheduleFile, planSchedule, logger);
-      broadcast({ type: "plan.schedule", payload: { ...planSchedule } });
-      publishPlan(payload);
-    } catch (error) {
-      planSchedule.lastError = String(error?.message || error).slice(0, 160);
-      savePlanSchedule(scheduleFile, planSchedule, logger);
-      broadcast({ type: "plan.schedule", payload: { ...planSchedule } });
+    if (["running", "intervention"].includes(eightAccountPlan.snapshot().status)) return;
+    for (const user of authStore.scheduledUsers()) {
+      const settings = authStore.getSettings(user);
+      let schedule;
+      try { schedule = normalizePlanSchedule(settings.planSchedule); } catch { continue; }
+      if (!schedule.enabled) continue;
+      const local = zonedClock(Date.now(), schedule.timeZone);
+      if (local.minutes < timeToMinutes(schedule.time)
+          || schedule.lastRunDate === local.date
+          || Date.now() - Number(schedule.lastAttemptAt || 0) < 5 * 60_000) continue;
+      schedule.lastAttemptAt = Date.now();
+      try {
+        const payload = startConfiguredPlan(schedule.options, user);
+        schedule.lastRunDate = local.date;
+        schedule.lastError = "";
+        publishPlan(payload);
+      } catch (error) {
+        schedule.lastError = String(error?.message || error).slice(0, 160);
+      }
+      authStore.updateSettings(user, { planSchedule: schedule });
+      for (const controller of controllers) {
+        if (controller.user?.id === user.id) {
+          sendJson(controller, { type: "plan.schedule", payload: schedule });
+        }
+      }
+      break;
     }
   }, 15_000);
   scheduleTicker.unref();

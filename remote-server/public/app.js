@@ -1,6 +1,8 @@
 const elements = {
   loginPanel: document.querySelector("#loginPanel"),
   loginUser: document.querySelector("#loginUser"),
+  loginDeviceToken: document.querySelector("#loginDeviceToken"),
+  rememberLogin: document.querySelector("#rememberLogin"),
   dashboard: document.querySelector("#dashboard"),
   adminToken: document.querySelector("#adminToken"),
   connectButton: document.querySelector("#connectButton"),
@@ -43,6 +45,9 @@ const elements = {
   savePlanSchedule: document.querySelector("#savePlanSchedule"),
   planScheduleStatus: document.querySelector("#planScheduleStatus"),
   quickAuctionAccount: document.querySelector("#quickAuctionAccount"),
+  quickBuyerAccount: document.querySelector("#quickBuyerAccount"),
+  userAccountOptions: document.querySelector("#userAccountOptions"),
+  hangAccountOptions: document.querySelector("#hangAccountOptions"),
   quickAuctionToMain: document.querySelector("#quickAuctionToMain"),
   quickMainBuy: document.querySelector("#quickMainBuy"),
   quickSweepAll: document.querySelector("#quickSweepAll"),
@@ -57,6 +62,8 @@ const elements = {
   ,userAdminPanel: document.querySelector("#userAdminPanel"),
   newUsername: document.querySelector("#newUsername"),
   newUserPassword: document.querySelector("#newUserPassword"),
+  newUserDeviceToken: document.querySelector("#newUserDeviceToken"),
+  newUserAccounts: document.querySelector("#newUserAccounts"),
   newUserRole: document.querySelector("#newUserRole"),
   saveUser: document.querySelector("#saveUser"),
   assignDevice: document.querySelector("#assignDevice"),
@@ -76,7 +83,8 @@ const previewProfiles = {
 };
 const equipmentPresets = {
   ephis: "厄菲斯神剑,厄菲斯神铠,厄菲斯神冠,厄菲斯神靴,厄菲斯神链,厄菲斯神戒,厄菲斯神翼,厄菲斯神镯,厄菲斯神玉,厄菲斯神印",
-  lover: "柔情方巾·改,轻罗流萤衫·改,逢羡履·改,君我剑·改,佳人之恋·改,三生戒·改,比翼·改,相望镯·改,尾生之泪·改,龙神印记·庆"
+  lover: "柔情方巾·改,轻罗流萤衫·改,逢羡履·改,君我剑·改,佳人之恋·改,三生戒·改,比翼·改,相望镯·改,尾生之泪·改,龙神印记·庆",
+  lover_romance: "柔情方巾§恋§,轻罗流萤衫§恋§,逢羡履§恋§,君我剑§恋§,佳人之恋§恋§,三生戒§恋§,比翼§恋§,相望镯§恋§,尾生之泪§恋§"
 };
 const auctionPresets = {
   one: "曙光印记,进化宝石,强化丹A,强化丹B,天仙玉露",
@@ -93,11 +101,26 @@ let pendingSelect;
 let dailyPlan = { status: "idle", legIndex: -1, phase: "idle", history: [] };
 let planSchedule = { enabled: false, time: "04:00", options: {} };
 let signedInUser = null;
+let userSettings = { accountLabels: [], mainAccount: "", quickAuctionAccount: "",
+  quickHangAccount: "", quickHangMap: "圣兽云殿", auctionBuyer: "", equipmentBuyer: "" };
 let adminSnapshot = { users: [], deviceOwners: {} };
 const openAdvancedDevices = new Set();
 
 elements.loginUser.value = sessionStorage.getItem("playKeeperUser") ?? "";
 elements.adminToken.value = sessionStorage.getItem("playKeeperCredential") ?? "";
+elements.loginDeviceToken.value = sessionStorage.getItem("playKeeperDeviceToken") ?? "";
+let savedLogins = {};
+try { savedLogins = JSON.parse(localStorage.getItem("playKeeperLoginProfiles") || "{}"); }
+catch { localStorage.removeItem("playKeeperLoginProfiles"); }
+function loadSavedLogin() {
+  const saved = savedLogins[elements.loginUser.value.trim()];
+  if (!saved) return;
+  elements.adminToken.value = saved.password || "";
+  elements.loginDeviceToken.value = saved.deviceToken || "";
+  elements.rememberLogin.checked = true;
+}
+elements.loginUser.addEventListener("change", loadSavedLogin);
+if (!elements.adminToken.value) loadSavedLogin();
 elements.connectButton.addEventListener("click", connect);
 elements.adminToken.addEventListener("keydown", (event) => { if (event.key === "Enter") connect(); });
 elements.disconnectButton.addEventListener("click", disconnect);
@@ -109,8 +132,10 @@ elements.saveUser.addEventListener("click", () => {
   if (socket?.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify({ type: "admin.user.upsert",
     username: elements.newUsername.value.trim(), password: elements.newUserPassword.value,
-    role: elements.newUserRole.value }));
+    role: elements.newUserRole.value, deviceToken: elements.newUserDeviceToken.value.trim(),
+    accountLabels: elements.newUserAccounts.value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean) }));
   elements.newUserPassword.value = "";
+  elements.newUserDeviceToken.value = "";
 });
 elements.assignDeviceButton.addEventListener("click", () => {
   if (socket?.readyState !== WebSocket.OPEN) return;
@@ -149,7 +174,11 @@ elements.savePlanSchedule.addEventListener("click", () => {
   socket.send(JSON.stringify({ type: "plan.schedule.update", payload: {
     enabled: elements.planScheduleEnabled.checked,
     time: elements.planScheduleTime.value,
-    options
+    options,
+    workspace: { quickAuctionAccount: elements.quickAuctionAccount.value.trim(),
+      quickHangAccount: elements.quickHangAccount.value.trim(),
+      quickHangMap: elements.quickHangMap.value.trim(),
+      auctionBuyer: elements.quickBuyerAccount.value.trim(), equipmentBuyer: "" }
   } }));
 });
 elements.planResourcePreset.addEventListener("change", () => {
@@ -184,7 +213,8 @@ elements.refreshAllInventory.addEventListener("click", () => {
   const items = planInventoryItems();
   if (!items) return;
   let refreshed = 0;
-  for (const label of ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7"]) {
+  const labels = configuredAccountLabels();
+  for (const label of labels) {
     const target = accountTarget(label);
     if (!target) continue;
     sendCommand(target.deviceId, "configure_inventory_monitor", {
@@ -192,62 +222,69 @@ elements.refreshAllInventory.addEventListener("click", () => {
     sendCommand(target.deviceId, "run_inventory_snapshot", { accountIndex: target.accountIndex });
     refreshed++;
   }
-  addLog(`已按统一清单刷新 ${refreshed}/8 个在线账号背包`);
+  addLog(`已按统一清单刷新 ${refreshed}/${labels.length} 个在线账号背包`);
 });
 elements.quickAuctionToMain.addEventListener("click", () => {
   const target = accountTarget(elements.quickAuctionAccount.value);
   if (!target) return addLog(`账号 ${elements.quickAuctionAccount.value || "--"} 当前不在线`);
   const items = planResourceItems();
   if (!items) return;
+  const buyer = elements.quickBuyerAccount.value.trim();
+  if (!buyer) return addLog("请先填写指定买家");
   const returnMap = elements.planReturnMap.value.trim() || "圣兽云殿";
   sendCommand(target.deviceId, "configure_auto_auction", { accountIndex: target.accountIndex,
-    enabled: false, items, buyer: "hao", price: 920, intervalHours: 24,
+    enabled: false, items, buyer, price: 920, intervalHours: 24,
     reserveCount: Number(elements.planResourceReserve.value) });
   sendCommand(target.deviceId, "configure_return_hang", {
     accountIndex: target.accountIndex, map: returnMap });
   sendCommand(target.deviceId, "switch_account", { accountIndex: target.accountIndex });
   setTimeout(() => sendCommand(target.deviceId, "run_auto_auction",
     { accountIndex: target.accountIndex }), 700);
-  addLog(`${target.label} 已启动组合道具拍卖，指定买家 hao`);
+  addLog(`${target.label} 已启动组合道具拍卖，指定买家 ${buyer}`);
 });
 elements.quickMainBuy.addEventListener("click", () => {
-  const target = accountTarget("hao");
-  if (!target) return addLog("主号 hao 当前不在线");
+  const buyer = elements.quickBuyerAccount.value.trim();
+  if (!buyer) return addLog("请先填写指定买家");
+  const target = accountTarget(buyer);
+  if (!target) return addLog(`主号 ${buyer} 当前不在线`);
   const items = planResourceItems();
   if (!items) return;
   const returnMap = elements.planReturnMap.value.trim() || "圣兽云殿";
   sendCommand(target.deviceId, "configure_auto_auction", { accountIndex: target.accountIndex,
-    enabled: false, items, buyer: "hao", price: 920, intervalHours: 24,
+    enabled: false, items, buyer, price: 920, intervalHours: 24,
     reserveCount: Number(elements.planResourceReserve.value) });
   sendCommand(target.deviceId, "configure_return_hang", {
     accountIndex: target.accountIndex, map: returnMap });
   sendCommand(target.deviceId, "switch_account", { accountIndex: target.accountIndex });
   setTimeout(() => sendCommand(target.deviceId, "run_auction_buy",
     { accountIndex: target.accountIndex }), 700);
-  addLog("hao 已启动全部920金币组合道具购买");
+  addLog(`${buyer} 已启动全部920金币组合道具购买`);
 });
 elements.quickSweepAll.addEventListener("click", () => {
   if (socket?.readyState !== WebSocket.OPEN) return addLog("控制台尚未连接");
-  const resourceItems = planResourceItems();
-  if (!resourceItems) return;
+  const options = readPlanOptions();
+  if (!options) return;
   socket.send(JSON.stringify({ type: "plan.resource_sweep.start", options: {
-    resourceItems, resourceReserveCount: Number(elements.planResourceReserve.value),
-    returnMap: elements.planReturnMap.value.trim() || "圣兽云殿"
+    resourceItems: options.resourceItems,
+    resourceReserveCount: options.resourceReserveCount,
+    returnMap: elements.planReturnMap.value.trim() || "圣兽云殿",
+    routeLabels: options.routeLabels
   } }));
-  addLog("已启动 hao1–hao7 逐号拍卖、hao统一购买及全部账号回挂机副本");
+  addLog("已启动路线卖方逐号拍卖、主号统一购买及全部账号回挂机副本");
 });
 elements.quickStartHang.addEventListener("click", () => {
   if (elements.quickHangAccount.value === "all") {
     const map = elements.quickHangMap.value.trim() || "圣兽云殿";
     let started = 0;
-    for (const label of ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7"]) {
+    const labels = configuredAccountLabels();
+    for (const label of labels) {
       const target = accountTarget(label);
       if (!target) continue;
       sendCommand(target.deviceId, "configure_return_hang", { accountIndex: target.accountIndex, map });
       sendCommand(target.deviceId, "run_temple_guard", { accountIndex: target.accountIndex });
       started++;
     }
-    return addLog(`已向 ${started}/8 个在线账号发送${map}挂机指令`);
+    return addLog(`已向 ${started}/${labels.length} 个在线账号发送${map}挂机指令`);
   }
   const target = accountTarget(elements.quickHangAccount.value);
   if (!target) return addLog(`账号 ${elements.quickHangAccount.value || "--"} 当前不在线`);
@@ -269,9 +306,18 @@ document.addEventListener("visibilitychange", () => {
 function connect() {
   const token = elements.adminToken.value.trim();
   const username = elements.loginUser.value.trim();
+  const deviceToken = elements.loginDeviceToken.value.trim();
   if (!token) return showError("请输入密码或管理密钥");
   sessionStorage.setItem("playKeeperUser", username);
   sessionStorage.setItem("playKeeperCredential", token);
+  sessionStorage.setItem("playKeeperDeviceToken", deviceToken);
+  if (elements.rememberLogin.checked && username) {
+    savedLogins[username] = { password: token, deviceToken };
+    localStorage.setItem("playKeeperLoginProfiles", JSON.stringify(savedLogins));
+  } else if (username && savedLogins[username]) {
+    delete savedLogins[username];
+    localStorage.setItem("playKeeperLoginProfiles", JSON.stringify(savedLogins));
+  }
   manuallyClosed = false;
   const generation = ++connectionGeneration;
   clearTimeout(reconnectTimer);
@@ -281,7 +327,7 @@ function connect() {
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";
   socket = new WebSocket(`${scheme}//${location.host}/control`);
   socket.addEventListener("open", () => socket.send(JSON.stringify({
-    type: "control.hello", username, password: token, token
+    type: "control.hello", username, password: token, token, deviceToken
   })));
   socket.addEventListener("message", (event) => {
     if (generation !== connectionGeneration) return;
@@ -303,6 +349,7 @@ function disconnect() {
   connectionGeneration += 1;
   clearTimeout(reconnectTimer);
   sessionStorage.removeItem("playKeeperCredential");
+  sessionStorage.removeItem("playKeeperDeviceToken");
   devices.clear();
   previewFrames.clear();
   activePreviews.clear();
@@ -328,6 +375,11 @@ function handleMessage(message) {
       showError("管理密钥错误");
       sessionStorage.removeItem("playKeeperCredential");
       socket?.close();
+      break;
+    case "user.settings":
+      userSettings = message.payload ?? userSettings;
+      applyUserSettings();
+      renderQuickAccountControls();
       break;
     case "devices.snapshot":
       devices.clear();
@@ -495,16 +547,17 @@ function readPlanOptions() {
   if (!dungeonItems.length || dungeonItems.length > 20) {
     addLog("副本组合需填写1–20项"); return null;
   }
-  if (routeLabels.length < 3 || routeLabels[0] !== "hao" || routeLabels.at(-1) !== "hao"
+  if (routeLabels.length < 3 || routeLabels[0] !== routeLabels.at(-1)
       || new Set(routeLabels.slice(0, -1)).size !== routeLabels.length - 1
-      || routeLabels.slice(1, -1).some((label) => !/^hao[1-7]$/.test(label))) {
-    addLog("装备路线必须为 hao → 所选且不重复的小号 → hao"); return null;
+      || routeLabels.slice(0, -1).some((label) => !label || label.length > 30 || /[→,，\r\n\t]/.test(label))) {
+    addLog("装备路线必须首尾为同一主号，且中间账号不能重复"); return null;
   }
-  if (equipmentItems.length !== 10 || new Set(equipmentItems).size !== 10) {
-    addLog("装备转移清单必须正好包含十件不重复装备"); return null;
+  if (equipmentItems.length < 1 || equipmentItems.length > 10
+      || new Set(equipmentItems).size !== equipmentItems.length) {
+    addLog("装备转移清单必须包含1–10件不重复装备"); return null;
   }
   if (!returnMap) { addLog("请填写流程结束后的挂机副本"); return null; }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) {
+  if (reportEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) {
     addLog("完成报告邮箱格式无效"); return null;
   }
   return { resourceItems, resourceReserveCount, dungeonItems, inventoryItems,
@@ -535,6 +588,27 @@ function renderPlanSchedule() {
   const error = planSchedule.lastError ? ` · 上次启动失败：${planSchedule.lastError}` : "";
   elements.planScheduleStatus.textContent = planSchedule.enabled
     ? `每天 ${planSchedule.time}（北京时间）${last}${error}` : "每日定时未启用";
+}
+
+function configuredAccountLabels() {
+  const fromSettings = Array.isArray(userSettings.accountLabels)
+    ? userSettings.accountLabels.map((label) => String(label).trim()).filter(Boolean) : [];
+  if (fromSettings.length) return [...new Set(fromSettings)];
+  const route = elements.planRoute.value.split(/\s*(?:→|->|,|，)\s*/)
+    .map((label) => label.trim()).filter(Boolean);
+  const withoutReturn = route.at(-1) === route[0] ? route.slice(0, -1) : route;
+  return [...new Set(withoutReturn)];
+}
+
+function applyUserSettings() {
+  const labels = configuredAccountLabels();
+  if (labels.length && (!planSchedule.options?.routeLabels || planSchedule.options.routeLabels.length < 3)) {
+    elements.planRoute.value = [...labels, labels[0]].join(" → ");
+  }
+  elements.quickAuctionAccount.value = userSettings.quickAuctionAccount || labels[0] || "";
+  elements.quickBuyerAccount.value = userSettings.auctionBuyer || userSettings.mainAccount || labels[0] || "";
+  elements.quickHangAccount.value = userSettings.quickHangAccount || labels[0] || "";
+  elements.quickHangMap.value = userSettings.quickHangMap || "圣兽云殿";
 }
 
 renderDailyPlan();
@@ -577,15 +651,7 @@ function accountTarget(label) {
 }
 
 function renderQuickAccountControls() {
-  const auctionSelected = elements.quickAuctionAccount.value;
-  const hangSelected = elements.quickHangAccount.value || "hao";
-  elements.quickAuctionAccount.replaceChildren();
-  elements.quickHangAccount.replaceChildren();
-  const allOption = document.createElement("option");
-  allOption.value = "all";
-  allOption.textContent = "所有账号";
-  elements.quickHangAccount.append(allOption);
-  const reportedLabels = [];
+  const reportedLabels = configuredAccountLabels();
   for (const device of devices.values()) {
     const accounts = Array.isArray(device.telemetry?.accounts) ? device.telemetry.accounts : [];
     for (const account of accounts) {
@@ -596,20 +662,19 @@ function renderQuickAccountControls() {
     }
   }
   reportedLabels.sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+  elements.userAccountOptions.replaceChildren();
+  elements.hangAccountOptions.replaceChildren();
+  const allOption = document.createElement("option");
+  allOption.value = "all";
+  allOption.label = "所有账号";
+  elements.hangAccountOptions.append(allOption);
   for (const label of reportedLabels) {
     const option = document.createElement("option");
     option.value = label;
-    option.textContent = label;
-    elements.quickAuctionAccount.append(option);
+    option.label = accountTarget(label) ? label : `${label}（离线）`;
+    elements.userAccountOptions.append(option);
+    elements.hangAccountOptions.append(option.cloneNode());
   }
-  for (const label of ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7"]) {
-    const option = document.createElement("option");
-    option.value = label;
-    option.textContent = accountTarget(label) ? label : `${label}（离线）`;
-    elements.quickHangAccount.append(option);
-  }
-  if (reportedLabels.includes(auctionSelected)) elements.quickAuctionAccount.value = auctionSelected;
-  elements.quickHangAccount.value = hangSelected;
   const disabled = devices.size === 0;
   elements.quickAuctionToMain.disabled = disabled;
   elements.quickMainBuy.disabled = disabled;
@@ -861,13 +926,13 @@ function renderDevices() {
       button.addEventListener("click", () => {
         const frame = previewFrames.get(device.deviceId);
         if (!frame) return addLog("请先加载手机画面");
-        const directions = { up: [{ x: .5, y: .75 }, { x: .5, y: .25 }],
-          down: [{ x: .5, y: .25 }, { x: .5, y: .75 }],
-          left: [{ x: .78, y: .5 }, { x: .22, y: .5 }],
-          right: [{ x: .22, y: .5 }, { x: .78, y: .5 }] };
+        const directions = { up: [{ x: .5, y: .88 }, { x: .5, y: .12 }],
+          down: [{ x: .5, y: .12 }, { x: .5, y: .88 }],
+          left: [{ x: .88, y: .5 }, { x: .12, y: .5 }],
+          right: [{ x: .12, y: .5 }, { x: .88, y: .5 }] };
         const [start, end] = directions[button.dataset.swipe];
         boostPreview();
-        sendSwipe(frame, start, end, 420);
+        sendSwipe(frame, start, end, 560);
       });
     }
 
@@ -908,7 +973,7 @@ function renderDevices() {
         .find(([, value]) => value === auctionItemsInput.value.trim())?.[0] ?? "custom";
     });
     auctionBuyer.value = typeof automation.auctionBuyer === "string" && automation.auctionBuyer
-      ? automation.auctionBuyer : (automation.sellBuyer || "hao");
+      ? automation.auctionBuyer : (automation.sellBuyer || userSettings.auctionBuyer || "");
     auctionPrice.value = String(Number.isInteger(automation.auctionPrice)
       ? automation.auctionPrice : 920);
     auctionReserve.value = String(automation.auctionReserveCount === 0 ? 0 : 1);
@@ -970,7 +1035,9 @@ function renderDevices() {
       if (!Number.isInteger(intervalHours) || intervalHours < 1 || intervalHours > 168) {
         return addLog("拍卖间隔需为1–168小时");
       }
-      if (!/^[A-Za-z0-9_.-]{1,30}$/.test(buyer)) return addLog("指定买家格式无效");
+      if (auctionEnabled.checked && (!buyer || buyer.length > 30 || /[→,，\r\n\t]/.test(buyer))) {
+        return addLog("启用拍卖时必须填写有效的指定买家");
+      }
       if (!Number.isInteger(itemAuctionPrice) || itemAuctionPrice < 1
           || itemAuctionPrice > 9_999_999) return addLog("拍卖单价无效");
       if (!equipmentItems.length || equipmentItems.length > 10
@@ -980,7 +1047,7 @@ function renderDevices() {
       if (!Number.isInteger(equipmentPrice) || equipmentPrice < 1 || equipmentPrice > 9_999_999) {
         return addLog("装备单价需为1–9999999金币");
       }
-      if (!/^[A-Za-z0-9@_.-]{0,30}$/.test(equipmentBuyer)) {
+      if (equipmentBuyer.length > 30 || /[→,，\r\n\t]/.test(equipmentBuyer)) {
         return addLog("装备指定买家ID格式无效");
       }
       if (!warehouseItems.length || warehouseItems.length > 10

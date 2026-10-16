@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css?v=2.0.0-rc1">
+  <link rel="stylesheet" href="/styles.css?v=2.0.0-rc2">
 </head>
 <body>
   <main class="shell">
@@ -22,10 +22,12 @@
       <p>使用自己的控制台账号登录；管理员首次部署也可使用原管理密钥兼容登录。</p>
       <label for="loginUser">用户名</label>
       <div class="login-row">
-        <input id="loginUser" autocomplete="username" placeholder="用户名（兼容模式可留空）">
-        <input id="adminToken" type="password" autocomplete="current-password" placeholder="密码或管理密钥">
+        <input id="loginUser" autocomplete="username" placeholder="用户名">
+        <input id="adminToken" type="password" autocomplete="current-password" placeholder="登录密码">
+        <input id="loginDeviceToken" type="password" autocomplete="off" placeholder="device_token（首次绑定或已绑定用户必填）">
         <button id="connectButton" class="primary">连接</button>
       </div>
+      <label class="toggle-row"><input id="rememberLogin" type="checkbox"> 在本浏览器保存用户名、密码和 device_token 组合</label>
       <p id="loginError" class="error" role="alert"></p>
     </section>
 
@@ -38,8 +40,10 @@
       <section id="userAdminPanel" class="panel hidden">
         <div class="section-title"><div><p class="eyebrow">ADMIN</p><h2>用户与设备归属</h2></div></div>
         <div class="plan-settings">
-          <label>用户名<input id="newUsername" placeholder="3–32位字母或数字"></label>
+          <label>用户名<input id="newUsername" placeholder="2–32位中文、字母或数字"></label>
           <label>初始/重置密码<input id="newUserPassword" type="password" minlength="8"></label>
+          <label>绑定 device_token<input id="newUserDeviceToken" type="password" placeholder="可留空，用户首次登录时绑定"></label>
+          <label class="span-2">默认游戏账号<input id="newUserAccounts" placeholder="用逗号分隔，可留空"></label>
           <label>角色<select id="newUserRole"><option value="user">普通用户</option><option value="admin">管理员</option></select></label>
           <button id="saveUser" class="secondary">创建或重置用户</button>
           <label>在线设备<select id="assignDevice"></select></label>
@@ -82,6 +86,7 @@
             <select id="planEquipmentPreset">
               <option value="ephis">厄菲斯神套装</option>
               <option value="lover">情人套装</option>
+              <option value="lover_romance">情人恋套装（九件）</option>
               <option value="custom">自定义</option>
             </select>
           </label>
@@ -105,22 +110,25 @@
           <label class="span-2">副本组合<input id="planDungeonItems" value="绘画小屋,伊苏王的神墓,火龙王的宫殿,史芬克斯密穴"></label>
           <label class="span-2">统一背包检查项目<input id="planInventoryItems" value="进化宝石,曙光印记,强化丹A,强化丹B,天仙玉露"></label>
           <label>结束后挂机副本<input id="planReturnMap" value="圣兽云殿" maxlength="30"></label>
-          <label>完成报告邮箱<input id="planReportEmail" type="email" value="konghao0920@gmail.com"></label>
+          <label>完成报告邮箱<input id="planReportEmail" type="email" placeholder="可留空，不发送报告"></label>
           <label class="toggle-row"><input id="planScheduleEnabled" type="checkbox"> 每天定时运行</label>
           <label>运行时间（北京时间）<input id="planScheduleTime" type="time" value="04:00"></label>
         </div>
         <div class="quick-auction-row">
           <label>道具拍卖账号
-            <select id="quickAuctionAccount"></select>
+            <input id="quickAuctionAccount" list="userAccountOptions" placeholder="卖方账号，可自行填写">
           </label>
-          <button id="quickAuctionToMain" class="secondary">拍卖选中账号道具到 hao</button>
+          <label>指定买家<input id="quickBuyerAccount" list="userAccountOptions" placeholder="主号/买家，可留空保存"></label>
+          <button id="quickAuctionToMain" class="secondary">拍卖选中账号道具到指定买家</button>
         </div>
         <details class="plan-quick-tools">
           <summary>其他单账号与批量快捷操作</summary>
           <div class="quick-account-actions">
-          <button id="quickMainBuy" class="secondary">hao 购买全部920金币道具</button>
-          <button id="quickSweepAll" class="secondary">全部小号依次拍卖 → hao统一购买</button>
-          <label>挂机账号<select id="quickHangAccount"></select></label>
+          <button id="quickMainBuy" class="secondary">指定买家购买全部920金币道具</button>
+          <button id="quickSweepAll" class="secondary">路线卖方依次拍卖 → 主号统一购买</button>
+          <label>挂机账号<input id="quickHangAccount" list="hangAccountOptions" placeholder="账号或 all"></label>
+          <datalist id="userAccountOptions"></datalist>
+          <datalist id="hangAccountOptions"><option value="all">所有账号</option></datalist>
           <label>挂机副本<input id="quickHangMap" value="圣兽云殿" maxlength="30"></label>
           <button id="quickStartHang" class="secondary">该账号开始挂机</button>
           </div>
@@ -136,10 +144,10 @@
           <button id="cancelDailyPlan" class="secondary" disabled>中断计划</button>
         </div>
         <div class="automation-actions">
-          <button id="savePlanSchedule" class="secondary">保存每日定时</button>
+          <button id="savePlanSchedule" class="secondary">保存本用户设置与每日定时</button>
           <small id="planScheduleStatus">每日定时未启用</small>
         </div>
-        <p class="automation-help">每个账号统一按上方清单检查背包；卖方按所选保留数量上架组合道具，最后由 hao 购买。</p>
+        <p class="automation-help">每个用户独立保存路线、脚本和快捷账号；卖方按所选保留数量上架组合道具，最后由路线首尾的主号购买。</p>
         <div id="planIntervention" class="plan-intervention hidden" role="alert"></div>
       </section>
       <div id="deviceList" class="device-list"></div>
@@ -290,6 +298,6 @@
       <div id="selectOptions" class="select-options" role="radiogroup"></div>
     </section>
   </div>
-  <script type="module" src="/app.js?v=2.0.0-rc1"></script>
+  <script type="module" src="/app.js?v=2.0.0-rc2"></script>
 </body>
 </html>

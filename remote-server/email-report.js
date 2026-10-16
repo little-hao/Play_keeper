@@ -24,6 +24,9 @@ export function buildCompletionReport(plan) {
 }
 
 export async function sendCompletionReport(plan, environment = process.env) {
+  if (!String(plan?.reportEmail || "").trim()) {
+    return { status: "未发送：未填写完成报告邮箱" };
+  }
   const host = environment.SMTP_HOST;
   const user = environment.SMTP_USER;
   const pass = environment.SMTP_PASS;
@@ -34,7 +37,7 @@ export async function sendCompletionReport(plan, environment = process.env) {
   const report = buildCompletionReport(plan);
   await transporter.sendMail({
     from: environment.REPORT_FROM || user,
-    to: plan.reportEmail || environment.REPORT_TO || "konghao0920@gmail.com",
+    to: plan.reportEmail,
     subject: report.subject,
     text: report.text
   });

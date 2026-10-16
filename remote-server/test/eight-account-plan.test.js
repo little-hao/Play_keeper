@@ -179,7 +179,7 @@ test("requires manual confirmation of the equipment holder before resuming", () 
   const plan = new EightAccountPlan({ now: () => 10_000 });
   plan.start(route());
   plan.cancel("人工中断");
-  assert.throws(() => plan.resume(route()), /人工确认厄菲斯神套装所在账号/);
+  assert.throws(() => plan.resume(route()), /人工确认目标套装所在账号/);
 });
 
 test("restores a running saved state as an indefinite intervention", () => {
@@ -307,4 +307,20 @@ test("rejects a route with an offline account", () => {
     { deviceId: d1, telemetry: { accounts: [{ index: 0, label: "hao1" }] } },
     { deviceId: d2, telemetry: { accounts: [{ index: 0, label: "hao" }] } }
   ]), /当前不在线/);
+});
+
+test("accepts a Chinese four-account route, nine-piece set, and blank report email", () => {
+  const labels = ["杂鱼小弟", "杂鱼小妹", "合宠糕手", "涅槃糕手", "杂鱼小弟"];
+  const frostRoute = labels.map((accountLabel, index) => ({
+    deviceId: "PK-FROST000001", accountIndex: index % 4, accountLabel, automation: {}
+  }));
+  const loverRomance = ["柔情方巾§恋§", "轻罗流萤衫§恋§", "逢羡履§恋§", "君我剑§恋§",
+    "佳人之恋§恋§", "三生戒§恋§", "比翼§恋§", "相望镯§恋§", "尾生之泪§恋§"];
+  const actions = [];
+  const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => 30_000 });
+  const snapshot = plan.start(frostRoute, { items: loverRomance, reportEmail: "" });
+  assert.equal(snapshot.mainAccountLabel, "杂鱼小弟");
+  assert.equal(snapshot.reportEmail, "");
+  assert.deepEqual(snapshot.items, loverRomance);
+  assert.equal(actions[0].parameters.buyer, "杂鱼小妹");
 });

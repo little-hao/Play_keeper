@@ -54,7 +54,7 @@ final class EquipmentTransferAudit {
         }
 
         boolean allTransferred() {
-            if (items.size() != TARGETS_BY_SLOT.size()) return false;
+            if (items.isEmpty()) return false;
             for (ItemResult item : items) {
                 if (item.status != ItemStatus.TRANSFERRED) return false;
             }
@@ -88,20 +88,30 @@ final class EquipmentTransferAudit {
 
     static Result evaluate(PetScope scope, Map<String, String> mainPetEquipmentBySlot,
                            Set<String> skippedMissingNames) {
+        return evaluate(scope, targetNames(), mainPetEquipmentBySlot, skippedMissingNames);
+    }
+
+    static Result evaluate(PetScope scope, List<String> expectedNames,
+                           Map<String, String> mainPetEquipmentBySlot,
+                           Set<String> skippedMissingNames) {
         if (scope != PetScope.MAIN) {
             throw new IllegalArgumentException("Equipment transfer may inspect only the main pet");
+        }
+        if (expectedNames == null || expectedNames.isEmpty() || expectedNames.size() > 10) {
+            throw new IllegalArgumentException("Expected equipment list must contain 1-10 items");
         }
         Map<String, String> actual = mainPetEquipmentBySlot == null
                 ? Collections.emptyMap() : mainPetEquipmentBySlot;
         Set<String> skipped = skippedMissingNames == null
                 ? Collections.emptySet() : new LinkedHashSet<>(skippedMissingNames);
-        List<ItemResult> results = new ArrayList<>(TARGETS_BY_SLOT.size());
-        for (Map.Entry<String, String> target : TARGETS_BY_SLOT.entrySet()) {
-            String slot = target.getKey();
-            String expectedName = target.getValue();
+        List<String> slots = new ArrayList<>(TARGETS_BY_SLOT.keySet());
+        List<ItemResult> results = new ArrayList<>(expectedNames.size());
+        for (int index = 0; index < expectedNames.size(); index++) {
+            String slot = slots.get(index);
+            String expectedName = expectedNames.get(index);
             String actualName = actual.get(slot);
             ItemStatus status;
-            if (normalizeEquipmentName(expectedName).equals(normalizeEquipmentName(actualName))) {
+            if (matchesEquipmentName(expectedName, actualName)) {
                 status = ItemStatus.TRANSFERRED;
             } else if (skipped.contains(expectedName)) {
                 status = ItemStatus.SKIPPED_MISSING;
@@ -115,9 +125,13 @@ final class EquipmentTransferAudit {
         return new Result(results);
     }
 
+    static boolean matchesEquipmentName(String expected, String actual) {
+        return normalizeEquipmentName(expected).equals(normalizeEquipmentName(actual));
+    }
+
     private static String normalizeEquipmentName(String value) {
         if (value == null) return "";
         return value.replaceAll("\\s+", "")
-                .replaceFirst("[（(][+＋]?\\d+[）)]$", "");
+                .replaceFirst("[（(][+＋](?:[1-9]|1[0-5])[）)]$", "");
     }
 }

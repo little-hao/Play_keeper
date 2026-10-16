@@ -65,12 +65,12 @@ export class EightAccountPlan {
     return { status: "idle", runId: "", startedAt: 0, updatedAt: this.now(),
       phaseStartedAt: 0, legIndex: -1, phase: "idle", mode: "daily", resumePhase: "",
       buyerStarted: false, sellerReleased: false, sellerCleaned: false, mainBuySeen: false,
-      sellerCleanupDueAt: 0, equipmentHolderLabel: "hao",
+      sellerCleanupDueAt: 0, equipmentHolderLabel: "hao", mainAccountLabel: "hao",
       route: [], items: [...EQUIPMENT_ITEMS],
       resourceItems: [...RESOURCE_ITEMS], inventoryItems: [...RESOURCE_ITEMS],
       resourceReserveCount: 1, price: 920, returnMap: "圣兽云殿",
       dungeonItems: ["绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"],
-      reportEmail: "konghao0920@gmail.com", error: "", errorAccount: "",
+      reportEmail: "", error: "", errorAccount: "",
       interventionDeadlineAt: 0, emailStatus: "pending", inventoryByAccount: {}, history: [] };
   }
 
@@ -83,7 +83,8 @@ export class EightAccountPlan {
     const route = Array.isArray(savedState.route) ? savedState.route : [];
     this.state = { ...this.#idleState(), ...savedState,
       route: route.map((entry) => ({ ...entry })),
-      items: Array.isArray(savedState.items) && savedState.items.length === 10
+      items: Array.isArray(savedState.items) && savedState.items.length >= 1
+        && savedState.items.length <= 10
         ? [...savedState.items] : [...EQUIPMENT_ITEMS],
       resourceItems: Array.isArray(savedState.resourceItems)
         ? [...savedState.resourceItems] : [...RESOURCE_ITEMS],
@@ -99,7 +100,7 @@ export class EightAccountPlan {
     if (this.state.status === "running") {
       this.state.resumePhase = this.state.phase;
       this.state.status = "intervention";
-      this.state.error = `服务恢复后已暂停；请人工确认厄菲斯神套装所在账号`;
+      this.state.error = `服务恢复后已暂停；请人工确认目标套装所在账号`;
       this.state.errorAccount = this.state.equipmentHolderLabel || "当前账号";
     }
     if (this.state.status === "intervention") this.state.interventionDeadlineAt = 0;
@@ -110,9 +111,7 @@ export class EightAccountPlan {
   start(route, options = {}) {
     if (["running", "intervention"].includes(this.state.status)) throw new Error("多用户挂机已在运行");
     this.#validateRoute(route);
-    if (route.length < 3 || route[0].accountLabel !== "hao") {
-      throw new Error("新计划必须从 hao 开始并最终返回 hao");
-    }
+    if (route.length < 3) throw new Error("新计划至少需要主号、一个中转账号并返回主号");
     const price = options.price ?? 920;
     const items = options.items ?? EQUIPMENT_ITEMS;
     const resourceItems = options.resourceItems ?? RESOURCE_ITEMS;
@@ -121,11 +120,12 @@ export class EightAccountPlan {
     const dungeonItems = options.dungeonItems
       ?? ["绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"];
     const returnMap = options.returnMap ?? "圣兽云殿";
-    const reportEmail = options.reportEmail ?? "konghao0920@gmail.com";
+    const reportEmail = options.reportEmail ?? "";
     if (!Number.isInteger(price) || price < 1 || price > 9_999_999) throw new Error("交易单价无效");
-    if (!Array.isArray(items) || items.length !== 10 || new Set(items).size !== 10
+    if (!Array.isArray(items) || items.length < 1 || items.length > 10
+        || new Set(items).size !== items.length
         || items.some((item) => typeof item !== "string" || !item.trim() || item.length > 30)) {
-      throw new Error("装备清单必须包含十件不重复装备");
+      throw new Error("装备清单必须包含1–10件不重复装备");
     }
     if (!Array.isArray(resourceItems) || resourceItems.length < 1 || resourceItems.length > 10) {
       throw new Error("道具组合需包含1–10项");
@@ -140,7 +140,8 @@ export class EightAccountPlan {
     if (typeof returnMap !== "string" || !returnMap.trim() || returnMap.length > 30) {
       throw new Error("返回挂机副本无效");
     }
-    if (typeof reportEmail !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) {
+    if (typeof reportEmail !== "string"
+        || (reportEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail.trim()))) {
       throw new Error("报告邮箱格式无效");
     }
     const now = this.now();
@@ -150,6 +151,7 @@ export class EightAccountPlan {
     this.state = { ...this.#idleState(), status: "running", runId: crypto.randomUUID(),
       startedAt: now, updatedAt: now, phaseStartedAt: now, legIndex: 0,
       phase: "starting_leg", route: activeRoute.map((entry) => ({ ...entry })), items: [...items],
+      mainAccountLabel: route[0].accountLabel,
       resourceItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
       inventoryItems: [...new Set(inventoryItems.map((item) => String(item).trim()).filter(Boolean))],
       resourceReserveCount,
@@ -168,10 +170,13 @@ export class EightAccountPlan {
 
   startResourceSweep(route, options = {}) {
     if (["running", "intervention"].includes(this.state.status)) throw new Error("已有多用户任务正在运行");
-    if (!Array.isArray(route) || route.length !== 8
-        || route.map((entry) => entry.accountLabel).join(",")
-          !== "hao1,hao2,hao3,hao4,hao5,hao6,hao7,hao") {
-      throw new Error("资源归集需要 hao1–hao7 与 hao 全部在线");
+    if (!Array.isArray(route) || route.length < 2 || route.length > 9) {
+      throw new Error("资源归集至少需要一个卖方账号和一个主号");
+    }
+    const resourceLabels = route.map((entry) => entry?.accountLabel);
+    if (resourceLabels.some((label) => typeof label !== "string" || !label.trim())
+        || new Set(resourceLabels).size !== resourceLabels.length) {
+      throw new Error("资源归集账号不能为空或重复");
     }
     const resourceItems = options.resourceItems ?? RESOURCE_ITEMS;
     const resourceReserveCount = options.resourceReserveCount ?? 1;
@@ -186,6 +191,7 @@ export class EightAccountPlan {
       runId: crypto.randomUUID(), startedAt: now, updatedAt: now, phaseStartedAt: now,
       legIndex: 0, phase: "resource_auction_running",
       route: route.map((entry) => ({ ...entry })),
+      mainAccountLabel: route.at(-1).accountLabel,
       resourceItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
       inventoryItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
       resourceReserveCount, price: 920, returnMap };
@@ -236,7 +242,7 @@ export class EightAccountPlan {
     }
     this.#refreshRouteBindings(liveRoute);
     if (this.state.mode === "daily") {
-      if (!confirmedHolderLabel) throw new Error("请先人工确认厄菲斯神套装所在账号");
+      if (!confirmedHolderLabel) throw new Error("请先人工确认目标套装所在账号");
       const holderIndex = liveRoute.findIndex((entry, index) =>
         index < liveRoute.length - 1 && entry.accountLabel === confirmedHolderLabel);
       if (holderIndex < 0) throw new Error(`确认的套装账号 ${confirmedHolderLabel} 不在当前路线中`);
@@ -301,7 +307,7 @@ export class EightAccountPlan {
     if (this.state.phase === "standalone_main_running" && buyer) {
       if (buyer.status === "error") {
         return this.#handleAccountFailure(leg.buyer,
-          `hao 副本执行失败：${buyer.lastMessage || "未知错误"}`);
+          `${this.state.mainAccountLabel} 副本执行失败：${buyer.lastMessage || "未知错误"}`);
       }
       if (this.#standaloneMainComplete(buyer)) {
         this.#captureInventory(leg.buyer, buyer);
@@ -338,7 +344,7 @@ export class EightAccountPlan {
       }
       if (buyer && this.state.sellerCleaned && this.#buyerWorkflowComplete(buyer)) {
         this.#captureInventory(leg.buyer, buyer);
-        if (leg.buyer.accountLabel === "hao") this.#startMainBuy(leg.buyer);
+        if (leg.buyer.accountLabel === this.state.mainAccountLabel) this.#startMainBuy(leg.buyer);
         else this.#startResourceAuction(leg.buyer);
       }
       return this.snapshot();
@@ -357,7 +363,8 @@ export class EightAccountPlan {
     if (this.state.phase === "main_buy_running" && buyer) {
       if (buyer.task === "auction_buy" && buyer.status === "running") this.state.mainBuySeen = true;
       if (buyer.status === "error") {
-        return this.#intervene(`hao 道具购买失败：${buyer.lastMessage || "未知错误"}`, "hao");
+        return this.#intervene(`${this.state.mainAccountLabel} 道具购买失败：${buyer.lastMessage || "未知错误"}`,
+          this.state.mainAccountLabel);
       }
       const returned = this.state.mainBuySeen && buyer.task === "temple" && buyer.status === "ok"
         && Number(buyer.updatedAt) >= this.state.phaseStartedAt;
@@ -377,7 +384,7 @@ export class EightAccountPlan {
     }
     const returned = automation.task === "temple" && automation.status === "ok"
       && Number(automation.updatedAt) >= this.state.phaseStartedAt;
-    if (account.accountLabel !== "hao") {
+    if (account.accountLabel !== this.state.mainAccountLabel) {
       const auctionDone = Number(automation.auctionLastRunAt) >= this.state.phaseStartedAt;
       if (!auctionDone || !returned) return this.snapshot();
       this.state.history.push({ account: account.accountLabel, completedAt: this.now(), result: "success" });
@@ -394,7 +401,8 @@ export class EightAccountPlan {
           accountIndex: target.accountIndex, map: this.state.returnMap });
         this.#command(target, "run_temple_guard", { accountIndex: target.accountIndex });
       }
-      this.state.history.push({ account: "hao", completedAt: this.now(), result: "success" });
+      this.state.history.push({ account: this.state.mainAccountLabel,
+        completedAt: this.now(), result: "success" });
       Object.assign(this.state, { status: "success", phase: "complete", updatedAt: this.now() });
     }
     return this.snapshot();
@@ -518,7 +526,7 @@ export class EightAccountPlan {
     Object.assign(this.state, { phase: "resource_auction_running", phaseStartedAt: this.now(),
       updatedAt: this.now() });
     this.#configureResourcesAndReturn(account);
-    if (account.accountLabel === "hao") {
+    if (account.accountLabel === this.state.mainAccountLabel) {
       this.state.mainBuySeen = false;
       this.state.phase = "main_buy_running";
       this.#command(account, "run_auction_buy", { accountIndex: account.accountIndex });
@@ -549,7 +557,7 @@ export class EightAccountPlan {
 
   #configureResourcesAndReturn(account) {
     this.#command(account, "configure_auto_auction", { accountIndex: account.accountIndex,
-      enabled: false, items: [...this.state.resourceItems], buyer: "hao",
+      enabled: false, items: [...this.state.resourceItems], buyer: this.state.mainAccountLabel,
       price: this.state.price, reserveCount: this.state.resourceReserveCount,
       intervalHours: 24 });
     this.#command(account, "configure_return_hang", {
@@ -624,10 +632,11 @@ export class EightAccountPlan {
 
   #validateRoute(route) {
     const labels = Array.isArray(route) ? route.map((entry) => entry?.accountLabel) : [];
-    if (labels.length < 2 || labels.length > 9 || labels.at(-1) !== "hao"
+    if (labels.length < 2 || labels.length > 9 || labels.at(-1) !== labels[0]
         || new Set(labels.slice(0, -1)).size !== labels.length - 1
-        || labels.slice(0, -1).some((label) => !/^hao(?:[1-7])?$/.test(label))) {
-      throw new Error("账号路线必须最终返回 hao，且参与账号不能重复");
+        || labels.slice(0, -1).some((label) => typeof label !== "string"
+          || !label.trim() || label.length > 30 || /[→,，\r\n\t]/.test(label))) {
+      throw new Error("账号路线必须首尾相同，且参与账号不能为空或重复");
     }
     route.forEach((entry, index) => {
       if (!entry || typeof entry.deviceId !== "string" || !Number.isInteger(entry.accountIndex)

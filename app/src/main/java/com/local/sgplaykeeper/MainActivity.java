@@ -1617,9 +1617,32 @@ public final class MainActivity extends Activity {
                 throw new IllegalArgumentException("滑动时间无效");
             }
             Session session = getOrCreateSession(accountIndex);
-            dispatchSwipe(session.webView, x1, y1, x2, y2, durationMs);
-            remoteConnectionManager.sendCommandResult(commandId, true, "远程滑动已执行");
-            mainHandler.postDelayed(this::capturePreviewFrame, 120L);
+            String script = "(function(){const x=" + x1 + "*innerWidth,y=" + y1
+                    + "*innerHeight,dx=(" + x1 + "-" + x2 + ")*innerWidth*1.15,dy=("
+                    + y1 + "-" + y2 + ")*innerHeight*1.15;"
+                    + "let e=document.elementFromPoint(x,y);const candidates=[];"
+                    + "while(e){candidates.push(e);e=e.parentElement;}"
+                    + "candidates.push(document.scrollingElement,document.documentElement,document.body);"
+                    + "const target=candidates.find(v=>v&&((Math.abs(dy)>Math.abs(dx)"
+                    + "&&v.scrollHeight>v.clientHeight+2)||(Math.abs(dx)>=Math.abs(dy)"
+                    + "&&v.scrollWidth>v.clientWidth+2)));"
+                    + "if(!target)return false;const beforeX=target.scrollLeft,beforeY=target.scrollTop;"
+                    + "target.scrollBy({left:dx,top:dy,behavior:'auto'});"
+                    + "target.dispatchEvent(new Event('scroll',{bubbles:true}));"
+                    + "return target.scrollLeft!==beforeX||target.scrollTop!==beforeY;})()";
+            session.webView.evaluateJavascript(script, encoded -> {
+                boolean domScrolled = "true".equals(encoded);
+                try {
+                    if (!domScrolled) dispatchSwipe(session.webView, x1, y1, x2, y2, durationMs);
+                    remoteConnectionManager.sendCommandResult(commandId, true,
+                            domScrolled ? "远程页面已滚动" : "远程触摸滑动已执行");
+                    mainHandler.postDelayed(this::capturePreviewFrame,
+                            domScrolled ? 180L : durationMs + 180L);
+                } catch (RuntimeException error) {
+                    remoteConnectionManager.sendCommandResult(commandId, false,
+                            error.getMessage() == null ? "滑动处理失败" : error.getMessage());
+                }
+            });
         } catch (RuntimeException error) {
             remoteConnectionManager.sendCommandResult(commandId, false,
                     error.getMessage() == null ? "滑动处理失败" : error.getMessage());
