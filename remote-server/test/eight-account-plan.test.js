@@ -152,6 +152,9 @@ test("restores an interrupted run and resumes from the account holding the equip
   let clock = 10_000;
   const first = new EightAccountPlan({ now: () => clock });
   first.start(route());
+  first.onTelemetry(d2, telemetry(0, {
+    task: "equipment_sell", status: "running", equipmentListedInBatch: 5
+  }));
   first.onTelemetry(d1, telemetry(0, {
     task: "equipment_buy", status: "running", equipmentTransferLastRunAt: 20_000
   }));
@@ -166,12 +169,11 @@ test("restores an interrupted run and resumes from the account holding the equip
   assert.equal(restored.snapshot().equipmentHolderLabel, "hao1");
   restored.resume(route(), "hao1");
   assert.equal(restored.snapshot().status, "running");
-  assert.equal(restored.snapshot().phase, "seller_running");
-  assert.equal(restored.snapshot().route[0].accountLabel, "hao1");
-  assert.equal(actions.at(-2).command, "switch_account");
-  assert.equal(actions.at(-2).accountLabel, "hao1");
-  assert.equal(actions.at(-1).command, "run_equipment_sell");
+  assert.equal(restored.snapshot().phase, "buyer_running");
+  assert.equal(restored.snapshot().route[0].accountLabel, "hao");
+  assert.equal(actions.at(-1).command, "run_dungeon_sequence");
   assert.equal(actions.at(-1).accountLabel, "hao1");
+  assert.equal(actions.some((action) => action.command === "switch_account"), false);
   assert.equal(restored.snapshot().equipmentHolderLabel, "hao1");
 });
 

@@ -136,7 +136,8 @@ final class AutomationCoordinator {
         SELL_TO_EXCHANGE,
         SELLER_REEQUIP_TO_TEMPLE,
         BUYER_UNEQUIP_THEN_EQUIP,
-        BUYER_EQUIP_TO_DUNGEONS
+        BUYER_EQUIP_TO_DUNGEONS,
+        DUNGEON_FINISH_EQUIP_TO_INVENTORY
     }
 
     private final SharedPreferences preferences;
@@ -489,6 +490,35 @@ final class AutomationCoordinator {
         runDungeonQueue(accountIndex, true, false);
     }
 
+    void runDailyTasksNow(int accountIndex) {
+        requireAccount(accountIndex);
+        RuntimeState state = states[accountIndex];
+        if (state.busy) {
+            host.showMessage(accountName(accountIndex) + "脚本正在执行");
+            return;
+        }
+        state.busy = true;
+        state.task = "daily_tasks";
+        state.status = "running";
+        state.lastMessage = "正在打开日常任务并一键接受";
+        state.updatedAt = System.currentTimeMillis();
+        state.manualRun = true;
+        state.runGeneration++;
+        host.onAutomationChanged();
+        WebView view;
+        try {
+            view = host.requireWebView(accountIndex);
+        } catch (RuntimeException error) {
+            finish(accountIndex, state.task, "error", "账号页面未就绪", true);
+            return;
+        }
+        host.prepareAutomation(accountIndex, false);
+        host.openAfk(accountIndex);
+        handler.postDelayed(() -> acceptDailyTasksBeforeDungeons(accountIndex, view,
+                () -> finish(accountIndex, "daily_tasks", "ok",
+                        "日常任务一键接受已完成", true), 0), 4_000L);
+    }
+
     void runPrestigeNow(int accountIndex) {
         requireAccount(accountIndex);
         runPrestigeItems(accountIndex, true, false);
@@ -833,6 +863,10 @@ final class AutomationCoordinator {
                     case BUYER_EQUIP_TO_DUNGEONS:
                         handler.postDelayed(() -> repairAndVerifyTargetEquipment(
                                 accountIndex, view, items, manual, 0), 1_500L);
+                        break;
+                    case DUNGEON_FINISH_EQUIP_TO_INVENTORY:
+                        handler.postDelayed(() -> finishDungeonsWithInventory(
+                                accountIndex, manual), 1_200L);
                         break;
                 }
             } else if (result.endsWith("_clicked") && attempt < MANUAL_RECOVERY_ATTEMPTS) {
@@ -2349,9 +2383,13 @@ final class AutomationCoordinator {
             preferences.edit().putLong(PREF_DUNGEON_LAST + accountIndex,
                     System.currentTimeMillis()).apply();
             String completedMessage = "副本队列已完成" + skipped;
-            updateState(accountIndex, completedMessage + "，正在读取每日背包物资");
-            runInventorySnapshot(accountIndex, manual, false,
-                    () -> requestTempleConfirmation(accountIndex, completedMessage, manual));
+            updateState(accountIndex, completedMessage + "，正在一键穿戴剩余装备");
+            host.prepareAutomation(accountIndex, true);
+            host.openHome(accountIndex);
+            List<String> equipment = parseEquipmentItems(equipmentItemsText(accountIndex));
+            handler.postDelayed(() -> preparePetEquipment(accountIndex,
+                    host.requireWebView(accountIndex), equipment, true,
+                    PetEquipmentNext.DUNGEON_FINISH_EQUIP_TO_INVENTORY, manual, 0), 4_000L);
             return;
         }
         String dungeon = dungeons.get(state.dungeonIndex);
@@ -2679,10 +2717,33 @@ final class AutomationCoordinator {
                 handler.postDelayed(() -> verifyDungeonStarted(
                         accountIndex, view, dungeon, manual, attempt + 1), 1_500L);
             } else {
-                finish(accountIndex, states[accountIndex].task, "error",
-                        dungeon + "未进入“停止挂机”状态", manual);
+                RuntimeState state = states[accountIndex];
+                if (state.dungeonRecoveryAttempts < DUNGEON_MAX_RECOVERY_ATTEMPTS) {
+                    state.dungeonRecoveryAttempts++;
+                    state.dungeonStarted = false;
+                    state.dungeonStartedAt = System.currentTimeMillis();
+                    state.dungeonLastProgressAt = state.dungeonStartedAt;
+                    updateState(accountIndex, dungeon + "未显示停止挂机，正在重新核对页面（"
+                            + state.dungeonRecoveryAttempts + "/3）");
+                    host.prepareAutomation(accountIndex, false);
+                    host.openAfk(accountIndex);
+                    handler.postDelayed(() -> runDungeonQueue(
+                            accountIndex, manual, true), 4_000L);
+                } else {
+                    finish(accountIndex, states[accountIndex].task, "error",
+                            dungeon + "三次刷新后仍未进入“停止挂机”状态", manual);
+                }
             }
         });
+    }
+
+    private void finishDungeonsWithInventory(int accountIndex, boolean manual) {
+        String completedMessage = "副本队列已完成，剩余装备已自动穿戴";
+        updateState(accountIndex, completedMessage + "，正在读取每日背包物资");
+        host.prepareAutomation(accountIndex, false);
+        host.openAfk(accountIndex);
+        handler.postDelayed(() -> runInventorySnapshot(accountIndex, manual, false,
+                () -> restoreAfkAndRunTemple(accountIndex, manual, completedMessage)), 4_000L);
     }
 
     private void markDungeonStarted(int accountIndex, WebView view, String dungeon,

@@ -240,22 +240,28 @@ export class EightAccountPlan {
     if (!["intervention", "error", "cancelled"].includes(this.state.status)) {
       throw new Error("当前计划不需要恢复");
     }
+    const interruptedLeg = this.#currentLeg();
+    const resumeBuyerInPlace = this.state.mode === "daily"
+      && this.state.resumePhase === "buyer_running"
+      && interruptedLeg?.buyer?.accountLabel === confirmedHolderLabel;
     this.#refreshRouteBindings(liveRoute);
     if (this.state.mode === "daily") {
       if (!confirmedHolderLabel) throw new Error("请先人工确认目标套装所在账号");
       const holderIndex = liveRoute.findIndex((entry, index) =>
         index < liveRoute.length - 1 && entry.accountLabel === confirmedHolderLabel);
       if (holderIndex < 0) throw new Error(`确认的套装账号 ${confirmedHolderLabel} 不在当前路线中`);
-      this.state.route = liveRoute.slice(holderIndex).map((entry) => ({ ...entry }));
-      this.state.legIndex = 0;
       this.state.equipmentHolderLabel = confirmedHolderLabel;
-      this.state.phase = "seller_running";
-      this.state.resumePhase = "seller_running";
-      this.state.buyerStarted = false;
-      this.state.sellerReleased = false;
-      this.state.sellerCleaned = false;
-      this.state.sellerCleanupDueAt = 0;
-      this.state.mainBuySeen = false;
+      if (!resumeBuyerInPlace) {
+        this.state.route = liveRoute.slice(holderIndex).map((entry) => ({ ...entry }));
+        this.state.legIndex = 0;
+        this.state.phase = "seller_running";
+        this.state.resumePhase = "seller_running";
+        this.state.buyerStarted = false;
+        this.state.sellerReleased = false;
+        this.state.sellerCleaned = false;
+        this.state.sellerCleanupDueAt = 0;
+        this.state.mainBuySeen = false;
+      }
     }
     if (this.state.status !== "intervention") {
       const phase = this.state.resumePhase;
@@ -339,7 +345,6 @@ export class EightAccountPlan {
         this.state.buyerStarted = true;
         this.state.phase = "buyer_running";
         this.state.updatedAt = this.now();
-        this.#command(leg.buyer, "switch_account", { accountIndex: leg.buyer.accountIndex });
         this.#command(leg.buyer, "run_equipment_buy", { accountIndex: leg.buyer.accountIndex });
       }
       if (buyer && this.state.sellerCleaned && this.#buyerWorkflowComplete(buyer)) {
@@ -499,8 +504,7 @@ export class EightAccountPlan {
         accountIndex: leg.seller.accountIndex, map: this.state.returnMap });
       this.#command(leg.seller, "run_seller_cleanup", { accountIndex: leg.seller.accountIndex });
     }
-    this.#command(leg.buyer, "switch_account", { accountIndex: leg.buyer.accountIndex });
-    this.#command(leg.buyer, "run_equipment_buy", { accountIndex: leg.buyer.accountIndex });
+    this.#command(leg.buyer, "run_dungeon_sequence", { accountIndex: leg.buyer.accountIndex });
   }
 
   #refreshRouteBindings(liveRoute) {
@@ -551,7 +555,6 @@ export class EightAccountPlan {
       accountIndex: account.accountIndex, items: [...this.state.dungeonItems] });
     this.#command(account, "configure_return_hang", {
       accountIndex: account.accountIndex, map: this.state.returnMap });
-    this.#command(account, "switch_account", { accountIndex: account.accountIndex });
     this.#command(account, "run_dungeon_sequence", { accountIndex: account.accountIndex });
   }
 
@@ -612,7 +615,6 @@ export class EightAccountPlan {
       accountIndex: leg.buyer.accountIndex, items: [...this.state.dungeonItems] });
     this.#command(leg.buyer, "configure_return_hang", {
       accountIndex: leg.buyer.accountIndex, map: this.state.returnMap });
-    this.#command(leg.seller, "switch_account", { accountIndex: leg.seller.accountIndex });
     this.#command(leg.seller, "run_equipment_sell", { accountIndex: leg.seller.accountIndex });
     this.state.phase = "seller_running";
     this.state.updatedAt = this.now();

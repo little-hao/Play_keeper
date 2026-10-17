@@ -434,13 +434,14 @@ public final class MainActivity extends Activity {
 
                     @Override
                     public void activateAccount(int accountIndex) {
-                        selectAccount(accountIndex, false);
+                        // Automation may work in a background WebView.  Never replace the
+                        // account that the user explicitly chose to watch.
+                        getOrCreateSession(accountIndex);
                     }
 
                     @Override
                     public void prepareAutomation(int accountIndex, boolean landscape) {
                         Session session = getOrCreateSession(accountIndex);
-                        selectAccount(accountIndex, false);
                         boolean modeChanged = session.desktopMode != landscape;
                         session.desktopMode = landscape;
                         preferences.edit()
@@ -448,8 +449,10 @@ public final class MainActivity extends Activity {
                                 .putBoolean(desktopModeKey(accountIndex), landscape)
                                 .apply();
                         applyUserAgent(session);
-                        applyPreferredOrientation(accountIndex);
-                        updateToolbarState();
+                        if (accountIndex == activeAccount) {
+                            applyPreferredOrientation(accountIndex);
+                            updateToolbarState();
+                        }
                         pushTelemetry();
                         // Main-game automation depends on the fixed desktop layout.  Reload the
                         // home page whenever the profile was still using the mobile user agent;
@@ -1312,6 +1315,13 @@ public final class MainActivity extends Activity {
                     automationCoordinator.runEquipmentBuyNow(index);
                     success = true;
                     resultMessage = "已启动装备购买";
+                    break;
+                }
+                case "run_daily_tasks": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.runDailyTasksNow(index);
+                    success = true;
+                    resultMessage = "已启动一键接受日常任务";
                     break;
                 }
                 case "run_seller_cleanup": {

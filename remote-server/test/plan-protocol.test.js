@@ -80,12 +80,12 @@ test("relay starts the cross-device first leg and starts buyer after exchange li
     ] }
   }));
 
-  const sellerStart = nextMessages(device2, "command.request", 3);
+  const sellerStart = nextMessages(device2, "command.request", 2);
   const buyerConfig = nextMessages(device1, "command.request", 4);
   control.send(JSON.stringify({ type: "plan.start", plan: "eight_account_daily" }));
   const [sellerCommands, buyerCommands] = await Promise.all([sellerStart, buyerConfig]);
   assert.deepEqual(sellerCommands.map((message) => message.command),
-    ["configure_equipment_transfer", "switch_account", "run_equipment_sell"]);
+    ["configure_equipment_transfer", "run_equipment_sell"]);
   assert.equal(sellerCommands[0].parameters.buyer, "hao1");
   assert.equal(sellerCommands[0].parameters.items.length, 10);
   assert.deepEqual(buyerCommands.map((message) => message.command), [
@@ -93,7 +93,7 @@ test("relay starts the cross-device first leg and starts buyer after exchange li
     "configure_dungeon_sequence", "configure_return_hang"
   ]);
 
-  const buyerStart = nextMessages(device1, "command.request", 2);
+  const buyerStart = nextMessages(device1, "command.request", 1);
   device2.send(JSON.stringify({
     type: "telemetry.update", payload: { accounts: [{
       index: 0, label: "hao", automation: {
@@ -103,8 +103,8 @@ test("relay starts the cross-device first leg and starts buyer after exchange li
   }));
   const buyerStartCommands = await buyerStart;
   assert.deepEqual(buyerStartCommands.map((message) => message.command),
-    ["switch_account", "run_equipment_buy"]);
-  assert.equal(buyerStartCommands[1].parameters.accountIndex, 0);
+    ["run_equipment_buy"]);
+  assert.equal(buyerStartCommands[0].parameters.accountIndex, 0);
 });
 
 test("saves a daily full-route schedule with configurable dungeons", async (context) => {

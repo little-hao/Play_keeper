@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css?v=2.0.0">
+  <link rel="stylesheet" href="/styles.css?v=2.0.1">
 </head>
 <body>
   <main class="shell">
@@ -254,7 +254,8 @@
           <div class="automation-grid">
             <label class="span-2">装备组合（厄菲斯神十件套）<input class="equipment-items" type="text" value="厄菲斯神剑,厄菲斯神铠,厄菲斯神冠,厄菲斯神靴,厄菲斯神链,厄菲斯神戒,厄菲斯神翼,厄菲斯神镯,厄菲斯神玉,厄菲斯神印"></label>
             <label>单价（金币）<input class="equipment-price" type="number" min="1" max="9999999" value="920"></label>
-            <label>指定买家ID<input class="equipment-buyer" type="text" maxlength="30" placeholder="上架时必填"></label>
+            <label>装备卖方账号<input class="equipment-seller" list="userAccountOptions" type="text" maxlength="30" placeholder="默认当前账号"></label>
+            <label>指定买家账号<input class="equipment-buyer" list="userAccountOptions" type="text" maxlength="30" placeholder="可下拉选择或自行输入"></label>
           </div>
           <p class="automation-help">卖方首批最多上架5件，20秒后自动启动同一 APP 内用户名匹配的买方账号；确认成交后重新进入交易所上架下一批。跨设备时卖方不会无限等待本机买方。</p>
           <div class="automation-actions action-grid two-actions">
@@ -279,6 +280,7 @@
             <button class="run-temple secondary">恢复圣兽云殿</button>
             <button class="run-warehouse secondary">立即检查存仓</button>
             <button class="run-dungeons secondary">执行副本组合</button>
+            <button class="run-daily-tasks secondary">一键接受日常任务</button>
             <button class="run-prestige secondary">检查威望道具</button>
             <button class="run-inventory secondary">刷新背包监控</button>
           </div>
@@ -298,6 +300,6 @@
       <div id="selectOptions" class="select-options" role="radiogroup"></div>
     </section>
   </div>
-  <script type="module" src="/app.js?v=2.0.0"></script>
+  <script type="module" src="/app.js?v=2.0.1"></script>
 </body>
 </html>

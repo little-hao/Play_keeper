@@ -237,9 +237,7 @@ elements.quickAuctionToMain.addEventListener("click", () => {
     reserveCount: Number(elements.planResourceReserve.value) });
   sendCommand(target.deviceId, "configure_return_hang", {
     accountIndex: target.accountIndex, map: returnMap });
-  sendCommand(target.deviceId, "switch_account", { accountIndex: target.accountIndex });
-  setTimeout(() => sendCommand(target.deviceId, "run_auto_auction",
-    { accountIndex: target.accountIndex }), 700);
+  sendCommand(target.deviceId, "run_auto_auction", { accountIndex: target.accountIndex });
   addLog(`${target.label} 已启动组合道具拍卖，指定买家 ${buyer}`);
 });
 elements.quickMainBuy.addEventListener("click", () => {
@@ -255,9 +253,7 @@ elements.quickMainBuy.addEventListener("click", () => {
     reserveCount: Number(elements.planResourceReserve.value) });
   sendCommand(target.deviceId, "configure_return_hang", {
     accountIndex: target.accountIndex, map: returnMap });
-  sendCommand(target.deviceId, "switch_account", { accountIndex: target.accountIndex });
-  setTimeout(() => sendCommand(target.deviceId, "run_auction_buy",
-    { accountIndex: target.accountIndex }), 700);
+  sendCommand(target.deviceId, "run_auction_buy", { accountIndex: target.accountIndex });
   addLog(`${buyer} 已启动全部920金币组合道具购买`);
 });
 elements.quickSweepAll.addEventListener("click", () => {
@@ -291,9 +287,7 @@ elements.quickStartHang.addEventListener("click", () => {
   const map = elements.quickHangMap.value.trim() || "圣兽云殿";
   sendCommand(target.deviceId, "configure_return_hang", {
     accountIndex: target.accountIndex, map });
-  sendCommand(target.deviceId, "switch_account", { accountIndex: target.accountIndex });
-  setTimeout(() => sendCommand(target.deviceId, "run_temple_guard",
-    { accountIndex: target.accountIndex }), 700);
+  sendCommand(target.deviceId, "run_temple_guard", { accountIndex: target.accountIndex });
   addLog(`${target.label} 已启动${map}挂机`);
 });
 elements.selectOverlay.addEventListener("click", (event) => {
@@ -751,9 +745,7 @@ function renderGlobalDailyMonitor() {
     refresh.className = "secondary";
     refresh.textContent = "刷新背包";
     refresh.addEventListener("click", () => {
-      sendCommand(device.deviceId, "switch_account", { accountIndex: account.index });
-      setTimeout(() => sendCommand(device.deviceId, "run_inventory_snapshot",
-        { accountIndex: account.index }), 700);
+      sendCommand(device.deviceId, "run_inventory_snapshot", { accountIndex: account.index });
     });
     const actions = document.createElement("div");
     actions.className = "daily-status-actions";
@@ -956,6 +948,7 @@ function renderDevices() {
     const inventoryItemsInput = card.querySelector(".inventory-items");
     const equipmentItemsInput = card.querySelector(".equipment-items");
     const equipmentPriceInput = card.querySelector(".equipment-price");
+    const equipmentSellerInput = card.querySelector(".equipment-seller");
     const equipmentBuyerInput = card.querySelector(".equipment-buyer");
     const auctionItems = Array.isArray(automation.auctionItems)
       ? automation.auctionItems : (automation.sellItems ?? ["进化宝石", "曙光印记"]);
@@ -997,6 +990,7 @@ function renderDevices() {
       ? automation.equipmentItems.join(",") : defaultEquipmentItems;
     equipmentPriceInput.value = String(Number.isInteger(automation.equipmentPrice)
       ? automation.equipmentPrice : 920);
+    equipmentSellerInput.value = accountLabel(accounts, activeAccountIndex);
     equipmentBuyerInput.value = typeof automation.equipmentBuyer === "string"
       ? automation.equipmentBuyer : "";
     card.querySelector(".automation-status").textContent = automation.busy
@@ -1139,6 +1133,9 @@ function renderDevices() {
     card.querySelector(".run-dungeons").addEventListener("click", () => {
       if (saveAutomation()) sendCommand(device.deviceId, "run_dungeon_sequence", { accountIndex: activeAccountIndex });
     });
+    card.querySelector(".run-daily-tasks").addEventListener("click", () => {
+      sendCommand(device.deviceId, "run_daily_tasks", { accountIndex: activeAccountIndex });
+    });
     card.querySelector(".run-prestige").addEventListener("click", () => {
       if (saveAutomation()) sendCommand(device.deviceId, "run_prestige_items", { accountIndex: activeAccountIndex });
     });
@@ -1152,11 +1149,31 @@ function renderDevices() {
       sendCommand(device.deviceId, "resolve_temple_confirmation", { accountIndex: activeAccountIndex, enterTemple: false });
     });
     card.querySelector(".run-equipment-sell").addEventListener("click", () => {
-      if (!equipmentBuyerInput.value.trim()) return addLog("上架装备前请填写指定买家ID");
-      if (saveAutomation()) sendCommand(device.deviceId, "run_equipment_sell", { accountIndex: activeAccountIndex });
+      const seller = accountTarget(equipmentSellerInput.value.trim());
+      const buyerLabel = equipmentBuyerInput.value.trim();
+      const buyer = accountTarget(buyerLabel);
+      const items = equipmentItemsInput.value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
+      const price = Number.parseInt(equipmentPriceInput.value, 10);
+      if (!seller) return addLog(`卖方账号 ${equipmentSellerInput.value || "--"} 当前不在线`);
+      if (!buyerLabel) return addLog("上架装备前请选择或填写指定买家");
+      if (!items.length || items.length > 10 || !Number.isInteger(price)) return addLog("请检查装备组合和单价");
+      sendCommand(seller.deviceId, "configure_equipment_transfer", {
+        accountIndex: seller.accountIndex, items, price, buyer: buyerLabel });
+      if (buyer) sendCommand(buyer.deviceId, "configure_equipment_transfer", {
+        accountIndex: buyer.accountIndex, items, price, buyer: "" });
+      sendCommand(seller.deviceId, "run_equipment_sell", { accountIndex: seller.accountIndex });
+      addLog(`${seller.label} 已开始向 ${buyerLabel} 上架装备`);
     });
     card.querySelector(".run-equipment-buy").addEventListener("click", () => {
-      if (saveAutomation()) sendCommand(device.deviceId, "run_equipment_buy", { accountIndex: activeAccountIndex });
+      const buyer = accountTarget(equipmentBuyerInput.value.trim());
+      const items = equipmentItemsInput.value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
+      const price = Number.parseInt(equipmentPriceInput.value, 10);
+      if (!buyer) return addLog(`买方账号 ${equipmentBuyerInput.value || "--"} 当前不在线`);
+      if (!items.length || items.length > 10 || !Number.isInteger(price)) return addLog("请检查装备组合和单价");
+      sendCommand(buyer.deviceId, "configure_equipment_transfer", {
+        accountIndex: buyer.accountIndex, items, price, buyer: "" });
+      sendCommand(buyer.deviceId, "run_equipment_buy", { accountIndex: buyer.accountIndex });
+      addLog(`${buyer.label} 已开始购买指定装备`);
     });
     elements.deviceList.append(card);
     if (!app.previewEnabled) {
