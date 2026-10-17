@@ -1619,23 +1619,36 @@ public final class MainActivity extends Activity {
             Session session = getOrCreateSession(accountIndex);
             String script = "(function(){const x=" + x1 + "*innerWidth,y=" + y1
                     + "*innerHeight,dx=(" + x1 + "-" + x2 + ")*innerWidth*1.15,dy=("
-                    + y1 + "-" + y2 + ")*innerHeight*1.15;"
-                    + "let e=document.elementFromPoint(x,y);const candidates=[];"
-                    + "while(e){candidates.push(e);e=e.parentElement;}"
-                    + "candidates.push(document.scrollingElement,document.documentElement,document.body);"
-                    + "const target=candidates.find(v=>v&&((Math.abs(dy)>Math.abs(dx)"
-                    + "&&v.scrollHeight>v.clientHeight+2)||(Math.abs(dx)>=Math.abs(dy)"
-                    + "&&v.scrollWidth>v.clientWidth+2)));"
-                    + "if(!target)return false;const beforeX=target.scrollLeft,beforeY=target.scrollTop;"
+                    + y1 + "-" + y2 + ")*innerHeight*1.15,vertical=Math.abs(dy)>Math.abs(dx);"
+                    + "const visible=v=>{if(!v)return false;const s=getComputedStyle(v),r=v.getBoundingClientRect();"
+                    + "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>1&&r.height>1;};"
+                    + "const scrollable=v=>v&&visible(v)&&(vertical?v.scrollHeight>v.clientHeight+2:"
+                    + "v.scrollWidth>v.clientWidth+2);"
+                    + "const modalSelectors=['[role=dialog]','.uni-popup__wrapper','.uni-popup','.modal',"
+                    + "'.dialog','.pack-modal','.warehouse-modal','.task-modal'];"
+                    + "const modals=Array.from(document.querySelectorAll(modalSelectors.join(','))).filter(visible);"
+                    + "const modal=modals.length?modals[modals.length-1]:null;"
+                    + "let e=document.elementFromPoint(x,y),candidates=[];"
+                    + "if(modal){if(!modal.contains(e))e=modal;while(e&&modal.contains(e)){candidates.push(e);"
+                    + "if(e===modal)break;e=e.parentElement;}candidates.push(...modal.querySelectorAll('*'));}"
+                    + "else{while(e){candidates.push(e);e=e.parentElement;}"
+                    + "candidates.push(document.scrollingElement,document.documentElement,document.body);}"
+                    + "const target=candidates.find(scrollable);if(!target)return modal?'modal-blocked':'none';"
+                    + "const beforeX=target.scrollLeft,beforeY=target.scrollTop;"
                     + "target.scrollBy({left:dx,top:dy,behavior:'auto'});"
                     + "target.dispatchEvent(new Event('scroll',{bubbles:true}));"
-                    + "return target.scrollLeft!==beforeX||target.scrollTop!==beforeY;})()";
+                    + "return target.scrollLeft!==beforeX||target.scrollTop!==beforeY?'scrolled':"
+                    + "(modal?'modal-blocked':'none');})()";
             session.webView.evaluateJavascript(script, encoded -> {
-                boolean domScrolled = "true".equals(encoded);
+                boolean domScrolled = "\"scrolled\"".equals(encoded);
+                boolean modalBlocked = "\"modal-blocked\"".equals(encoded);
                 try {
-                    if (!domScrolled) dispatchSwipe(session.webView, x1, y1, x2, y2, durationMs);
+                    if (!domScrolled && !modalBlocked) {
+                        dispatchSwipe(session.webView, x1, y1, x2, y2, durationMs);
+                    }
                     remoteConnectionManager.sendCommandResult(commandId, true,
-                            domScrolled ? "远程页面已滚动" : "远程触摸滑动已执行");
+                            domScrolled ? "远程页面已滚动"
+                                    : modalBlocked ? "弹窗已到滚动边界" : "远程触摸滑动已执行");
                     mainHandler.postDelayed(this::capturePreviewFrame,
                             domScrolled ? 180L : durationMs + 180L);
                 } catch (RuntimeException error) {

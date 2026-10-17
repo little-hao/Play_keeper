@@ -371,7 +371,7 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    ok: true, service: "play-keeper-relay", version: "2.0.0-rc2"
+    ok: true, service: "play-keeper-relay", version: "2.0.0"
   });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);

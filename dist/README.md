@@ -2,11 +2,11 @@
 
 APK 属于构建产物，不提交到 Git。当前 Android 10+ 可安装包为：
 
-`PlayKeeper-Android10Plus-v2.0.0-rc2.apk`
+`PlayKeeper-Android10Plus-v2.0.0.apk`
 
 配套 VPS 服务包为：
 
-`PlayKeeper-VPS-v2.0.0-rc2.tar.gz`
+`PlayKeeper-VPS-v2.0.0.tar.gz`
 
 Mac 当前可安装的平行版为：
 
@@ -16,6 +16,6 @@ Mac 当前可安装的平行版为：
 
 其 SHA-256 校验值保存在同名 `.sha256` 文件中。原始构建产物位于：
 
-`app/build/outputs/apk/macParallel/app-macParallel.apk`
+`app/build/outputs/apk/release/app-release.apk`
 
 APK 通过 GitHub Release 分发；`dist/*.apk` 已由 `.gitignore` 排除，不提交到源码仓库。

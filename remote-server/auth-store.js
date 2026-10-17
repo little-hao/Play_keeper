@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const DEFAULT_PASSWORD = "20261016";
+const DEFAULT_ADMIN_USERNAME = "hao管理员";
 const HAO_ACCOUNTS = Object.freeze(["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7"]);
 const FROST_ACCOUNTS = Object.freeze(["杂鱼小弟", "杂鱼小妹", "合宠糕手", "涅槃糕手"]);
 
@@ -77,8 +78,18 @@ export class AuthStore {
 
   #ensureDefaults() {
     let changed = false;
+    // v2.0 RC used `hao` as the administrator login.  The formal release keeps
+    // that account (including its password, token and settings) but gives it an
+    // unambiguous name so `hao` can be the requested normal user.
+    const legacyAdmin = this.data.users.find((entry) => entry.username === "hao"
+      && entry.role === "admin");
+    if (legacyAdmin && !this.data.users.some((entry) => entry.username === DEFAULT_ADMIN_USERNAME)) {
+      legacyAdmin.username = DEFAULT_ADMIN_USERNAME;
+      changed = true;
+    }
     const defaults = [
-      { username: "hao", role: "admin", accountLabels: HAO_ACCOUNTS },
+      { username: DEFAULT_ADMIN_USERNAME, role: "admin", accountLabels: HAO_ACCOUNTS },
+      { username: "hao", role: "user", accountLabels: HAO_ACCOUNTS },
       { username: "霜冻前夜", role: "user", accountLabels: FROST_ACCOUNTS }
     ];
     for (const item of defaults) {
@@ -91,7 +102,8 @@ export class AuthStore {
     }
     for (const user of this.data.users) {
       if (!user.settings || typeof user.settings !== "object") {
-        user.settings = defaultSettings(user.username === "hao" ? HAO_ACCOUNTS : []);
+        user.settings = defaultSettings(
+          [DEFAULT_ADMIN_USERNAME, "hao"].includes(user.username) ? HAO_ACCOUNTS : []);
         changed = true;
       }
     }
@@ -106,7 +118,7 @@ export class AuthStore {
   authenticate(username, password, legacyToken, deviceCredential = "") {
     const name = safeName(username);
     if (!name && this.adminToken && equalText(legacyToken ?? password, this.adminToken)) {
-      return { id: "legacy-admin", username: "hao", role: "admin", legacy: true,
+      return { id: "legacy-admin", username: DEFAULT_ADMIN_USERNAME, role: "admin", legacy: true,
         settings: defaultSettings(HAO_ACCOUNTS) };
     }
     const user = this.data.users.find((entry) => entry.username === name && !entry.disabled);
@@ -133,9 +145,11 @@ export class AuthStore {
       }
     }
     if (legacyDeviceToken && equalText(value, legacyDeviceToken)) {
-      const hao = this.data.users.find((entry) => entry.username === "hao");
-      return hao ? this.#publicUser(hao)
-        : { id: "legacy-admin", username: "hao", role: "admin", settings: defaultSettings(HAO_ACCOUNTS) };
+      const admin = this.data.users.find((entry) => entry.username === DEFAULT_ADMIN_USERNAME)
+        || this.data.users.find((entry) => entry.role === "admin");
+      return admin ? this.#publicUser(admin)
+        : { id: "legacy-admin", username: DEFAULT_ADMIN_USERNAME, role: "admin",
+          settings: defaultSettings(HAO_ACCOUNTS) };
     }
     return null;
   }
@@ -199,7 +213,7 @@ export class AuthStore {
 
   updateSettings(user, patch) {
     const record = this.data.users.find((entry) => entry.id === user?.id);
-    if (!record) throw new Error("兼容管理员请使用 hao 账号登录后保存独立设置");
+    if (!record) throw new Error("兼容管理员请使用 hao管理员 账号登录后保存独立设置");
     record.settings = { ...(record.settings || defaultSettings([])), ...structuredClone(patch) };
     this.#save();
     return this.getSettings(this.#publicUser(record));

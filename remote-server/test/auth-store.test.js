@@ -10,7 +10,8 @@ test("multi-user credentials and device ownership are persisted and isolated", (
   context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const file = path.join(directory, "users.json");
   const store = new AuthStore(file, "legacy-admin-token-123456");
-  assert.equal(store.authenticate("hao", "20261016", "").role, "admin");
+  assert.equal(store.authenticate("hao管理员", "20261016", "").role, "admin");
+  assert.equal(store.authenticate("hao", "20261016", "").role, "user");
   const frost = store.authenticate("霜冻前夜", "20261016", "");
   assert.deepEqual(frost.settings.accountLabels,
     ["杂鱼小弟", "杂鱼小妹", "合宠糕手", "涅槃糕手"]);
@@ -24,6 +25,21 @@ test("multi-user credentials and device ownership are persisted and isolated", (
   const restored = new AuthStore(file, "legacy-admin-token-123456");
   assert.equal(restored.authenticate("owner1", "correct-horse-123", "").username, "owner1");
   assert.equal(restored.authenticate("", "", "legacy-admin-token-123456").role, "admin");
+});
+
+test("the RC hao administrator is migrated without losing credentials", (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "play-keeper-migration-"));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "users.json");
+  const seed = new AuthStore(file, "legacy-admin-token-123456");
+  const json = JSON.parse(fs.readFileSync(file, "utf8"));
+  const admin = json.users.find((entry) => entry.username === "hao管理员");
+  admin.username = "hao";
+  json.users = json.users.filter((entry) => entry.username !== "hao" || entry.id === admin.id);
+  fs.writeFileSync(file, `${JSON.stringify(json, null, 2)}\n`);
+  const migrated = new AuthStore(file, "legacy-admin-token-123456");
+  assert.equal(migrated.authenticate("hao管理员", "20261016", "").id, admin.id);
+  assert.equal(migrated.authenticate("hao", "20261016", "").role, "user");
 });
 
 test("a device token can be bound to a user login combination", (context) => {
