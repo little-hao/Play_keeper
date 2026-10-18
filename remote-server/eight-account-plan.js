@@ -12,7 +12,6 @@ export const RESOURCE_ITEMS = Object.freeze([
 const REQUIRED_ROUTE = Object.freeze([
   "hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"
 ]);
-const SELLER_CLEANUP_DELAY_MS = 30_000;
 
 function shanghaiDateKey(timestamp) {
   if (!Number.isFinite(Number(timestamp)) || Number(timestamp) <= 0) return "";
@@ -321,8 +320,13 @@ export class EightAccountPlan {
       return this.snapshot();
     }
     if (["seller_running", "buyer_running"].includes(this.state.phase)) {
-      if (buyer) this.#scheduleSellerAfterTransfer(leg, buyer);
-      if (seller?.task === "equipment_sell" && seller.status === "error") {
+      if (buyer) {
+        this.#scheduleSellerAfterTransfer(leg, buyer);
+        if (this.state.sellerCleanupDueAt > 0
+            && this.now() >= this.state.sellerCleanupDueAt) this.#releaseScheduledSeller();
+      }
+      if (!this.state.sellerReleased
+          && seller?.task === "equipment_sell" && seller.status === "error") {
         return this.#handleAccountFailure(leg.seller,
           `${leg.seller.accountLabel} 上架失败：${seller.lastMessage || "未知错误"}`);
       }
@@ -330,7 +334,8 @@ export class EightAccountPlan {
         return this.#handleAccountFailure(leg.buyer,
           `${leg.buyer.accountLabel} 执行失败：${buyer.lastMessage || "未知错误"}`);
       }
-      if (this.state.sellerReleased && seller?.status === "error") {
+      if (this.state.sellerReleased && seller?.task === "seller_cleanup"
+          && seller.status === "error") {
         return this.#handleAccountFailure(leg.seller,
           `${leg.seller.accountLabel} 重新穿戴或返回挂机失败：${seller.lastMessage || "未知错误"}`,
           { sellerCleanup: true });
@@ -437,7 +442,11 @@ export class EightAccountPlan {
     const transferredAt = Number(buyerAutomation.equipmentTransferLastRunAt);
     if (!Number.isFinite(transferredAt) || transferredAt < this.state.phaseStartedAt) return;
     this.state.equipmentHolderLabel = leg.buyer.accountLabel;
-    this.state.sellerCleanupDueAt = this.now() + SELLER_CLEANUP_DELAY_MS;
+    // The buyer only records equipmentTransferLastRunAt after all target pieces
+    // have been purchased and audited.  At that point the seller no longer needs
+    // to poll the exchange, so release it immediately before stale page controls
+    // can turn a completed transfer into a false listing error.
+    this.state.sellerCleanupDueAt = this.now();
     this.state.updatedAt = this.now();
   }
 

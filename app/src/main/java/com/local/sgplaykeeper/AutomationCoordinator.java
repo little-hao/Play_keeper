@@ -971,10 +971,10 @@ final class AutomationCoordinator {
                 + ".find(e=>visible(e)&&(e.textContent||'').includes('价格(金币)'));"
                 + "if(!box)return JSON.stringify({status:'not_ready'});"
                 + "const names=[];for(const row of box.querySelectorAll('.ul .li')){"
-                + "const c=Array.from(row.children);if(c.length<3)continue;"
-                + "const name=(c[1].textContent||'').trim();"
-                + "const rowPrice=parseInt((c[2].textContent||'').replace(/[^0-9]/g,''),10);"
-                + "if(wanted.has(base(name))&&rowPrice===price&&!names.includes(name))names.push(name);}"
+                + "const cells=Array.from(row.children).map(e=>(e.textContent||'').trim());"
+                + "const name=cells.find(v=>wanted.has(base(v)))||'';"
+                + "const priced=cells.some(v=>parseInt(v.replace(/[^0-9]/g,''),10)===price);"
+                + "if(name&&priced&&!names.includes(name))names.push(name);}"
                 + "return JSON.stringify({status:'ok',names});})()";
         view.evaluateJavascript(script, encoded -> {
             JSONObject result = decodeObject(encoded);
@@ -1130,11 +1130,18 @@ final class AutomationCoordinator {
                 + "const controls=Array.from(market.querySelectorAll('.footer-box .d-f button,.footer-box .d-f uni-button,.footer-box .d-f [role=button]')).filter(visible);"
                 + "let sell=controls.find(e=>['卖出','出售','上架'].includes(label(e)));"
                 + "if(!sell&&controls.length===2&&label(controls[0])==='购买')sell=controls[1];"
-                + "if(!sell)return JSON.stringify({status:'no_sell',controls:controls.map(label).join('|')});sell.click();"
+                + "if(!sell){const labels=controls.map(label);"
+                + "if(labels.some(v=>/下架/.test(v)))return JSON.stringify({status:'already_listed',controls:labels.join('|')});"
+                + "return JSON.stringify({status:'no_sell',controls:labels.join('|')});}sell.click();"
                 + "return JSON.stringify({status:'sell_clicked'});})()";
         view.evaluateJavascript(script, encoded -> {
             JSONObject result = decodeObject(encoded);
             String status = result == null ? "invalid" : result.optString("status");
+            if ("already_listed".equals(status)) {
+                acceptExistingEquipmentListing(accountIndex, view, items,
+                        itemIndex, itemName, manual);
+                return;
+            }
             if (("no_sell".equals(status) || "no_market".equals(status)
                     || "reselected".equals(status) || "invalid".equals(status)) && attempt < 8) {
                 handler.postDelayed(() -> clickEquipmentSellButton(accountIndex, view, items,
@@ -1157,6 +1164,31 @@ final class AutomationCoordinator {
             handler.postDelayed(() -> fillAndConfirmEquipmentSell(accountIndex, view, items,
                     itemIndex, itemName, before, manual, 0), 800L);
         });
+    }
+
+    private void acceptExistingEquipmentListing(int accountIndex, WebView view,
+                                                  List<String> items, int itemIndex,
+                                                  String itemName, boolean manual) {
+        RuntimeState state = states[accountIndex];
+        if (stopped || !state.busy || !"equipment_sell".equals(state.task)) return;
+        if (!state.equipmentBatchNames.contains(itemName)) {
+            state.equipmentBatchNames.add(itemName);
+            state.equipmentListedInBatch++;
+        }
+        state.equipmentBatchSeen = true;
+        state.equipmentBatchEmptyChecks = 0;
+        state.equipmentWaitStartedAt = System.currentTimeMillis();
+        updateState(accountIndex, itemName + "：检测到已有上架记录，继续等待买方成交");
+        int nextIndex = itemIndex + 1;
+        boolean batchFull = state.equipmentListedInBatch >= EQUIPMENT_ACTIVE_LIMIT;
+        boolean allItemsListed = nextIndex >= items.size();
+        if (batchFull || allItemsListed) {
+            handler.postDelayed(() -> startBuyerAndWaitForBatchClear(
+                    accountIndex, view, items, nextIndex, manual), 500L);
+        } else {
+            handler.postDelayed(() -> processEquipmentItem(
+                    accountIndex, view, items, nextIndex, true, manual), 350L);
+        }
     }
 
     private void fillAndConfirmEquipmentSell(int accountIndex, WebView view, List<String> items,
@@ -1338,10 +1370,10 @@ final class AutomationCoordinator {
                 + ".find(e=>visible(e)&&(e.textContent||'').includes('价格(金币)'));"
                 + "if(!box)return JSON.stringify({status:'not_ready'});"
                 + "const rows=Array.from(box.querySelectorAll('.ul .li'));let count=0;"
-                + "for(const row of rows){const c=Array.from(row.children);if(c.length<3)continue;"
-                + "const n=(c[1].textContent||'').trim();"
-                + "const p=parseInt((c[2].textContent||'').replace(/[^0-9]/g,''),10);"
-                + "if(wanted.has(base(n))&&p===price)count++;}"
+                + "for(const row of rows){const cells=Array.from(row.children).map(e=>(e.textContent||'').trim());"
+                + "const n=cells.find(v=>wanted.has(base(v)))||'';"
+                + "const priced=cells.some(v=>parseInt(v.replace(/[^0-9]/g,''),10)===price);"
+                + "if(n&&priced)count++;}"
                 + "const refresh=Array.from(document.querySelectorAll('button,uni-button,[role=button],a,view'))"
                 + ".find(e=>visible(e)&&(e.textContent||'').replace(/\\s+/g,'')==='点击刷新');"
                 + "if(refresh)refresh.click();return JSON.stringify({status:'ok',count});})()";

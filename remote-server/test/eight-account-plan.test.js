@@ -76,8 +76,6 @@ test("runs all eight relay legs and returns the equipment to hao", () => {
       inventoryStatus: "ok",
       inventoryCounts: { "曙光印记": 3, "进化宝石": 2 }
     }));
-    clock += 30_001;
-    plan.tick();
     plan.onTelemetry(seller.deviceId, telemetry(seller.accountIndex, {
       task: "temple", status: "ok", updatedAt: 1_000_000,
       finalEquipLastRunAt: 1_000_000
@@ -211,7 +209,7 @@ test("restores a running saved state as an indefinite intervention", () => {
   assert.match(restored.snapshot().error, /服务恢复后已暂停/);
 });
 
-test("releases every seller to the return map after equipment arrives", () => {
+test("releases every seller immediately after equipment arrives", () => {
   const actions = [];
   let clock = 1_000;
   const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => clock });
@@ -222,9 +220,6 @@ test("releases every seller to the return map after equipment arrives", () => {
   plan.onTelemetry(d1, telemetry(0, {
     task: "equipment_buy", status: "running", equipmentTransferLastRunAt: 2_000
   }));
-  assert.notEqual(actions.at(-1).command, "run_seller_cleanup");
-  clock += 30_001;
-  plan.tick();
   const release = actions.slice(-3).map((action) => action.command);
   assert.deepEqual(release,
     ["cancel_automation", "configure_return_hang", "run_seller_cleanup"]);
@@ -242,10 +237,32 @@ test("releases every seller to the return map after equipment arrives", () => {
   sameDevicePlan.onTelemetry(d1, { accounts: [
     { index: 1, automation: { task: "equipment_buy", status: "running", equipmentTransferLastRunAt: 2_000 } }
   ] });
-  clock += 30_001;
-  sameDevicePlan.tick();
   assert.deepEqual(actions.slice(-3).map((action) => action.command),
     ["cancel_automation", "configure_return_hang", "run_seller_cleanup"]);
+});
+
+test("ignores a stale seller listing error after the remote buyer has the equipment", () => {
+  const actions = [];
+  let clock = 1_000;
+  const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action),
+    now: () => clock });
+  plan.start(route());
+  plan.onTelemetry(d2, telemetry(0, {
+    task: "equipment_sell", status: "running", equipmentListedInBatch: 5
+  }));
+  clock = 2_000;
+  plan.onTelemetry(d1, telemetry(0, {
+    task: "equipment_buy", status: "running", equipmentTransferLastRunAt: 2_000
+  }));
+  assert.equal(plan.snapshot().equipmentHolderLabel, "hao1");
+  assert.equal(plan.snapshot().sellerReleased, true);
+  plan.onTelemetry(d2, telemetry(0, {
+    task: "equipment_sell", status: "error",
+    lastMessage: "厄菲斯神链：选中装备后未找到卖出按钮"
+  }));
+  assert.equal(plan.snapshot().status, "running");
+  assert.equal(plan.snapshot().equipmentHolderLabel, "hao1");
+  assert.equal(plan.snapshot().error, "");
 });
 
 test("keeps completed-dungeon accounts in the equipment relay route", () => {
