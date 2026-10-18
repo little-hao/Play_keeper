@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { once } from "node:events";
 import { WebSocket } from "ws";
 import { createRelayServer } from "../server.js";
+import { AuthStore } from "../auth-store.js";
 
 const adminToken = "test-admin-token-123456789";
 const deviceToken = "test-device-token-12345678";
@@ -25,6 +29,54 @@ function nextJson(socket, expectedType, timeout = 3000) {
     socket.on("message", onMessage);
   });
 }
+
+test("assigned device accounts are persisted to the matching remote user", async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "play-keeper-sync-"));
+  const authFile = path.join(directory, "users.json");
+  const token = "frost-device-token-20261018";
+  const store = new AuthStore(authFile, adminToken);
+  const frost = store.authenticate("霜冻前夜", "20261016", "", token);
+  store.updateSettings(frost, { accountLabels: ["hao", "hao1", "hao2", "hao3"],
+    mainAccount: "hao", planSchedule: { enabled: false, time: "04:00",
+      timeZone: "Asia/Shanghai", options: {
+        routeLabels: ["hao", "hao1", "hao2", "hao3", "hao"] } } });
+  const server = createRelayServer({ adminToken, deviceToken, authFile,
+    planScheduleFile: path.join(directory, "schedule.json"),
+    logger: { warn() {}, error() {} } });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const port = server.address().port;
+  const device = await connect(`ws://127.0.0.1:${port}/device`);
+  const control = await connect(`ws://127.0.0.1:${port}/control`);
+  context.after(async () => {
+    device.terminate();
+    control.terminate();
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  const deviceAccepted = nextJson(device, "device.accepted");
+  device.send(JSON.stringify({ type: "device.hello", deviceId: "PK-FROST123456",
+    token, appVersion: "2.0.2-rc2" }));
+  await deviceAccepted;
+  const controlAccepted = nextJson(control, "control.accepted");
+  const initialSettings = nextJson(control, "user.settings");
+  control.send(JSON.stringify({ type: "control.hello", username: "霜冻前夜",
+    password: "20261016", deviceToken: token }));
+  await controlAccepted;
+  await initialSettings;
+
+  const updatedSettings = nextJson(control, "user.settings");
+  device.send(JSON.stringify({ type: "telemetry.update", payload: { accounts: [
+    { index: 0, label: "杂鱼小弟" }, { index: 1, label: "杂鱼小妹" },
+    { index: 2, label: "合宠糕手" }, { index: 3, label: "涅槃糕手" }
+  ] } }));
+  const update = await updatedSettings;
+  assert.deepEqual(update.payload.accountLabels,
+    ["杂鱼小弟", "杂鱼小妹", "合宠糕手", "涅槃糕手"]);
+  assert.deepEqual(update.payload.planSchedule.options.routeLabels,
+    ["杂鱼小弟", "杂鱼小妹", "合宠糕手", "涅槃糕手", "杂鱼小弟"]);
+});
 
 test("device telemetry and browser command complete a round trip", async (context) => {
   const server = createRelayServer({ adminToken, deviceToken, logger: { warn() {}, error() {} } });

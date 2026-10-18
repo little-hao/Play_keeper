@@ -69,3 +69,30 @@ test("a manual device assignment survives reconnect and store reload", (context)
   assert.equal(restored.canAccess(frost, "PK-DEVICE111111"), true);
   assert.equal(restored.publicSnapshot().deviceOwnerSources["PK-DEVICE111111"], "manual");
 });
+
+test("reported device accounts replace stale user accounts and invalid routes", (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "play-keeper-accounts-"));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "users.json");
+  const store = new AuthStore(file, "legacy-admin-token-123456");
+  const frost = store.authenticate("霜冻前夜", "20261016", "");
+  store.updateSettings(frost, {
+    accountLabels: ["hao", "hao1", "hao2", "hao3"],
+    mainAccount: "hao",
+    quickAuctionAccount: "hao1",
+    planSchedule: { enabled: false, time: "04:00", timeZone: "Asia/Shanghai",
+      options: { routeLabels: ["hao", "hao1", "hao2", "hao3", "hao"] } }
+  });
+  store.assignDevice("PK-FROST123456", "霜冻前夜");
+  const settings = store.syncAccountLabels(store.ownerIdForDevice("PK-FROST123456"),
+    ["杂鱼小弟", "杂鱼小妹", "合宠糕手", "涅槃糕手"]);
+  assert.deepEqual(settings.accountLabels, ["杂鱼小弟", "杂鱼小妹", "合宠糕手", "涅槃糕手"]);
+  assert.equal(settings.mainAccount, "杂鱼小弟");
+  assert.equal(settings.quickAuctionAccount, "");
+  assert.deepEqual(settings.planSchedule.options.routeLabels,
+    ["杂鱼小弟", "杂鱼小妹", "合宠糕手", "涅槃糕手", "杂鱼小弟"]);
+
+  const restored = new AuthStore(file, "legacy-admin-token-123456");
+  assert.deepEqual(restored.authenticate("霜冻前夜", "20261016", "").settings.accountLabels,
+    ["杂鱼小弟", "杂鱼小妹", "合宠糕手", "涅槃糕手"]);
+});

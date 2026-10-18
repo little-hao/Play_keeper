@@ -218,6 +218,47 @@ export class AuthStore {
     return Boolean(user?.id) && this.data.deviceOwners[deviceId] === user.id;
   }
 
+  ownerIdForDevice(deviceId) {
+    return this.data.deviceOwners[deviceId] || "";
+  }
+
+  syncAccountLabels(ownerId, accountLabels) {
+    const labels = cleanAccountLabels(accountLabels);
+    if (!ownerId || labels.length === 0) return null;
+    const record = this.data.users.find((entry) => entry.id === ownerId && !entry.disabled);
+    if (!record) return null;
+    const current = record.settings || defaultSettings([]);
+    const oldLabels = cleanAccountLabels(current.accountLabels);
+    if (oldLabels.length === labels.length
+        && oldLabels.every((label, index) => label === labels[index])) return null;
+
+    const valid = new Set(labels);
+    const mainAccount = valid.has(current.mainAccount) ? current.mainAccount : labels[0];
+    const schedule = structuredClone(current.planSchedule || defaultSettings(labels).planSchedule);
+    const route = Array.isArray(schedule.options?.routeLabels)
+      ? schedule.options.routeLabels.map((label) => String(label ?? "").trim()).filter(Boolean) : [];
+    const routeAccounts = route.at(-1) === route[0] ? route.slice(0, -1) : route;
+    if (route.length < 3 || route[0] !== route.at(-1)
+        || routeAccounts.some((label) => !valid.has(label))) {
+      schedule.options = { ...(schedule.options || {}),
+        routeLabels: [...labels, labels[0]] };
+    }
+    const keepIfValid = (value, fallback = "") => valid.has(value) ? value : fallback;
+    record.settings = {
+      ...current,
+      accountLabels: labels,
+      mainAccount,
+      quickAuctionAccount: keepIfValid(current.quickAuctionAccount),
+      quickHangAccount: current.quickHangAccount === "all"
+        ? "all" : keepIfValid(current.quickHangAccount),
+      auctionBuyer: keepIfValid(current.auctionBuyer),
+      equipmentBuyer: keepIfValid(current.equipmentBuyer),
+      planSchedule: schedule
+    };
+    this.#save();
+    return this.getSettings(this.#publicUser(record));
+  }
+
   getSettings(user) {
     if (user?.legacy) return structuredClone(user.settings || defaultSettings(HAO_ACCOUNTS));
     const record = this.data.users.find((entry) => entry.id === user?.id);

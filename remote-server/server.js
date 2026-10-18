@@ -528,6 +528,30 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
       authStore.canAccess(user, entry.deviceId)).map(deviceSummary);
   }
 
+  function syncReportedAccounts(deviceId) {
+    const ownerId = authStore.ownerIdForDevice(deviceId);
+    if (!ownerId) return;
+    const labels = [];
+    for (const entry of devices.values()) {
+      if (authStore.ownerIdForDevice(entry.deviceId) !== ownerId) continue;
+      const accounts = Array.isArray(entry.telemetry?.accounts) ? entry.telemetry.accounts : [];
+      for (const account of [...accounts].sort((left, right) =>
+        Number(left?.index ?? 0) - Number(right?.index ?? 0))) {
+        const label = typeof account?.label === "string" ? account.label.trim() : "";
+        if (label && !labels.includes(label)) labels.push(label);
+      }
+    }
+    const settings = authStore.syncAccountLabels(ownerId, labels);
+    if (!settings) return;
+    for (const controller of controllers) {
+      if (controller.user?.id === ownerId) {
+        sendJson(controller, { type: "user.settings", payload: settings });
+        sendJson(controller, { type: "plan.schedule",
+          payload: normalizePlanSchedule(settings.planSchedule) });
+      }
+    }
+  }
+
   function canAccessCurrentPlan(user) {
     if (user?.role === "admin") return true;
     const route = eightAccountPlan.snapshot().route || [];
@@ -604,6 +628,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
       if (!entry || entry.socket !== socket) return;
       if (message.type === "telemetry.update" && message.payload && typeof message.payload === "object") {
         entry.telemetry = message.payload;
+        syncReportedAccounts(entry.deviceId);
         broadcast({
           type: "telemetry.update",
           deviceId: entry.deviceId,

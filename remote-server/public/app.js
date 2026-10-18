@@ -313,6 +313,10 @@ function connect() {
     localStorage.setItem("playKeeperLoginProfiles", JSON.stringify(savedLogins));
   }
   manuallyClosed = false;
+  devices.clear();
+  previewFrames.clear();
+  activePreviews.clear();
+  resetUserWorkspace();
   const generation = ++connectionGeneration;
   clearTimeout(reconnectTimer);
   if (socket) socket.close();
@@ -345,6 +349,7 @@ function disconnect() {
   sessionStorage.removeItem("playKeeperCredential");
   sessionStorage.removeItem("playKeeperDeviceToken");
   devices.clear();
+  resetUserWorkspace();
   previewFrames.clear();
   activePreviews.clear();
   closeSelectDialog();
@@ -352,6 +357,17 @@ function disconnect() {
   socket?.close();
   elements.loginPanel.classList.remove("hidden");
   elements.dashboard.classList.add("hidden");
+}
+
+function resetUserWorkspace() {
+  signedInUser = null;
+  userSettings = { accountLabels: [], mainAccount: "", quickAuctionAccount: "",
+    quickHangAccount: "", quickHangMap: "圣兽云殿", auctionBuyer: "", equipmentBuyer: "" };
+  dailyPlan = { status: "idle", legIndex: -1, phase: "idle", history: [] };
+  planSchedule = { enabled: false, time: "04:00", options: {} };
+  adminSnapshot = { users: [], deviceOwners: {} };
+  renderDailyPlan();
+  renderQuickAccountControls();
 }
 
 function handleMessage(message) {
@@ -498,7 +514,7 @@ function renderDailyPlan() {
     elements.resumeEquipmentHolder.replaceChildren();
     const resumeLabels = [...new Set((dailyPlan.route || []).map((entry) => entry?.accountLabel)
       .filter((label) => typeof label === "string" && label.length > 0))];
-    if (resumeLabels.length === 0) resumeLabels.push("hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7");
+    if (resumeLabels.length === 0) resumeLabels.push(...configuredAccountLabels());
     for (const label of resumeLabels) {
       const option = document.createElement("option");
       option.value = label;
