@@ -1145,6 +1145,7 @@ public final class MainActivity extends Activity {
                 case "run_auto_auction":
                 case "run_auto_sell": {
                     int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
                     automationCoordinator.runAuctionNow(index);
                     success = true;
                     resultMessage = "已启动拍卖检查";
@@ -1152,6 +1153,7 @@ public final class MainActivity extends Activity {
                 }
                 case "run_auction_buy": {
                     int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
                     automationCoordinator.runAuctionBuyNow(index);
                     success = true;
                     resultMessage = "已启动拍卖道具购买";
@@ -1177,6 +1179,7 @@ public final class MainActivity extends Activity {
                 }
                 case "run_store_sell": {
                     int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
                     automationCoordinator.runStoreSellNow(index);
                     success = true;
                     resultMessage = "已启动道具商店卖出";
@@ -1207,6 +1210,7 @@ public final class MainActivity extends Activity {
                 }
                 case "run_warehouse_sync": {
                     int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
                     automationCoordinator.runWarehouseNow(index);
                     success = true;
                     resultMessage = "已启动仓库存放检查";
@@ -1228,6 +1232,7 @@ public final class MainActivity extends Activity {
                 }
                 case "run_dungeon_sequence": {
                     int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
                     automationCoordinator.runDungeonNow(index);
                     success = true;
                     resultMessage = "已启动副本组合";
@@ -1250,6 +1255,7 @@ public final class MainActivity extends Activity {
                 }
                 case "run_prestige_items": {
                     int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
                     automationCoordinator.runPrestigeNow(index);
                     success = true;
                     resultMessage = "已启动威望道具检查";
@@ -1271,6 +1277,7 @@ public final class MainActivity extends Activity {
                 }
                 case "run_inventory_snapshot": {
                     int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
                     automationCoordinator.runInventorySnapshotNow(index);
                     success = true;
                     resultMessage = "已启动背包物资刷新";
@@ -1305,6 +1312,7 @@ public final class MainActivity extends Activity {
                 }
                 case "run_equipment_sell": {
                     int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
                     automationCoordinator.runEquipmentSellNow(index);
                     success = true;
                     resultMessage = "已启动装备上架";
@@ -1312,6 +1320,7 @@ public final class MainActivity extends Activity {
                 }
                 case "run_equipment_buy": {
                     int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
                     automationCoordinator.runEquipmentBuyNow(index);
                     success = true;
                     resultMessage = "已启动装备购买";
@@ -1319,6 +1328,7 @@ public final class MainActivity extends Activity {
                 }
                 case "run_daily_tasks": {
                     int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
                     automationCoordinator.runDailyTasksNow(index);
                     success = true;
                     resultMessage = "已启动一键接受日常任务";
@@ -1356,6 +1366,7 @@ public final class MainActivity extends Activity {
                 }
                 case "run_temple_guard": {
                     int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
                     automationCoordinator.runTempleNow(index);
                     success = true;
                     resultMessage = "已启动圣殿挂机检查";
@@ -1387,6 +1398,13 @@ public final class MainActivity extends Activity {
             throw new IllegalArgumentException("账号索引无效");
         }
         return index;
+    }
+
+    private void requireAutomationIdle(int accountIndex) {
+        if (automationCoordinator.isBusy(accountIndex)) {
+            throw new IllegalStateException(accountDisplayName(accountIndex)
+                    + "仍在执行上一阶段，已拒绝重复启动");
+        }
     }
 
     private void startPreview(int accountIndex, int requestedMaxWidth, double requestedFps) {

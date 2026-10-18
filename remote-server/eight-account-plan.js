@@ -145,9 +145,10 @@ export class EightAccountPlan {
       throw new Error("报告邮箱格式无效");
     }
     const now = this.now();
-    const skippedCompleted = route.slice(1, -1).filter((entry) => completedToday(entry, now));
-    const activeRoute = [route[0],
-      ...route.slice(1, -1).filter((entry) => !completedToday(entry, now)), route.at(-1)];
+    // Dungeon completion may skip the dungeon work inside the Android client, but it
+    // must never remove an account from the equipment relay route.
+    const activeRoute = route.map((entry) => ({ ...entry,
+      dungeonCompletedToday: completedToday(entry, now) }));
     this.state = { ...this.#idleState(), status: "running", runId: crypto.randomUUID(),
       startedAt: now, updatedAt: now, phaseStartedAt: now, legIndex: 0,
       phase: "starting_leg", route: activeRoute.map((entry) => ({ ...entry })), items: [...items],
@@ -157,8 +158,6 @@ export class EightAccountPlan {
       resourceReserveCount,
       dungeonItems: [...new Set(dungeonItems.map((item) => String(item).trim()).filter(Boolean))],
       price, returnMap: returnMap.trim(), reportEmail: reportEmail.trim() };
-    this.state.history.push(...skippedCompleted.map((entry) => ({ account: entry.accountLabel,
-      completedAt: now, result: "skipped_completed", message: "今日副本已完成" })));
     if (this.state.route.length === 2) {
       if (completedToday(this.state.route[0], now)) this.#startMainBuy(this.state.route[0]);
       else this.#startStandaloneMain(this.state.route[0]);
@@ -337,7 +336,8 @@ export class EightAccountPlan {
           { sellerCleanup: true });
       }
       if (this.state.sellerReleased && seller?.task === "temple" && seller.status === "ok"
-          && Number(seller.updatedAt) >= this.state.phaseStartedAt) {
+          && Number(seller.updatedAt) >= this.state.phaseStartedAt
+          && Number(seller.finalEquipLastRunAt) >= this.state.phaseStartedAt) {
         this.state.sellerCleaned = true;
       }
       if (!this.state.buyerStarted && seller?.task === "equipment_sell" && seller.status === "running"
@@ -417,6 +417,7 @@ export class EightAccountPlan {
     const afterStart = (value) => Number(value) >= this.state.phaseStartedAt;
     return afterStart(automation.equipmentTransferLastRunAt)
       && afterStart(automation.dungeonLastRunAt)
+      && afterStart(automation.finalEquipLastRunAt)
       && afterStart(automation.inventoryLastRunAt)
       && automation.inventoryStatus === "ok"
       && automation.task === "temple" && automation.status === "ok";
@@ -425,6 +426,7 @@ export class EightAccountPlan {
   #standaloneMainComplete(automation) {
     const afterStart = (value) => Number(value) >= this.state.phaseStartedAt;
     return afterStart(automation.dungeonLastRunAt)
+      && afterStart(automation.finalEquipLastRunAt)
       && afterStart(automation.inventoryLastRunAt)
       && automation.inventoryStatus === "ok"
       && automation.task === "temple" && automation.status === "ok";
@@ -622,7 +624,21 @@ export class EightAccountPlan {
 
   #command(account, command, parameters) {
     this.emitAction({ deviceId: account.deviceId, accountLabel: account.accountLabel,
-      command, parameters });
+      command, parameters, runId: this.state.runId, legIndex: this.state.legIndex,
+      phase: this.state.phase });
+  }
+
+  onCommandResult(action, success, message = "") {
+    if (!action || action.runId !== this.state.runId || this.state.status !== "running") {
+      return this.snapshot();
+    }
+    if (action.legIndex !== this.state.legIndex) return this.snapshot();
+    if (!success) {
+      return this.#intervene(
+        `${action.accountLabel} 未能执行 ${action.command}：${String(message || "APP拒绝命令").slice(0, 120)}`,
+        action.accountLabel);
+    }
+    return this.snapshot();
   }
 
   #intervene(message, accountLabel) {

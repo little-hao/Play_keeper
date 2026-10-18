@@ -124,6 +124,7 @@ final class AutomationCoordinator {
     private static final String PREF_EQUIPMENT_PRICE = "automation_equipment_price_";
     private static final String PREF_EQUIPMENT_BUYER = "automation_equipment_buyer_";
     private static final String PREF_EQUIPMENT_TRANSFER_LAST = "automation_equipment_transfer_last_";
+    private static final String PREF_FINAL_EQUIP_LAST = "automation_final_equip_last_";
     private static final String PREF_DUNGEON_LAST = "automation_dungeon_last_";
     private static final String PREF_SIGN_IN_LAST = "automation_sign_in_last_";
     private static final String PREF_DAILY_TASK_LAST = "automation_daily_task_last_";
@@ -460,6 +461,11 @@ final class AutomationCoordinator {
         runEquipmentTransfer(accountIndex, false, true);
     }
 
+    boolean isBusy(int accountIndex) {
+        requireAccount(accountIndex);
+        return states[accountIndex].busy;
+    }
+
     void runSellerCleanupNow(int accountIndex) {
         requireAccount(accountIndex);
         RuntimeState state = states[accountIndex];
@@ -632,6 +638,8 @@ final class AutomationCoordinator {
                 PREF_PRESTIGE_LAST + accountIndex, 0L));
         automation.put("equipmentTransferLastRunAt", preferences.getLong(
                 PREF_EQUIPMENT_TRANSFER_LAST + accountIndex, 0L));
+        automation.put("finalEquipLastRunAt", preferences.getLong(
+                PREF_FINAL_EQUIP_LAST + accountIndex, 0L));
         automation.put("dungeonLastRunAt", preferences.getLong(
                 PREF_DUNGEON_LAST + accountIndex, 0L));
         automation.put("signInLastRunAt", preferences.getLong(
@@ -850,6 +858,8 @@ final class AutomationCoordinator {
                                 accountIndex, view, items, 0, true, manual, 0), 1_800L);
                         break;
                     case SELLER_REEQUIP_TO_TEMPLE:
+                        preferences.edit().putLong(PREF_FINAL_EQUIP_LAST + accountIndex,
+                                System.currentTimeMillis()).apply();
                         handler.postDelayed(() -> restoreAfkAndRunTemple(
                                 accountIndex, false,
                                 "装备已全部成交，剩余装备已重新穿戴"), 1_800L);
@@ -865,6 +875,8 @@ final class AutomationCoordinator {
                                 accountIndex, view, items, manual, 0), 1_500L);
                         break;
                     case DUNGEON_FINISH_EQUIP_TO_INVENTORY:
+                        preferences.edit().putLong(PREF_FINAL_EQUIP_LAST + accountIndex,
+                                System.currentTimeMillis()).apply();
                         handler.postDelayed(() -> finishDungeonsWithInventory(
                                 accountIndex, manual), 1_200L);
                         break;
@@ -2342,9 +2354,7 @@ final class AutomationCoordinator {
         host.openAfk(accountIndex);
         if (isToday(preferences.getLong(PREF_DUNGEON_LAST + accountIndex, 0L))) {
             String message = "今日副本已完成，已跳过重复副本";
-            updateState(accountIndex, message + "，正在读取每日背包物资");
-            handler.postDelayed(() -> runInventorySnapshot(accountIndex, manual, false,
-                    () -> requestTempleConfirmation(accountIndex, message, manual)), 4_000L);
+            startFinalEquipmentAndInventory(accountIndex, manual, message);
             return;
         }
         RuntimeState state = states[accountIndex];
@@ -2383,13 +2393,7 @@ final class AutomationCoordinator {
             preferences.edit().putLong(PREF_DUNGEON_LAST + accountIndex,
                     System.currentTimeMillis()).apply();
             String completedMessage = "副本队列已完成" + skipped;
-            updateState(accountIndex, completedMessage + "，正在一键穿戴剩余装备");
-            host.prepareAutomation(accountIndex, true);
-            host.openHome(accountIndex);
-            List<String> equipment = parseEquipmentItems(equipmentItemsText(accountIndex));
-            handler.postDelayed(() -> preparePetEquipment(accountIndex,
-                    host.requireWebView(accountIndex), equipment, true,
-                    PetEquipmentNext.DUNGEON_FINISH_EQUIP_TO_INVENTORY, manual, 0), 4_000L);
+            startFinalEquipmentAndInventory(accountIndex, manual, completedMessage);
             return;
         }
         String dungeon = dungeons.get(state.dungeonIndex);
@@ -2738,12 +2742,29 @@ final class AutomationCoordinator {
     }
 
     private void finishDungeonsWithInventory(int accountIndex, boolean manual) {
-        String completedMessage = "副本队列已完成，剩余装备已自动穿戴";
+        RuntimeState state = states[accountIndex];
+        String prefix = state.dungeonCompletionMessage.isBlank()
+                ? "副本队列已完成" : state.dungeonCompletionMessage;
+        String completedMessage = prefix + "，剩余装备已自动穿戴";
+        state.dungeonCompletionMessage = "";
         updateState(accountIndex, completedMessage + "，正在读取每日背包物资");
         host.prepareAutomation(accountIndex, false);
         host.openAfk(accountIndex);
         handler.postDelayed(() -> runInventorySnapshot(accountIndex, manual, false,
                 () -> restoreAfkAndRunTemple(accountIndex, manual, completedMessage)), 4_000L);
+    }
+
+    private void startFinalEquipmentAndInventory(int accountIndex, boolean manual,
+                                                  String completedMessage) {
+        RuntimeState state = states[accountIndex];
+        state.dungeonCompletionMessage = completedMessage;
+        updateState(accountIndex, completedMessage + "，正在一键穿戴剩余装备");
+        host.prepareAutomation(accountIndex, true);
+        host.openHome(accountIndex);
+        List<String> equipment = parseEquipmentItems(equipmentItemsText(accountIndex));
+        handler.postDelayed(() -> preparePetEquipment(accountIndex,
+                host.requireWebView(accountIndex), equipment, true,
+                PetEquipmentNext.DUNGEON_FINISH_EQUIP_TO_INVENTORY, manual, 0), 4_000L);
     }
 
     private void markDungeonStarted(int accountIndex, WebView view, String dungeon,
@@ -3771,6 +3792,7 @@ final class AutomationCoordinator {
         int preHangStoreRows = -1;
         int preHangStoreNoProgressChecks;
         boolean equipmentBuyerPreflightDone;
+        String dungeonCompletionMessage = "";
         int linkedEquipmentAccount = -1;
         int equipmentBatchSignalCount;
     }

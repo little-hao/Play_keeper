@@ -8,9 +8,14 @@ Type=simple
 User=playkeeper
 WorkingDirectory=/opt/play-keeper/remote-server
 EnvironmentFile=/etc/play-keeper-relay.env
+Environment=AUTH_STORE_FILE=/var/lib/play-keeper/users.json
+Environment=PLAN_SETTINGS_FILE=/var/lib/play-keeper/plan-schedule.json
+Environment=PLAN_STATE_FILE=/var/lib/play-keeper/plan-state.json
 ExecStart=/usr/bin/node /opt/play-keeper/remote-server/server.js
 Restart=always
 RestartSec=3
+StateDirectory=play-keeper
+StateDirectoryMode=0700
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

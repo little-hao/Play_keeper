@@ -71,6 +71,7 @@ test("runs all eight relay legs and returns the equipment to hao", () => {
       task: "temple", status: "ok", updatedAt: 1_000_000,
       equipmentTransferLastRunAt: 1_000_000,
       dungeonLastRunAt: 1_000_000,
+      finalEquipLastRunAt: 1_000_000,
       inventoryLastRunAt: 1_000_000,
       inventoryStatus: "ok",
       inventoryCounts: { "曙光印记": 3, "进化宝石": 2 }
@@ -78,12 +79,14 @@ test("runs all eight relay legs and returns the equipment to hao", () => {
     clock += 30_001;
     plan.tick();
     plan.onTelemetry(seller.deviceId, telemetry(seller.accountIndex, {
-      task: "temple", status: "ok", updatedAt: 1_000_000
+      task: "temple", status: "ok", updatedAt: 1_000_000,
+      finalEquipLastRunAt: 1_000_000
     }));
     plan.onTelemetry(buyer.deviceId, telemetry(buyer.accountIndex, {
       task: "temple", status: "ok", updatedAt: 1_000_000,
       equipmentTransferLastRunAt: 1_000_000,
       dungeonLastRunAt: 1_000_000,
+      finalEquipLastRunAt: 1_000_000,
       inventoryLastRunAt: 1_000_000,
       inventoryStatus: "ok",
       inventoryCounts: { "曙光印记": 3, "进化宝石": 2 }
@@ -184,6 +187,18 @@ test("requires manual confirmation of the equipment holder before resuming", () 
   assert.throws(() => plan.resume(route()), /人工确认目标套装所在账号/);
 });
 
+test("moves to intervention when the APP rejects a plan command", () => {
+  const actions = [];
+  const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action),
+    now: () => 10_000 });
+  plan.start(route());
+  const runSeller = actions.find((action) => action.command === "run_equipment_sell");
+  plan.onCommandResult(runSeller, false, "账号仍在执行上一阶段");
+  assert.equal(plan.snapshot().status, "intervention");
+  assert.equal(plan.snapshot().errorAccount, "hao");
+  assert.match(plan.snapshot().error, /拒绝|上一阶段/);
+});
+
 test("restores a running saved state as an indefinite intervention", () => {
   const first = new EightAccountPlan({ now: () => 10_000 });
   first.start(route());
@@ -233,7 +248,7 @@ test("releases every seller to the return map after equipment arrives", () => {
     ["cancel_automation", "configure_return_hang", "run_seller_cleanup"]);
 });
 
-test("omits accounts whose dungeon telemetry is already complete today", () => {
+test("keeps completed-dungeon accounts in the equipment relay route", () => {
   const actions = [];
   const today = Date.parse("2026-10-11T10:00:00+08:00");
   const plannedRoute = route();
@@ -242,13 +257,12 @@ test("omits accounts whose dungeon telemetry is already complete today", () => {
   plan.start(plannedRoute);
   const snapshot = plan.snapshot();
   assert.deepEqual(snapshot.route.map((entry) => entry.accountLabel),
-    ["hao", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"]);
-  assert.equal(snapshot.history[0].result, "skipped_completed");
-  assert.equal(snapshot.history[0].account, "hao1");
-  assert.equal(actions[0].parameters.buyer, "hao2");
+    ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"]);
+  assert.equal(snapshot.route[1].dungeonCompletedToday, true);
+  assert.equal(actions[0].parameters.buyer, "hao1");
 });
 
-test("runs hao directly without a self-transfer when every small account is complete", () => {
+test("keeps the full equipment relay when every small account dungeon is complete", () => {
   const actions = [];
   const today = Date.parse("2026-10-11T10:00:00+08:00");
   const plannedRoute = route();
@@ -257,22 +271,11 @@ test("runs hao directly without a self-transfer when every small account is comp
   }
   const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => today });
   plan.start(plannedRoute);
-  assert.equal(plan.snapshot().phase, "standalone_main_running");
-  assert.equal(actions.some((action) => action.command === "run_equipment_sell"), false);
-  assert.equal(actions.at(-1).command, "run_dungeon_sequence");
-  plan.onTelemetry(d2, telemetry(0, {
-    task: "temple", status: "ok", updatedAt: today + 1,
-    dungeonLastRunAt: today + 1, inventoryLastRunAt: today + 1,
-    inventoryStatus: "ok", inventoryCounts: { "进化宝石": 4 }
-  }));
-  assert.equal(actions.at(-1).command, "run_auction_buy");
-  plan.onTelemetry(d2, telemetry(0, {
-    task: "auction_buy", status: "running", updatedAt: today + 2
-  }));
-  plan.onTelemetry(d2, telemetry(0, {
-    task: "temple", status: "ok", updatedAt: today + 3
-  }));
-  assert.equal(plan.snapshot().status, "success");
+  assert.equal(plan.snapshot().phase, "seller_running");
+  assert.equal(plan.snapshot().route.length, 9);
+  assert.equal(actions.at(-1).command, "run_equipment_sell");
+  assert.equal(plan.snapshot().route.slice(1, -1)
+    .every((entry) => entry.dungeonCompletedToday), true);
 });
 
 test("auctions resources from all small accounts, buys on hao, then hangs all accounts", () => {

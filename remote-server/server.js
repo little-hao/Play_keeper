@@ -419,6 +419,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   const controlServer = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
   const devices = new Map();
   const controllers = new Set();
+  const pendingPlanCommands = new Map();
   const authStore = new AuthStore(authFile || process.env.AUTH_STORE_FILE
     || path.join(currentDirectory, "data", "users.json"), adminToken);
   const scheduleFile = planScheduleFile || process.env.PLAN_SETTINGS_FILE
@@ -449,6 +450,8 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
     emitAction(action) {
       const commandId = dispatchDeviceCommand(
         action.deviceId, action.command, action.parameters);
+      pendingPlanCommands.set(commandId, { action: structuredClone(action),
+        sentAt: Date.now() });
       broadcast({
         type: "plan.command",
         plan: "eight_account_daily",
@@ -613,6 +616,14 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
           publishPlan(after);
         }
       } else if (message.type === "command.result" && typeof message.commandId === "string") {
+        const pending = pendingPlanCommands.get(message.commandId);
+        if (pending) {
+          pendingPlanCommands.delete(message.commandId);
+          const before = JSON.stringify(eightAccountPlan.snapshot());
+          const after = eightAccountPlan.onCommandResult(pending.action,
+            message.success === true, String(message.message ?? ""));
+          if (JSON.stringify(after) !== before) publishPlan(after);
+        }
         broadcast({
           type: "command.result",
           deviceId: entry.deviceId,
@@ -875,6 +886,15 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   }, 30_000);
   heartbeat.unref();
   const planTicker = setInterval(() => {
+    const now = Date.now();
+    for (const [commandId, pending] of pendingPlanCommands) {
+      if (now - pending.sentAt < 30_000) continue;
+      pendingPlanCommands.delete(commandId);
+      const beforeTimeout = JSON.stringify(eightAccountPlan.snapshot());
+      const afterTimeout = eightAccountPlan.onCommandResult(
+        pending.action, false, "30秒内未收到APP确认");
+      if (JSON.stringify(afterTimeout) !== beforeTimeout) publishPlan(afterTimeout);
+    }
     const before = JSON.stringify(eightAccountPlan.snapshot());
     const after = eightAccountPlan.tick();
     if (JSON.stringify(after) !== before) {

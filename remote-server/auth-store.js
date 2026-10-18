@@ -54,7 +54,7 @@ export class AuthStore {
   constructor(file, adminToken) {
     this.file = file;
     this.adminToken = String(adminToken ?? "");
-    this.data = { users: [], deviceOwners: {} };
+    this.data = { users: [], deviceOwners: {}, deviceOwnerSources: {} };
     this.#load();
     this.#ensureDefaults();
   }
@@ -67,13 +67,18 @@ export class AuthStore {
       if (value?.deviceOwners && typeof value.deviceOwners === "object") {
         this.data.deviceOwners = value.deviceOwners;
       }
-    } catch { this.data = { users: [], deviceOwners: {} }; }
+      if (value?.deviceOwnerSources && typeof value.deviceOwnerSources === "object") {
+        this.data.deviceOwnerSources = value.deviceOwnerSources;
+      }
+    } catch { this.data = { users: [], deviceOwners: {}, deviceOwnerSources: {} }; }
   }
 
   #save() {
     if (!this.file) return;
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(this.file, `${JSON.stringify(this.data, null, 2)}\n`, { mode: 0o600 });
+    const temporary = `${this.file}.tmp-${process.pid}`;
+    fs.writeFileSync(temporary, `${JSON.stringify(this.data, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(temporary, this.file);
   }
 
   #ensureDefaults() {
@@ -189,15 +194,23 @@ export class AuthStore {
     const user = this.data.users.find((entry) => entry.username === name && !entry.disabled);
     if (!user) throw new Error("未找到可用用户");
     this.data.deviceOwners[deviceId] = user.id;
+    this.data.deviceOwnerSources[deviceId] = "manual";
     this.#save();
     return user.id;
   }
 
   claimDevice(deviceId, user) {
     if (user?.id && user.id !== "legacy-admin") {
+      const currentOwner = this.data.deviceOwners[deviceId];
+      const source = this.data.deviceOwnerSources[deviceId];
+      // An administrator assignment is authoritative.  Older persisted mappings did
+      // not record a source; treat those as manual so a reconnect cannot steal them.
+      if (currentOwner && (source === "manual" || !source)) return currentOwner;
       this.data.deviceOwners[deviceId] = user.id;
+      this.data.deviceOwnerSources[deviceId] = "auto";
       this.#save();
     }
+    return this.data.deviceOwners[deviceId] || "";
   }
 
   canAccess(user, deviceId) {
@@ -228,6 +241,7 @@ export class AuthStore {
       ({ id, username, role, disabled: disabled === true,
         accountLabels: cleanAccountLabels(settings?.accountLabels),
         deviceTokenConfigured: Boolean(deviceTokenHash) })),
-      deviceOwners: { ...this.data.deviceOwners } };
+      deviceOwners: { ...this.data.deviceOwners },
+      deviceOwnerSources: { ...this.data.deviceOwnerSources } };
   }
 }

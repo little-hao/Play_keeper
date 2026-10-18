@@ -51,3 +51,21 @@ test("a device token can be bound to a user login combination", (context) => {
   assert.equal(store.authenticateDeviceToken(token, "legacy-device").username, "霜冻前夜");
   assert.equal(store.authenticate("霜冻前夜", "20261016", "", "wrong-device-token"), null);
 });
+
+test("a manual device assignment survives reconnect and store reload", (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "play-keeper-owner-"));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, "users.json");
+  const store = new AuthStore(file, "legacy-admin-token-123456");
+  const admin = store.authenticate("hao管理员", "20261016", "");
+  const frost = store.authenticate("霜冻前夜", "20261016", "");
+  store.claimDevice("PK-DEVICE111111", admin);
+  store.assignDevice("PK-DEVICE111111", "霜冻前夜");
+  store.claimDevice("PK-DEVICE111111", admin);
+  assert.equal(store.canAccess(frost, "PK-DEVICE111111"), true);
+  assert.equal(store.canAccess(admin, "PK-DEVICE111111"), true);
+  const restored = new AuthStore(file, "legacy-admin-token-123456");
+  restored.claimDevice("PK-DEVICE111111", admin);
+  assert.equal(restored.canAccess(frost, "PK-DEVICE111111"), true);
+  assert.equal(restored.publicSnapshot().deviceOwnerSources["PK-DEVICE111111"], "manual");
+});
