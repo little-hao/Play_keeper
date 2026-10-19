@@ -9,6 +9,7 @@ import { EightAccountPlan, resolveAccountRoute } from "./eight-account-plan.js";
 import { sendCompletionReport } from "./email-report.js";
 import { AuthStore } from "./auth-store.js";
 import { PlanDiagnosticsStore } from "./plan-diagnostics.js";
+import { EquipmentTransferCoordinator } from "./equipment-transfer-coordinator.js";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const publicDirectory = path.join(currentDirectory, "public");
@@ -242,7 +243,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.2-rc5" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.2-rc6" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -481,6 +482,19 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
     }
   });
   eightAccountPlan.restore(loadPlanState(stateFile, logger));
+  const equipmentTransfer = new EquipmentTransferCoordinator({
+    emitAction(action) {
+      dispatchDeviceCommand(action.deviceId, action.command, action.parameters);
+      broadcast({ type: "equipment.transfer.command", ...action, timestamp: Date.now() });
+    },
+    onUpdate(payload) {
+      for (const controller of controllers) {
+        if (controller.user?.role === "admin" || controller.user?.id === payload.ownerId) {
+          sendJson(controller, { type: "equipment.transfer.update", payload });
+        }
+      }
+    }
+  });
 
   function deviceSummary(entry) {
     return {
@@ -651,6 +665,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         if (JSON.stringify(after) !== before) {
           publishPlan(after);
         }
+        equipmentTransfer.onTelemetry(entry.deviceId, entry.telemetry);
       } else if (message.type === "command.result" && typeof message.commandId === "string") {
         const pending = pendingPlanCommands.get(message.commandId);
         if (pending) {
@@ -828,6 +843,32 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
           content: planDiagnostics.read(username) });
         return;
       }
+      if (message.type === "equipment.transfer.start") {
+        try {
+          if (eightAccountPlan.snapshot().status === "running") {
+            throw new Error("多用户挂机正在运行，请先中断计划后再使用单次定向转移");
+          }
+          const sellerLabel = String(message.sellerLabel || "").trim();
+          const buyerLabel = String(message.buyerLabel || "").trim();
+          const items = Array.isArray(message.items)
+            ? message.items.map((item) => String(item).trim()).filter(Boolean) : [];
+          const price = Number(message.price);
+          const returnMap = String(message.returnMap || "圣兽云殿").trim();
+          if (!validAccountLabel(sellerLabel) || !validAccountLabel(buyerLabel)
+              || !validItemList(items, 10) || !Number.isInteger(price)
+              || price < 1 || price > 9_999_999 || !returnMap || returnMap.length > 30) {
+            throw new Error("请检查卖方、买方、装备组合、价格和返回挂机地图");
+          }
+          const [seller, buyer] = resolveAccountRoute(
+            accessibleSummaries(socket.user), [sellerLabel, buyerLabel]);
+          equipmentTransfer.start({ ownerId: socket.user?.id, seller, buyer,
+            items, price, returnMap });
+        } catch (error) {
+          sendJson(socket, { type: "equipment.transfer.error",
+            message: String(error?.message || error) });
+        }
+        return;
+      }
       if (message.type === "plan.retry") {
         if (!canAccessCurrentPlan(socket.user)) {
           sendJson(socket, { type: "plan.error", message: "无权恢复该计划" });
@@ -835,9 +876,17 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         }
         try {
           const summaries = accessibleSummaries(socket.user);
-          const labels = Array.isArray(eightAccountPlan.snapshot().route)
-            ? eightAccountPlan.snapshot().route.map((entry) => entry.accountLabel)
-            : normalizePlanOptions({}).routeLabels;
+          const snapshotLabels = Array.isArray(eightAccountPlan.snapshot().route)
+            ? eightAccountPlan.snapshot().route.map((entry) => entry.accountLabel) : [];
+          const snapshotIsClosed = snapshotLabels.length >= 3
+            && snapshotLabels[0] === snapshotLabels.at(-1);
+          // rc5 could persist a sliced, non-closed route after the first manual
+          // resume. Fall back to this user's saved full route so those existing
+          // interrupted plans can be resumed after upgrading the VPS alone.
+          const savedSchedule = normalizePlanSchedule(
+            authStore.getSettings(socket.user)?.planSchedule);
+          const labels = snapshotIsClosed
+            ? snapshotLabels : savedSchedule.options.routeLabels;
           const route = resolveAccountRoute(summaries, labels);
           const holder = typeof message.equipmentHolder === "string"
             ? message.equipmentHolder.trim() : "";

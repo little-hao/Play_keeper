@@ -197,7 +197,8 @@ test("restarts the remaining relay route from a manually selected equipment hold
   assert.equal(snapshot.status, "running");
   assert.equal(snapshot.equipmentHolderLabel, "hao3");
   assert.deepEqual(snapshot.route.map((entry) => entry.accountLabel),
-    ["hao3", "hao4", "hao5", "hao6", "hao7", "hao"]);
+    ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"]);
+  assert.equal(snapshot.legIndex, 3);
   assert.equal(actions.at(-1).command, "run_equipment_sell");
   assert.equal(actions.at(-1).accountLabel, "hao3");
   assert.equal(actions[0].parameters.buyer, "hao4");

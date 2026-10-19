@@ -164,6 +164,9 @@ elements.retryDailyPlan.addEventListener("click", () => {
     if (!window.confirm(`已人工确认厄菲斯神十件套当前在 ${equipmentHolder}？继续后将由该账号作为卖方重新运行本段。`)) return;
     socket.send(JSON.stringify({ type: "plan.retry", plan: "eight_account_daily",
       equipmentHolder }));
+    addLog(`已提交恢复请求：从 ${equipmentHolder} 继续装备循环`);
+  } else {
+    addLog("控制台连接已断开，恢复请求未发送");
   }
 });
 elements.cancelDailyPlan.addEventListener("click", () => {
@@ -461,7 +464,13 @@ function handleMessage(message) {
       addLog(`每日计划：${message.accountLabel} · ${message.command}`);
       break;
     case "plan.error":
-      addLog(`每日计划无法启动：${message.message}`);
+      addLog(`每日计划操作失败：${message.message}`);
+      break;
+    case "equipment.transfer.update":
+      addLog(`装备定向转移：${message.payload?.message || message.payload?.status || "状态已更新"}`);
+      break;
+    case "equipment.transfer.error":
+      addLog(`装备定向转移失败：${message.message}`);
       break;
     case "plan.diagnostics": {
       const content = typeof message.content === "string" ? message.content : "";
@@ -1212,12 +1221,11 @@ function renderDevices() {
       if (!seller) return addLog(`卖方账号 ${equipmentSellerInput.value || "--"} 当前不在线`);
       if (!buyerLabel) return addLog("上架装备前请选择或填写指定买家");
       if (!items.length || items.length > 10 || !Number.isInteger(price)) return addLog("请检查装备组合和单价");
-      sendCommand(seller.deviceId, "configure_equipment_transfer", {
-        accountIndex: seller.accountIndex, items, price, buyer: buyerLabel });
-      if (buyer) sendCommand(buyer.deviceId, "configure_equipment_transfer", {
-        accountIndex: buyer.accountIndex, items, price, buyer: "" });
-      sendCommand(seller.deviceId, "run_equipment_sell", { accountIndex: seller.accountIndex });
-      addLog(`${seller.label} 已开始向 ${buyerLabel} 上架装备`);
+      if (!buyer) return addLog(`买方账号 ${buyerLabel} 当前不在线，无法自动衔接购买和卖方返回挂机`);
+      socket.send(JSON.stringify({ type: "equipment.transfer.start",
+        sellerLabel: seller.label, buyerLabel: buyer.label, items, price,
+        returnMap: returnHangMap.value.trim() || "圣兽云殿" }));
+      addLog(`${seller.label} → ${buyerLabel} 定向转移请求已发送；成交后卖方将自动返回挂机`);
     });
     card.querySelector(".run-equipment-buy").addEventListener("click", () => {
       const buyer = accountTarget(equipmentBuyerInput.value.trim());

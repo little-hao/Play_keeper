@@ -252,8 +252,13 @@ export class EightAccountPlan {
       if (holderIndex < 0) throw new Error(`确认的套装账号 ${confirmedHolderLabel} 不在当前路线中`);
       this.state.equipmentHolderLabel = confirmedHolderLabel;
       if (!resumeBuyerInPlace) {
-        this.state.route = liveRoute.slice(holderIndex).map((entry) => ({ ...entry }));
-        this.state.legIndex = 0;
+        // Keep the original closed route. Slicing it here made the first manual
+        // resume appear to work, but left a non-closed route (hao3…hao) in the
+        // persisted plan. The next retry then failed validation and the button
+        // looked unresponsive. Moving the leg cursor preserves both the route and
+        // the exact remaining order selected by the user.
+        this.state.route = liveRoute.map((entry) => ({ ...entry }));
+        this.state.legIndex = holderIndex;
         this.state.phase = "seller_running";
         this.state.resumePhase = "seller_running";
         this.state.buyerStarted = false;

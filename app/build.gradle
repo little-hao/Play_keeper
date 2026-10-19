@@ -15,8 +15,8 @@ android {
         applicationId 'com.local.sgplaykeeper'
         minSdk 26
         targetSdk 35
-        versionCode 42
-        versionName '2.0.2-rc5'
+        versionCode 43
+        versionName '2.0.2-rc6'
     }
 
     signingConfigs {
