@@ -777,6 +777,7 @@ final class AutomationCoordinator {
         state.auctionListedCount = 0;
         state.equipmentListedInBatch = 0;
         state.equipmentBatchNames.clear();
+        state.equipmentListingRecoveryNames.clear();
         state.equipmentBatchSeen = false;
         state.equipmentBatchEmptyChecks = 0;
         state.equipmentBuyerTriggered = false;
@@ -818,6 +819,7 @@ final class AutomationCoordinator {
     private void preparePetEquipment(int accountIndex, WebView view, List<String> items,
                                      boolean equip, PetEquipmentNext next,
                                      boolean manual, int attempt) {
+        if (!isPetEquipmentStepActive(accountIndex, next)) return;
         String action = equip ? "一键穿装备" : "一键脱装备";
         String script = "(function(){"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
@@ -837,6 +839,10 @@ final class AutomationCoordinator {
                 + "const game=all.find(e=>exact(e,'进入主游戏'));"
                 + "if(game){game.click();return 'game_clicked';}return 'missing';})()";
         view.evaluateJavascript(script, encoded -> {
+            // A remote plan can cancel equipment_sell and immediately start seller_cleanup.
+            // Ignore the old WebView callback so it cannot unequip the seller again or reopen
+            // the exchange after the cleanup task has taken ownership of this account.
+            if (!isPetEquipmentStepActive(accountIndex, next)) return;
             String result = decodeString(encoded);
             if ("orientation_clicked".equals(result)
                     || "orientation_waiting".equals(result)) {
@@ -899,9 +905,30 @@ final class AutomationCoordinator {
         });
     }
 
+    private boolean isPetEquipmentStepActive(int accountIndex, PetEquipmentNext next) {
+        RuntimeState state = states[accountIndex];
+        if (stopped || !state.busy) return false;
+        switch (next) {
+            case SELL_TO_EXCHANGE:
+                return "equipment_sell".equals(state.task);
+            case SELLER_REEQUIP_TO_TEMPLE:
+                return "seller_cleanup".equals(state.task);
+            case BUYER_UNEQUIP_THEN_EQUIP:
+            case BUYER_EQUIP_TO_DUNGEONS:
+                return "equipment_buy".equals(state.task);
+            case DUNGEON_FINISH_EQUIP_TO_INVENTORY:
+                return "dungeon_queue".equals(state.task);
+            default:
+                return false;
+        }
+    }
+
     private void navigateToEquipmentExchange(int accountIndex, WebView view, List<String> items,
                                                int startIndex, boolean selling, boolean manual,
                                                int attempt) {
+        String expectedTask = selling ? "equipment_sell" : "equipment_buy";
+        if (stopped || !states[accountIndex].busy
+                || !expectedTask.equals(states[accountIndex].task)) return;
         String script = "(function(){"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
                 + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'');"
@@ -913,6 +940,8 @@ final class AutomationCoordinator {
                 + robustNavigationScript("装备交易所", "exchange_clicked")
                 + "return 'missing';})()";
         view.evaluateJavascript(script, encoded -> {
+            if (stopped || !states[accountIndex].busy
+                    || !expectedTask.equals(states[accountIndex].task)) return;
             String result = decodeString(encoded);
             if ("ready".equals(result)) {
                 if (selling) {
@@ -1232,6 +1261,9 @@ final class AutomationCoordinator {
                             items, itemIndex, itemName, before, manual, attempt + 1), 500L);
                     return;
                 }
+                if ("no_dialog".equals(status)
+                        && recoverEquipmentListingOnce(accountIndex, view, items,
+                        itemIndex, itemName, manual, "上架弹窗未及时出现")) return;
                 finish(accountIndex, "equipment_sell", "error",
                         itemName + "：上架前复核失败（" + status + "）", manual);
                 return;
@@ -1264,6 +1296,8 @@ final class AutomationCoordinator {
                 return;
             }
             if (!done) {
+                if (recoverEquipmentListingOnce(accountIndex, view, items,
+                        itemIndex, itemName, manual, "背包数量未及时刷新")) return;
                 finish(accountIndex, "equipment_sell", "error",
                         itemName + "：未检测到背包数量变化，请检查五件上架限制", manual);
                 return;
@@ -1300,6 +1334,18 @@ final class AutomationCoordinator {
                         accountIndex, view, items, nextIndex, true, manual), 700L);
             }
         });
+    }
+
+    private boolean recoverEquipmentListingOnce(int accountIndex, WebView view,
+                                                  List<String> items, int itemIndex,
+                                                  String itemName, boolean manual,
+                                                  String reason) {
+        RuntimeState state = states[accountIndex];
+        if (!state.equipmentListingRecoveryNames.add(itemName)) return false;
+        updateState(accountIndex, itemName + "：" + reason + "，正在重进交易所复核上架记录");
+        handler.postDelayed(() -> navigateToEquipmentExchange(
+                accountIndex, view, items, itemIndex, true, manual, 0), 1_000L);
+        return true;
     }
 
     private void startBuyerAndWaitForBatchClear(int sellerAccountIndex, WebView sellerView,
@@ -3800,6 +3846,7 @@ final class AutomationCoordinator {
         boolean orientationRecoveryClicked;
         int equipmentListedInBatch;
         final Set<String> equipmentBatchNames = new LinkedHashSet<>();
+        final Set<String> equipmentListingRecoveryNames = new LinkedHashSet<>();
         boolean equipmentBatchSeen;
         int equipmentBatchEmptyChecks;
         boolean equipmentBuyerTriggered;

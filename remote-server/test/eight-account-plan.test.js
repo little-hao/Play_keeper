@@ -185,6 +185,24 @@ test("requires manual confirmation of the equipment holder before resuming", () 
   assert.throws(() => plan.resume(route()), /人工确认目标套装所在账号/);
 });
 
+test("restarts the remaining relay route from a manually selected equipment holder", () => {
+  const actions = [];
+  const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => 10_000 });
+  plan.start(route());
+  plan.cancel("人工中断");
+  actions.length = 0;
+
+  const snapshot = plan.resume(route(), "hao3");
+
+  assert.equal(snapshot.status, "running");
+  assert.equal(snapshot.equipmentHolderLabel, "hao3");
+  assert.deepEqual(snapshot.route.map((entry) => entry.accountLabel),
+    ["hao3", "hao4", "hao5", "hao6", "hao7", "hao"]);
+  assert.equal(actions.at(-1).command, "run_equipment_sell");
+  assert.equal(actions.at(-1).accountLabel, "hao3");
+  assert.equal(actions[0].parameters.buyer, "hao4");
+});
+
 test("moves to intervention when the APP rejects a plan command", () => {
   const actions = [];
   const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action),

@@ -19,7 +19,10 @@ function userKey(username) {
 }
 
 function eventKey(plan) {
-  const source = [plan.runId, plan.status, plan.phase, plan.legIndex,
+  // The same Android failure can be observed once while the buyer is running and
+  // again after the plan switches back to seller cleanup. Treat it as one event;
+  // a genuinely different error message still receives its own entry.
+  const source = [plan.runId, plan.legIndex,
     plan.errorAccount, plan.equipmentHolderLabel, plan.error].join("\u0000");
   return crypto.createHash("sha256").update(source).digest("hex").slice(0, 24);
 }
