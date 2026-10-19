@@ -2,11 +2,11 @@
 
 APK 属于构建产物，不提交到 Git。当前 Android 10+ 可安装包为：
 
-`PlayKeeper-Android10Plus-v2.0.2-rc1.apk`
+`PlayKeeper-Android10Plus-v2.0.2-rc4.apk`
 
 配套 VPS 服务包为：
 
-`PlayKeeper-VPS-v2.0.2-rc1.tar.gz`
+`PlayKeeper-VPS-v2.0.2-rc4.tar.gz`
 
 Mac 当前可安装的平行版为：
 
