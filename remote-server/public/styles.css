@@ -62,7 +62,7 @@ small { color: var(--muted); }
 .quick-account-actions label { margin: 0; }
 .quick-account-actions input, .quick-account-actions select { display: block; width: 100%; margin-top: 4px; padding: 10px; color: #f3f6fa; background: #090c12; border: 1px solid #343b48; border-radius: 9px; }
 .quick-account-actions button { width: 100%; }
-.quick-auction-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) minmax(220px, 1fr); align-items: end; gap: 8px; margin: 12px 0; }
+.quick-auction-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) minmax(150px, .7fr) minmax(220px, 1fr); align-items: end; gap: 8px; margin: 12px 0; }
 .quick-auction-row label { margin: 0; }
 .quick-auction-row input, .quick-auction-row select { display: block; width: 100%; margin-top: 4px; padding: 10px; color: #f3f6fa; background: #090c12; border: 1px solid #343b48; border-radius: 9px; }
 .quick-auction-row button { width: 100%; }

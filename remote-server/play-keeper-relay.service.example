@@ -11,6 +11,7 @@ EnvironmentFile=/etc/play-keeper-relay.env
 Environment=AUTH_STORE_FILE=/var/lib/play-keeper/users.json
 Environment=PLAN_SETTINGS_FILE=/var/lib/play-keeper/plan-schedule.json
 Environment=PLAN_STATE_FILE=/var/lib/play-keeper/plan-state.json
+Environment=PLAN_DIAGNOSTICS_DIR=/var/lib/play-keeper/diagnostics
 ExecStart=/usr/bin/node /opt/play-keeper/remote-server/server.js
 Restart=always
 RestartSec=3

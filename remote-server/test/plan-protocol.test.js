@@ -45,7 +45,9 @@ function helloDevice(socket, deviceId) {
 
 test("relay starts the cross-device first leg and starts buyer after exchange listing", async (context) => {
   const stateFile = path.join(os.tmpdir(), `play-keeper-state-${Date.now()}-${process.pid}.json`);
+  const authDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "play-keeper-plan-auth-"));
   const server = createRelayServer({ adminToken, deviceToken, planStateFile: stateFile,
+    authFile: path.join(authDirectory, "users.json"),
     logger: { warn() {}, error() {} } });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -59,6 +61,7 @@ test("relay starts the cross-device first leg and starts buyer after exchange li
     control.terminate();
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(stateFile, { force: true });
+    fs.rmSync(authDirectory, { recursive: true, force: true });
   });
 
   await helloDevice(device1, d1);
@@ -109,8 +112,10 @@ test("relay starts the cross-device first leg and starts buyer after exchange li
 
 test("saves a daily full-route schedule with configurable dungeons", async (context) => {
   const scheduleFile = path.join(os.tmpdir(), `play-keeper-schedule-${Date.now()}.json`);
+  const authDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "play-keeper-schedule-auth-"));
   const server = createRelayServer({ adminToken, deviceToken,
-    planScheduleFile: scheduleFile, logger: { warn() {}, error() {} } });
+    planScheduleFile: scheduleFile, authFile: path.join(authDirectory, "users.json"),
+    logger: { warn() {}, error() {} } });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const control = await connect(`ws://127.0.0.1:${server.address().port}/control`);
@@ -119,11 +124,18 @@ test("saves a daily full-route schedule with configurable dungeons", async (cont
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(scheduleFile, { force: true });
     fs.rmSync(`${scheduleFile}.state`, { force: true });
+    fs.rmSync(authDirectory, { recursive: true, force: true });
   });
   const accepted = nextMessages(control, "control.accepted", 1);
   control.send(JSON.stringify({ type: "control.hello", token: adminToken }));
   await accepted;
+  const diagnostic = nextMessages(control, "plan.diagnostics", 1);
+  control.send(JSON.stringify({ type: "plan.diagnostics.request" }));
+  const [diagnosticMessage] = await diagnostic;
+  assert.match(diagnosticMessage.filename, /多用户挂机报错说明/);
+  assert.match(diagnosticMessage.content, /目前尚未记录多用户挂机报错/);
   const update = nextMessages(control, "plan.schedule", 1);
+  const settingsUpdate = nextMessages(control, "user.settings", 1);
   control.send(JSON.stringify({ type: "plan.schedule.update", payload: {
     enabled: true, time: "03:30", options: {
       resourceItems: ["曙光印记", "进化宝石"],
@@ -131,13 +143,15 @@ test("saves a daily full-route schedule with configurable dungeons", async (cont
       inventoryItems: ["进化宝石", "曙光印记", "黑暗徽章"],
       dungeonItems: ["绘画小屋", "史芬克斯密穴"],
       returnMap: "圣兽云殿", reportEmail: "konghao0920@gmail.com"
-    }
+    }, workspace: { quickBuyPrice: 777 }
   } }));
   const [message] = await update;
+  const [settingsMessage] = await settingsUpdate;
   assert.equal(message.payload.enabled, true);
   assert.equal(message.payload.time, "03:30");
   assert.equal(message.payload.options.resourceReserveCount, 0);
   assert.deepEqual(message.payload.options.inventoryItems,
     ["进化宝石", "曙光印记", "黑暗徽章"]);
   assert.deepEqual(message.payload.options.dungeonItems, ["绘画小屋", "史芬克斯密穴"]);
+  assert.equal(settingsMessage.payload.quickBuyPrice, 777);
 });

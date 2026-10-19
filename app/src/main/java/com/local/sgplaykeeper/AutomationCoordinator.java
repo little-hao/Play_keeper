@@ -3554,7 +3554,8 @@ final class AutomationCoordinator {
                 + "if(page.includes('仓库已满')||/(?:成功0|成功：0).*(?:失败|\u4ed3\u5e93)/.test(page))return 'warehouse_full';"
                 + "const modal=Array.from(document.querySelectorAll('.bag-modal')).find(visible);"
                 + "if(!modal){const controls=Array.from(document.querySelectorAll('button,[role=button],uni-button,view,a')).filter(visible);"
-                + "const warehouse=controls.find(e=>clean(e)==='🏦仓库'||clean(e)==='仓库');"
+                + "const warehouse=controls.find(e=>{const text=clean(e);const label=clean({textContent:(e.getAttribute('aria-label')||e.getAttribute('title')||'')});"
+                + "return text==='🏦仓库'||text==='仓库'||text.includes('仓库')||label.includes('仓库');});"
                 + "if(!warehouse)return 'missing';warehouse.click();return 'opened';}"
                 + "const cols=Array.from(modal.querySelectorAll('.bag-col'));if(!cols.length)return 'loading';"
                 + "const bag=cols[0],rows=Array.from(bag.querySelectorAll('.bag-item'));"
@@ -3602,18 +3603,22 @@ final class AutomationCoordinator {
                         ? 350L : 700L;
                 handler.postDelayed(() -> storeAllBeforeHang(accountIndex, view, continuation,
                         manual, attempt + 1), delay);
-            } else if ("missing".equals(result) && attempt < 4) {
-                host.prepareAutomation(accountIndex, false);
+            } else if ("missing".equals(result) && attempt < 10) {
+                if (attempt == 0 || attempt == 5) {
+                    host.prepareAutomation(accountIndex, false);
+                    host.openAfk(accountIndex);
+                }
                 handler.postDelayed(() -> storeAllBeforeHang(accountIndex, view, continuation,
-                        manual, attempt + 1), 1_500L);
+                        manual, attempt + 1), 2_000L);
             } else if ("selection_pending".equals(result) || "selecting".equals(result)) {
                 closeWarehouseModal(view);
                 updateState(accountIndex, "存仓选择状态未及时刷新，已跳过本轮并继续挂机");
                 handler.postDelayed(continuation, 500L);
             } else {
                 closeWarehouseModal(view);
-                finish(accountIndex, states[accountIndex].task, "error",
-                        "挂机前全背包存仓失败（" + result + "），已停止以避免背包满格", manual);
+                updateState(accountIndex, "挂机前全背包存仓未找到入口（" + result
+                        + "），已跳过本轮并继续后续流程");
+                handler.postDelayed(continuation, 500L);
             }
         });
     }

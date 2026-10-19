@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css?v=2.0.1">
+  <link rel="stylesheet" href="/styles.css?v=2.0.2-rc4">
 </head>
 <body>
   <main class="shell">
@@ -119,12 +119,15 @@
             <input id="quickAuctionAccount" list="userAccountOptions" placeholder="卖方账号，可自行填写">
           </label>
           <label>指定买家<input id="quickBuyerAccount" list="userAccountOptions" placeholder="主号/买家，可留空保存"></label>
+          <label>拍卖/购买单价（金币）
+            <input id="quickBuyPrice" type="number" min="1" max="9999999" value="920">
+          </label>
           <button id="quickAuctionToMain" class="secondary">拍卖选中账号道具到指定买家</button>
         </div>
         <details class="plan-quick-tools">
           <summary>其他单账号与批量快捷操作</summary>
           <div class="quick-account-actions">
-          <button id="quickMainBuy" class="secondary">指定买家购买全部920金币道具</button>
+          <button id="quickMainBuy" class="secondary">指定买家按设定单价购买道具</button>
           <button id="quickSweepAll" class="secondary">路线卖方依次拍卖 → 主号统一购买</button>
           <label>挂机账号<input id="quickHangAccount" list="hangAccountOptions" placeholder="账号或 all"></label>
           <datalist id="userAccountOptions"></datalist>
@@ -145,6 +148,7 @@
         </div>
         <div class="automation-actions">
           <button id="savePlanSchedule" class="secondary">保存本用户设置与每日定时</button>
+          <button id="downloadPlanDiagnostics" class="secondary">下载本用户报错说明</button>
           <small id="planScheduleStatus">每日定时未启用</small>
         </div>
         <p class="automation-help">每个用户独立保存路线、脚本和快捷账号；卖方按所选保留数量上架组合道具，最后由路线首尾的主号购买。</p>
@@ -244,7 +248,7 @@
           </div>
           <div class="automation-actions action-grid">
             <button class="run-auction secondary">拍卖道具</button>
-            <button class="run-auction-buy secondary">购买全部920金币道具</button>
+            <button class="run-auction-buy secondary">按上方单价购买匹配道具</button>
             <button class="run-store-sell secondary">卖出金币券</button>
           </div>
         </fieldset>
@@ -252,7 +256,15 @@
           <legend><span class="group-index">2</span> 装备定向转移</legend>
           <p class="group-help">装备交易所每批最多5件，可配置最多10件。</p>
           <div class="automation-grid">
-            <label class="span-2">装备组合（厄菲斯神十件套）<input class="equipment-items" type="text" value="厄菲斯神剑,厄菲斯神铠,厄菲斯神冠,厄菲斯神靴,厄菲斯神链,厄菲斯神戒,厄菲斯神翼,厄菲斯神镯,厄菲斯神玉,厄菲斯神印"></label>
+            <label>装备套装模板
+              <select class="equipment-preset">
+                <option value="ephis">厄菲斯神套装</option>
+                <option value="lover">情人套装</option>
+                <option value="lover_romance">情人恋套装（九件）</option>
+                <option value="custom">自定义</option>
+              </select>
+            </label>
+            <label class="span-2">装备组合<input class="equipment-items" type="text" value="厄菲斯神剑,厄菲斯神铠,厄菲斯神冠,厄菲斯神靴,厄菲斯神链,厄菲斯神戒,厄菲斯神翼,厄菲斯神镯,厄菲斯神玉,厄菲斯神印"></label>
             <label>单价（金币）<input class="equipment-price" type="number" min="1" max="9999999" value="920"></label>
             <label>装备卖方账号<input class="equipment-seller" list="userAccountOptions" type="text" maxlength="30" placeholder="默认当前账号"></label>
             <label>指定买家账号<input class="equipment-buyer" list="userAccountOptions" type="text" maxlength="30" placeholder="可下拉选择或自行输入"></label>
@@ -300,6 +312,6 @@
       <div id="selectOptions" class="select-options" role="radiogroup"></div>
     </section>
   </div>
-  <script type="module" src="/app.js?v=2.0.1"></script>
+  <script type="module" src="/app.js?v=2.0.2-rc4"></script>
 </body>
 </html>

@@ -69,7 +69,7 @@ export class EightAccountPlan {
       resourceItems: [...RESOURCE_ITEMS], inventoryItems: [...RESOURCE_ITEMS],
       resourceReserveCount: 1, price: 920, returnMap: "圣兽云殿",
       dungeonItems: ["绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"],
-      reportEmail: "", error: "", errorAccount: "",
+      reportEmail: "", ownerUsername: "", error: "", errorAccount: "",
       interventionDeadlineAt: 0, emailStatus: "pending", inventoryByAccount: {}, history: [] };
   }
 
@@ -156,7 +156,8 @@ export class EightAccountPlan {
       inventoryItems: [...new Set(inventoryItems.map((item) => String(item).trim()).filter(Boolean))],
       resourceReserveCount,
       dungeonItems: [...new Set(dungeonItems.map((item) => String(item).trim()).filter(Boolean))],
-      price, returnMap: returnMap.trim(), reportEmail: reportEmail.trim() };
+      price, returnMap: returnMap.trim(), reportEmail: reportEmail.trim(),
+      ownerUsername: String(options.ownerUsername ?? "").trim() };
     if (this.state.route.length === 2) {
       if (completedToday(this.state.route[0], now)) this.#startMainBuy(this.state.route[0]);
       else this.#startStandaloneMain(this.state.route[0]);
@@ -192,7 +193,8 @@ export class EightAccountPlan {
       mainAccountLabel: route.at(-1).accountLabel,
       resourceItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
       inventoryItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
-      resourceReserveCount, price: 920, returnMap };
+      resourceReserveCount, price: 920, returnMap,
+      ownerUsername: String(options.ownerUsername ?? "").trim() };
     this.#startResourceAuction(this.state.route[0]);
     return this.snapshot();
   }

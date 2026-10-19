@@ -8,6 +8,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { EightAccountPlan, resolveAccountRoute } from "./eight-account-plan.js";
 import { sendCompletionReport } from "./email-report.js";
 import { AuthStore } from "./auth-store.js";
+import { PlanDiagnosticsStore } from "./plan-diagnostics.js";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const publicDirectory = path.join(currentDirectory, "public");
@@ -241,7 +242,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.1" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.2-rc4" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -338,6 +339,7 @@ function normalizeWorkspace(value, schedule) {
   const quickHangAccount = field("quickHangAccount");
   const auctionBuyer = field("auctionBuyer");
   const equipmentBuyer = field("equipmentBuyer");
+  const quickBuyPrice = Number(source.quickBuyPrice ?? 920);
   const quickHangMap = field("quickHangMap") || schedule.options.returnMap;
   for (const label of [quickAuctionAccount, quickHangAccount, auctionBuyer, equipmentBuyer]) {
     if (!validAccountLabel(label, true)) throw new Error("账号名称格式无效");
@@ -345,8 +347,11 @@ function normalizeWorkspace(value, schedule) {
   if (!quickHangMap || quickHangMap.length > 30 || /[\r\n\t]/.test(quickHangMap)) {
     throw new Error("快捷挂机副本名称无效");
   }
+  if (!Number.isInteger(quickBuyPrice) || quickBuyPrice < 1 || quickBuyPrice > 9_999_999) {
+    throw new Error("快捷拍卖/购买单价无效");
+  }
   return { accountLabels, mainAccount: routeLabels[0], quickAuctionAccount,
-    quickHangAccount, quickHangMap, auctionBuyer, equipmentBuyer };
+    quickBuyPrice, quickHangAccount, quickHangMap, auctionBuyer, equipmentBuyer };
 }
 
 function loadPlanSchedule(file, logger) {
@@ -420,8 +425,11 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   const devices = new Map();
   const controllers = new Set();
   const pendingPlanCommands = new Map();
-  const authStore = new AuthStore(authFile || process.env.AUTH_STORE_FILE
-    || path.join(currentDirectory, "data", "users.json"), adminToken);
+  const authStoreFile = authFile || process.env.AUTH_STORE_FILE
+    || path.join(currentDirectory, "data", "users.json");
+  const authStore = new AuthStore(authStoreFile, adminToken);
+  const planDiagnostics = new PlanDiagnosticsStore(
+    process.env.PLAN_DIAGNOSTICS_DIR || path.join(path.dirname(authStoreFile), "diagnostics"), logger);
   const scheduleFile = planScheduleFile || process.env.PLAN_SETTINGS_FILE
     || path.join(currentDirectory, "data", "plan-schedule.json");
   const stateFile = planStateFile || process.env.PLAN_STATE_FILE
@@ -496,6 +504,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
 
   function publishPlan(payload) {
     savePlanState(stateFile, payload, logger);
+    planDiagnostics.append(payload);
     const routeDeviceIds = [...new Set((payload?.route || []).map((entry) => entry.deviceId).filter(Boolean))];
     for (const controller of controllers) {
       if (controller.user?.role === "admin"
@@ -569,7 +578,8 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
       inventoryItems: Array.isArray(options.inventoryItems) ? options.inventoryItems : undefined,
       dungeonItems: Array.isArray(options.dungeonItems) ? options.dungeonItems : undefined,
       returnMap: typeof options.returnMap === "string" ? options.returnMap : undefined,
-      reportEmail: typeof options.reportEmail === "string" ? options.reportEmail : undefined
+      reportEmail: typeof options.reportEmail === "string" ? options.reportEmail : undefined,
+      ownerUsername: typeof user?.username === "string" ? user.username : ""
     });
   }
 
@@ -581,7 +591,8 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
     return eightAccountPlan.startResourceSweep(route, {
       resourceItems: Array.isArray(options.resourceItems) ? options.resourceItems : undefined,
       resourceReserveCount: options.resourceReserveCount,
-      returnMap: typeof options.returnMap === "string" ? options.returnMap : undefined
+      returnMap: typeof options.returnMap === "string" ? options.returnMap : undefined,
+      ownerUsername: typeof user?.username === "string" ? user.username : ""
     });
   }
 
@@ -808,6 +819,13 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         } catch (error) {
           sendJson(socket, { type: "plan.error", message: String(error?.message || error) });
         }
+        return;
+      }
+      if (message.type === "plan.diagnostics.request") {
+        const username = String(socket.user?.username || "用户");
+        sendJson(socket, { type: "plan.diagnostics",
+          filename: `多用户挂机报错说明-${username}.md`,
+          content: planDiagnostics.read(username) });
         return;
       }
       if (message.type === "plan.retry") {

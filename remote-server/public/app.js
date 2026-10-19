@@ -49,11 +49,13 @@ const elements = {
   userAccountOptions: document.querySelector("#userAccountOptions"),
   hangAccountOptions: document.querySelector("#hangAccountOptions"),
   quickAuctionToMain: document.querySelector("#quickAuctionToMain"),
+  quickBuyPrice: document.querySelector("#quickBuyPrice"),
   quickMainBuy: document.querySelector("#quickMainBuy"),
   quickSweepAll: document.querySelector("#quickSweepAll"),
   quickHangAccount: document.querySelector("#quickHangAccount"),
   quickHangMap: document.querySelector("#quickHangMap"),
   quickStartHang: document.querySelector("#quickStartHang"),
+  downloadPlanDiagnostics: document.querySelector("#downloadPlanDiagnostics"),
   keepPlayerDevice: document.querySelector("#keepPlayerDevice"),
   startKeepPlayer: document.querySelector("#startKeepPlayer"),
   exitKeepPlayer: document.querySelector("#exitKeepPlayer"),
@@ -102,7 +104,8 @@ let dailyPlan = { status: "idle", legIndex: -1, phase: "idle", history: [] };
 let planSchedule = { enabled: false, time: "04:00", options: {} };
 let signedInUser = null;
 let userSettings = { accountLabels: [], mainAccount: "", quickAuctionAccount: "",
-  quickHangAccount: "", quickHangMap: "圣兽云殿", auctionBuyer: "", equipmentBuyer: "" };
+  quickBuyPrice: 920, quickHangAccount: "", quickHangMap: "圣兽云殿",
+  auctionBuyer: "", equipmentBuyer: "" };
 let adminSnapshot = { users: [], deviceOwners: {} };
 const openAdvancedDevices = new Set();
 
@@ -176,10 +179,15 @@ elements.savePlanSchedule.addEventListener("click", () => {
     time: elements.planScheduleTime.value,
     options,
     workspace: { quickAuctionAccount: elements.quickAuctionAccount.value.trim(),
+      quickBuyPrice: Number.parseInt(elements.quickBuyPrice.value, 10),
       quickHangAccount: elements.quickHangAccount.value.trim(),
       quickHangMap: elements.quickHangMap.value.trim(),
       auctionBuyer: elements.quickBuyerAccount.value.trim(), equipmentBuyer: "" }
   } }));
+});
+elements.downloadPlanDiagnostics.addEventListener("click", () => {
+  if (socket?.readyState !== WebSocket.OPEN) return addLog("控制台尚未连接");
+  socket.send(JSON.stringify({ type: "plan.diagnostics.request" }));
 });
 elements.planResourcePreset.addEventListener("change", () => {
   if (auctionPresets[elements.planResourcePreset.value]) {
@@ -231,14 +239,16 @@ elements.quickAuctionToMain.addEventListener("click", () => {
   if (!items) return;
   const buyer = elements.quickBuyerAccount.value.trim();
   if (!buyer) return addLog("请先填写指定买家");
+  const price = Number.parseInt(elements.quickBuyPrice.value, 10);
+  if (!Number.isInteger(price) || price < 1 || price > 9_999_999) return addLog("快捷拍卖单价无效");
   const returnMap = elements.planReturnMap.value.trim() || "圣兽云殿";
   sendCommand(target.deviceId, "configure_auto_auction", { accountIndex: target.accountIndex,
-    enabled: false, items, buyer, price: 920, intervalHours: 24,
+    enabled: false, items, buyer, price, intervalHours: 24,
     reserveCount: Number(elements.planResourceReserve.value) });
   sendCommand(target.deviceId, "configure_return_hang", {
     accountIndex: target.accountIndex, map: returnMap });
   sendCommand(target.deviceId, "run_auto_auction", { accountIndex: target.accountIndex });
-  addLog(`${target.label} 已启动组合道具拍卖，指定买家 ${buyer}`);
+  addLog(`${target.label} 已按 ${price} 金币启动组合道具拍卖，指定买家 ${buyer}`);
 });
 elements.quickMainBuy.addEventListener("click", () => {
   const buyer = elements.quickBuyerAccount.value.trim();
@@ -247,14 +257,16 @@ elements.quickMainBuy.addEventListener("click", () => {
   if (!target) return addLog(`主号 ${buyer} 当前不在线`);
   const items = planResourceItems();
   if (!items) return;
+  const price = Number.parseInt(elements.quickBuyPrice.value, 10);
+  if (!Number.isInteger(price) || price < 1 || price > 9_999_999) return addLog("快捷购买单价无效");
   const returnMap = elements.planReturnMap.value.trim() || "圣兽云殿";
   sendCommand(target.deviceId, "configure_auto_auction", { accountIndex: target.accountIndex,
-    enabled: false, items, buyer, price: 920, intervalHours: 24,
+    enabled: false, items, buyer, price, intervalHours: 24,
     reserveCount: Number(elements.planResourceReserve.value) });
   sendCommand(target.deviceId, "configure_return_hang", {
     accountIndex: target.accountIndex, map: returnMap });
   sendCommand(target.deviceId, "run_auction_buy", { accountIndex: target.accountIndex });
-  addLog(`${buyer} 已启动全部920金币组合道具购买`);
+  addLog(`${buyer} 已启动 ${price} 金币组合道具购买`);
 });
 elements.quickSweepAll.addEventListener("click", () => {
   if (socket?.readyState !== WebSocket.OPEN) return addLog("控制台尚未连接");
@@ -362,7 +374,8 @@ function disconnect() {
 function resetUserWorkspace() {
   signedInUser = null;
   userSettings = { accountLabels: [], mainAccount: "", quickAuctionAccount: "",
-    quickHangAccount: "", quickHangMap: "圣兽云殿", auctionBuyer: "", equipmentBuyer: "" };
+    quickBuyPrice: 920, quickHangAccount: "", quickHangMap: "圣兽云殿",
+    auctionBuyer: "", equipmentBuyer: "" };
   dailyPlan = { status: "idle", legIndex: -1, phase: "idle", history: [] };
   planSchedule = { enabled: false, time: "04:00", options: {} };
   adminSnapshot = { users: [], deviceOwners: {} };
@@ -450,6 +463,18 @@ function handleMessage(message) {
     case "plan.error":
       addLog(`每日计划无法启动：${message.message}`);
       break;
+    case "plan.diagnostics": {
+      const content = typeof message.content === "string" ? message.content : "";
+      const filename = message.filename || "多用户挂机报错说明.md";
+      const url = URL.createObjectURL(new Blob([content], { type: "text/markdown;charset=utf-8" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1_000);
+      addLog("本用户多用户挂机报错说明已下载");
+      break;
+    }
     case "admin.snapshot":
       adminSnapshot = message.payload ?? adminSnapshot;
       renderAdminPanel();
@@ -616,6 +641,8 @@ function applyUserSettings() {
     elements.planRoute.value = [...labels, labels[0]].join(" → ");
   }
   elements.quickAuctionAccount.value = userSettings.quickAuctionAccount || labels[0] || "";
+  elements.quickBuyPrice.value = String(Number.isInteger(userSettings.quickBuyPrice)
+    ? userSettings.quickBuyPrice : 920);
   elements.quickBuyerAccount.value = userSettings.auctionBuyer || userSettings.mainAccount || labels[0] || "";
   elements.quickHangAccount.value = userSettings.quickHangAccount || labels[0] || "";
   elements.quickHangMap.value = userSettings.quickHangMap || "圣兽云殿";
@@ -962,6 +989,7 @@ function renderDevices() {
     const prestigeEnabled = card.querySelector(".prestige-enabled");
     const prestigeItemsInput = card.querySelector(".prestige-items");
     const inventoryItemsInput = card.querySelector(".inventory-items");
+    const equipmentPreset = card.querySelector(".equipment-preset");
     const equipmentItemsInput = card.querySelector(".equipment-items");
     const equipmentPriceInput = card.querySelector(".equipment-price");
     const equipmentSellerInput = card.querySelector(".equipment-seller");
@@ -1004,6 +1032,17 @@ function renderDevices() {
       ? automation.inventoryItems.join(",") : "进化宝石,曙光印记,强化丹A,强化丹B,天仙玉露";
     equipmentItemsInput.value = Array.isArray(automation.equipmentItems)
       ? automation.equipmentItems.join(",") : defaultEquipmentItems;
+    equipmentPreset.value = Object.entries(equipmentPresets)
+      .find(([, value]) => value === equipmentItemsInput.value.trim())?.[0] ?? "custom";
+    equipmentPreset.addEventListener("change", () => {
+      if (equipmentPreset.value !== "custom") {
+        equipmentItemsInput.value = equipmentPresets[equipmentPreset.value];
+      }
+    });
+    equipmentItemsInput.addEventListener("input", () => {
+      equipmentPreset.value = Object.entries(equipmentPresets)
+        .find(([, value]) => value === equipmentItemsInput.value.trim())?.[0] ?? "custom";
+    });
     equipmentPriceInput.value = String(Number.isInteger(automation.equipmentPrice)
       ? automation.equipmentPrice : 920);
     equipmentSellerInput.value = accountLabel(accounts, activeAccountIndex);

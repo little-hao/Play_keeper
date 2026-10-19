@@ -79,7 +79,11 @@ test("assigned device accounts are persisted to the matching remote user", async
 });
 
 test("device telemetry and browser command complete a round trip", async (context) => {
-  const server = createRelayServer({ adminToken, deviceToken, logger: { warn() {}, error() {} } });
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "play-keeper-protocol-"));
+  const server = createRelayServer({ adminToken, deviceToken,
+    authFile: path.join(directory, "users.json"),
+    planScheduleFile: path.join(directory, "schedule.json"),
+    logger: { warn() {}, error() {} } });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const port = server.address().port;
@@ -90,6 +94,7 @@ test("device telemetry and browser command complete a round trip", async (contex
     device.terminate();
     control.terminate();
     await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(directory, { recursive: true, force: true });
   });
 
   const deviceAccepted = nextJson(device, "device.accepted");
@@ -375,7 +380,11 @@ test("device telemetry and browser command complete a round trip", async (contex
 });
 
 test("invalid tokens and invalid commands are rejected", async (context) => {
-  const server = createRelayServer({ adminToken, deviceToken, logger: { warn() {}, error() {} } });
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "play-keeper-invalid-"));
+  const server = createRelayServer({ adminToken, deviceToken,
+    authFile: path.join(directory, "users.json"),
+    planScheduleFile: path.join(directory, "schedule.json"),
+    logger: { warn() {}, error() {} } });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const port = server.address().port;
@@ -390,6 +399,7 @@ test("invalid tokens and invalid commands are rejected", async (context) => {
     rejected.terminate();
     control.terminate();
     await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(directory, { recursive: true, force: true });
   });
   const accepted = nextJson(control, "control.accepted");
   const snapshotPromise = nextJson(control, "devices.snapshot");
@@ -414,16 +424,23 @@ test("invalid tokens and invalid commands are rejected", async (context) => {
 });
 
 test("health endpoint and iPhone dashboard are served", async (context) => {
-  const server = createRelayServer({ adminToken, deviceToken, logger: { warn() {}, error() {} } });
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "play-keeper-health-"));
+  const server = createRelayServer({ adminToken, deviceToken,
+    authFile: path.join(directory, "users.json"),
+    planScheduleFile: path.join(directory, "schedule.json"),
+    logger: { warn() {}, error() {} } });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const port = server.address().port;
-  context.after(() => new Promise((resolve) => server.close(resolve)));
+  context.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
 
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    ok: true, service: "play-keeper-relay", version: "2.0.1"
+    ok: true, service: "play-keeper-relay", version: "2.0.2-rc4"
   });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);
@@ -436,7 +453,8 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   assert.match(dashboardHtml, /立即检查存仓/);
   assert.match(dashboardHtml, /中断脚本/);
   assert.match(dashboardHtml, /全选背包存仓/);
-  assert.match(dashboardHtml, /购买全部920金币道具/);
+  assert.match(dashboardHtml, /指定买家按设定单价购买道具/);
+  assert.match(dashboardHtml, /下载本用户报错说明/);
   assert.match(dashboardHtml, /拍卖选中账号道具到指定买家/);
   assert.match(dashboardHtml, /情人恋套装/);
   assert.match(dashboardHtml, /device_token/);

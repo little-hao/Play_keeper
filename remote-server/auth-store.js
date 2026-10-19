@@ -42,7 +42,7 @@ function defaultSettings(accountLabels) {
   const mainAccount = labels[0] || "";
   return {
     accountLabels: labels, mainAccount,
-    quickAuctionAccount: "", quickHangAccount: "", quickHangMap: "圣兽云殿",
+    quickAuctionAccount: "", quickBuyPrice: 920, quickHangAccount: "", quickHangMap: "圣兽云殿",
     auctionBuyer: "", equipmentBuyer: "",
     planSchedule: { enabled: false, time: "04:00", timeZone: "Asia/Shanghai",
       lastRunDate: "", lastAttemptAt: 0, lastError: "",
