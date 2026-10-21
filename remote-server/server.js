@@ -912,8 +912,9 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         try {
           if (equipmentTransfer.isActive()) throw new Error("请先中断正在运行或等待处理的单次转移");
           const summaries = accessibleSummaries(socket.user);
-          const snapshotLabels = Array.isArray(eightAccountPlan.snapshot().route)
-            ? eightAccountPlan.snapshot().route.map((entry) => entry.accountLabel) : [];
+          const planSnapshot = eightAccountPlan.snapshot();
+          const snapshotLabels = Array.isArray(planSnapshot.fullRoute)
+            ? planSnapshot.fullRoute.map((entry) => entry.accountLabel) : [];
           const snapshotIsClosed = snapshotLabels.length >= 3
             && snapshotLabels[0] === snapshotLabels.at(-1);
           // rc5 could persist a sliced, non-closed route after the first manual

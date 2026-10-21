@@ -625,9 +625,15 @@ function renderDailyPlan() {
   const total = Math.max(1, (dailyPlan.route?.length ?? 1) - 1);
   const email = dailyPlan.status === "success" ? ` · 邮件：${dailyPlan.emailStatus || "处理中"}` : "";
   const holder = dailyPlan.equipmentHolderLabel || "未知账号";
-  elements.dailyPlanDetail.textContent = dailyPlan.error
+  const effectiveRoute = Array.isArray(dailyPlan.route)
+    ? dailyPlan.route.map((entry) => entry?.accountLabel).filter(Boolean).join(" → ") : "";
+  const skipped = Array.isArray(dailyPlan.skippedDungeonAccounts)
+    ? dailyPlan.skippedDungeonAccounts.filter(Boolean) : [];
+  const routeSummary = skipped.length
+    ? ` · 本轮路线：${effectiveRoute}（已跳过今日副本完成：${skipped.join("、")}）` : "";
+  elements.dailyPlanDetail.textContent = (dailyPlan.error
     ? `装备所在：${holder} · ${dailyPlan.error}`
-    : `当前：${current} · 装备所在：${holder} · 已完成 ${completed}/${total}${email}`;
+    : `当前：${current} · 装备所在：${holder} · 已完成 ${completed}/${total}${email}`) + routeSummary;
   elements.dailyPlanProgress.style.width = `${Math.min(100, completed * 100 / total)}%`;
   elements.startDailyPlan.disabled = ["running", "intervention"].includes(dailyPlan.status);
   elements.retryDailyPlan.disabled = !["intervention", "error", "cancelled"].includes(dailyPlan.status);
@@ -637,9 +643,11 @@ function renderDailyPlan() {
   if (needsHolderConfirmation) {
     const selected = elements.resumeEquipmentHolder.value || holder;
     elements.resumeEquipmentHolder.replaceChildren();
-    const resumeLabels = [...new Set((dailyPlan.route || []).map((entry) => entry?.accountLabel)
-      .filter((label) => typeof label === "string" && label.length > 0))];
-    if (resumeLabels.length === 0) resumeLabels.push(...configuredAccountLabels());
+    const resumeLabels = [...new Set([
+      ...(dailyPlan.fullRoute || []).map((entry) => entry?.accountLabel),
+      ...(dailyPlan.route || []).map((entry) => entry?.accountLabel),
+      ...configuredAccountLabels()
+    ].filter((label) => typeof label === "string" && label.length > 0))];
     for (const label of resumeLabels) {
       const option = document.createElement("option");
       option.value = label;

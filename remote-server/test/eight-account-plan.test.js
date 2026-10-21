@@ -197,8 +197,10 @@ test("restarts the remaining relay route from a manually selected equipment hold
   assert.equal(snapshot.status, "running");
   assert.equal(snapshot.equipmentHolderLabel, "hao3");
   assert.deepEqual(snapshot.route.map((entry) => entry.accountLabel),
+    ["hao3", "hao4", "hao5", "hao6", "hao7", "hao"]);
+  assert.deepEqual(snapshot.fullRoute.map((entry) => entry.accountLabel),
     ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"]);
-  assert.equal(snapshot.legIndex, 3);
+  assert.equal(snapshot.legIndex, 0);
   assert.equal(actions.at(-1).command, "run_equipment_sell");
   assert.equal(actions.at(-1).accountLabel, "hao3");
   assert.equal(actions[0].parameters.buyer, "hao4");
@@ -226,8 +228,10 @@ test("repeated manual resume survives restart and completes the remaining full r
   const plan = new EightAccountPlan({ now: () => 2000, emitAction: a => actions.push(a) });
   plan.restore(JSON.parse(JSON.stringify(initial.snapshot())));
   plan.resume(route(), "hao3");
-  assert.equal(plan.snapshot().legIndex, 3);
-  assert.deepEqual(plan.snapshot().route.map(a => a.accountLabel), route().map(a => a.accountLabel));
+  assert.equal(plan.snapshot().legIndex, 0);
+  assert.deepEqual(plan.snapshot().route.map(a => a.accountLabel),
+    ["hao3", "hao4", "hao5", "hao6", "hao7", "hao"]);
+  assert.deepEqual(plan.snapshot().fullRoute.map(a => a.accountLabel), route().map(a => a.accountLabel));
   const done = { task: "temple", status: "ok", updatedAt: 10000,
     equipmentTransferLastRunAt: 10000, dungeonLastRunAt: 10000,
     finalEquipLastRunAt: 10000, inventoryLastRunAt: 10000, inventoryStatus: "ok" };
@@ -327,7 +331,41 @@ test("ignores a stale seller listing error after the remote buyer has the equipm
   assert.equal(plan.snapshot().error, "");
 });
 
-test("keeps completed-dungeon accounts in the equipment relay route", () => {
+test("advances a completed leg when device timestamps lag behind the VPS clock", () => {
+  const actions = [];
+  const serverNow = Date.parse("2026-10-22T10:00:00+08:00");
+  const deviceNow = serverNow - 5 * 60_000;
+  const plannedRoute = route();
+  for (const account of plannedRoute) {
+    account.automation = { updatedAt: 1_000, equipmentTransferLastRunAt: 1_000,
+      dungeonLastRunAt: serverNow - 24 * 60 * 60_000, finalEquipLastRunAt: 1_000,
+      inventoryLastRunAt: 1_000, auctionLastRunAt: 1_000 };
+  }
+  const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action),
+    now: () => serverNow });
+  plan.start(plannedRoute);
+  const seller = plannedRoute[0];
+  const buyer = plannedRoute[1];
+  plan.onTelemetry(seller.deviceId, telemetry(seller.accountIndex, {
+    task: "equipment_sell", status: "running", equipmentListedInBatch: 5
+  }));
+  const completed = { task: "temple", status: "ok", updatedAt: deviceNow,
+    equipmentTransferLastRunAt: deviceNow, dungeonLastRunAt: deviceNow,
+    finalEquipLastRunAt: deviceNow, inventoryLastRunAt: deviceNow,
+    inventoryStatus: "ok" };
+  plan.onTelemetry(buyer.deviceId, telemetry(buyer.accountIndex, completed));
+  plan.onTelemetry(seller.deviceId, telemetry(seller.accountIndex, {
+    task: "temple", status: "ok", updatedAt: deviceNow, finalEquipLastRunAt: deviceNow
+  }));
+  plan.onTelemetry(buyer.deviceId, telemetry(buyer.accountIndex, {
+    ...completed, auctionLastRunAt: deviceNow
+  }));
+  assert.equal(plan.snapshot().legIndex, 1);
+  assert.equal(actions.at(-1).command, "run_equipment_sell");
+  assert.equal(actions.at(-1).accountLabel, "hao1");
+});
+
+test("skips accounts whose dungeon already completed today", () => {
   const actions = [];
   const today = Date.parse("2026-10-11T10:00:00+08:00");
   const plannedRoute = route();
@@ -336,12 +374,14 @@ test("keeps completed-dungeon accounts in the equipment relay route", () => {
   plan.start(plannedRoute);
   const snapshot = plan.snapshot();
   assert.deepEqual(snapshot.route.map((entry) => entry.accountLabel),
+    ["hao", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"]);
+  assert.deepEqual(snapshot.fullRoute.map((entry) => entry.accountLabel),
     ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"]);
-  assert.equal(snapshot.route[1].dungeonCompletedToday, true);
-  assert.equal(actions[0].parameters.buyer, "hao1");
+  assert.deepEqual(snapshot.skippedDungeonAccounts, ["hao1"]);
+  assert.equal(actions[0].parameters.buyer, "hao2");
 });
 
-test("keeps the full equipment relay when every small account dungeon is complete", () => {
+test("runs only the main account when every small-account dungeon is complete", () => {
   const actions = [];
   const today = Date.parse("2026-10-11T10:00:00+08:00");
   const plannedRoute = route();
@@ -350,11 +390,44 @@ test("keeps the full equipment relay when every small account dungeon is complet
   }
   const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => today });
   plan.start(plannedRoute);
-  assert.equal(plan.snapshot().phase, "seller_running");
-  assert.equal(plan.snapshot().route.length, 9);
-  assert.equal(actions.at(-1).command, "run_equipment_sell");
-  assert.equal(plan.snapshot().route.slice(1, -1)
-    .every((entry) => entry.dungeonCompletedToday), true);
+  assert.equal(plan.snapshot().phase, "standalone_main_running");
+  assert.deepEqual(plan.snapshot().route.map((entry) => entry.accountLabel), ["hao", "hao"]);
+  assert.deepEqual(plan.snapshot().skippedDungeonAccounts,
+    ["hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7"]);
+  assert.equal(actions.at(-1).command, "run_dungeon_sequence");
+});
+
+test("reduces hao through hao5 completion to hao, hao6, hao7, hao", () => {
+  const actions = [];
+  const today = Date.parse("2026-10-22T02:40:00+08:00");
+  const plannedRoute = route();
+  for (let index = 1; index <= 5; index += 1) {
+    plannedRoute[index].automation = { dungeonLastRunAt: today - 60_000 };
+  }
+  const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => today });
+  const snapshot = plan.start(plannedRoute);
+  assert.deepEqual(snapshot.route.map((entry) => entry.accountLabel),
+    ["hao", "hao6", "hao7", "hao"]);
+  assert.deepEqual(snapshot.skippedDungeonAccounts,
+    ["hao1", "hao2", "hao3", "hao4", "hao5"]);
+  assert.equal(actions[0].parameters.buyer, "hao6");
+});
+
+test("manual resume skips completed accounts after the confirmed holder", () => {
+  const actions = [];
+  const today = Date.parse("2026-10-22T02:40:00+08:00");
+  const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => today });
+  plan.start(route());
+  plan.cancel();
+  const liveRoute = route();
+  liveRoute[4].automation = { dungeonLastRunAt: today - 60_000 };
+  liveRoute[5].automation = { dungeonLastRunAt: today - 60_000 };
+  actions.length = 0;
+  const snapshot = plan.resume(liveRoute, "hao3");
+  assert.deepEqual(snapshot.route.map((entry) => entry.accountLabel),
+    ["hao3", "hao6", "hao7", "hao"]);
+  assert.deepEqual(snapshot.skippedDungeonAccounts, ["hao4", "hao5"]);
+  assert.equal(actions[0].parameters.buyer, "hao6");
 });
 
 test("auctions resources from all small accounts, buys on hao, then hangs all accounts", () => {

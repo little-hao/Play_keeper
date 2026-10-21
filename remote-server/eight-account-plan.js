@@ -66,7 +66,7 @@ export class EightAccountPlan {
       buyerStarted: false, buyerWorkflowCompleted: false,
       sellerReleased: false, sellerCleaned: false, mainBuySeen: false,
       sellerCleanupDueAt: 0, equipmentHolderLabel: "hao", mainAccountLabel: "hao",
-      route: [], items: [...EQUIPMENT_ITEMS],
+      route: [], fullRoute: [], skippedDungeonAccounts: [], items: [...EQUIPMENT_ITEMS],
       resourceItems: [...RESOURCE_ITEMS], inventoryItems: [...RESOURCE_ITEMS],
       resourceReserveCount: 1, price: 920, returnMap: "圣兽云殿",
       dungeonItems: ["绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"],
@@ -81,8 +81,13 @@ export class EightAccountPlan {
       return this.snapshot();
     }
     const route = Array.isArray(savedState.route) ? savedState.route : [];
+    const fullRoute = Array.isArray(savedState.fullRoute) && savedState.fullRoute.length > 0
+      ? savedState.fullRoute : route;
     this.state = { ...this.#idleState(), ...savedState,
       route: route.map((entry) => ({ ...entry })),
+      fullRoute: fullRoute.map((entry) => ({ ...entry })),
+      skippedDungeonAccounts: Array.isArray(savedState.skippedDungeonAccounts)
+        ? [...savedState.skippedDungeonAccounts] : [],
       items: Array.isArray(savedState.items) && savedState.items.length >= 1
         && savedState.items.length <= 10
         ? [...savedState.items] : [...EQUIPMENT_ITEMS],
@@ -145,13 +150,19 @@ export class EightAccountPlan {
       throw new Error("报告邮箱格式无效");
     }
     const now = this.now();
-    // Dungeon completion may skip the dungeon work inside the Android client, but it
-    // must never remove an account from the equipment relay route.
-    const activeRoute = route.map((entry) => ({ ...entry,
+    const fullRoute = route.map((entry) => ({ ...entry,
       dungeonCompletedToday: completedToday(entry, now) }));
+    // The equipment is only relayed through accounts that still need today's dungeon.
+    // Always keep the confirmed holder at the start and the main account at the end so
+    // the set returns to its configured owner after the remaining work is complete.
+    const activeRoute = this.#remainingRoute(fullRoute, route[0].accountLabel, now);
+    const skippedDungeonAccounts = fullRoute.slice(1, -1)
+      .filter((entry) => entry.dungeonCompletedToday)
+      .map((entry) => entry.accountLabel);
     this.state = { ...this.#idleState(), status: "running", runId: crypto.randomUUID(),
       startedAt: now, updatedAt: now, phaseStartedAt: now, legIndex: 0,
       phase: "starting_leg", route: activeRoute.map((entry) => ({ ...entry })), items: [...items],
+      fullRoute: fullRoute.map((entry) => ({ ...entry })), skippedDungeonAccounts,
       mainAccountLabel: route[0].accountLabel,
       resourceItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
       inventoryItems: [...new Set(inventoryItems.map((item) => String(item).trim()).filter(Boolean))],
@@ -253,13 +264,15 @@ export class EightAccountPlan {
       if (holderIndex < 0) throw new Error(`确认的套装账号 ${confirmedHolderLabel} 不在当前路线中`);
       this.state.equipmentHolderLabel = confirmedHolderLabel;
       if (!resumeBuyerInPlace) {
-        // Keep the original closed route. Slicing it here made the first manual
-        // resume appear to work, but left a non-closed route (hao3…hao) in the
-        // persisted plan. The next retry then failed validation and the button
-        // looked unresponsive. Moving the leg cursor preserves both the route and
-        // the exact remaining order selected by the user.
-        this.state.route = liveRoute.map((entry) => ({ ...entry }));
-        this.state.legIndex = holderIndex;
+        const now = this.now();
+        const fullRoute = liveRoute.map((entry) => ({ ...entry,
+          dungeonCompletedToday: completedToday(entry, now) }));
+        this.state.fullRoute = fullRoute.map((entry) => ({ ...entry }));
+        this.state.route = this.#remainingRoute(fullRoute, confirmedHolderLabel, now);
+        this.state.skippedDungeonAccounts = fullRoute.slice(holderIndex + 1, -1)
+          .filter((entry) => entry.dungeonCompletedToday)
+          .map((entry) => entry.accountLabel);
+        this.state.legIndex = 0;
         this.state.phase = "seller_running";
         this.state.resumePhase = "seller_running";
         this.state.buyerStarted = false;
@@ -279,6 +292,14 @@ export class EightAccountPlan {
         error: `准备从${this.state.equipmentHolderLabel || "当前账号"}继续`,
         errorAccount: this.state.equipmentHolderLabel || "当前账号",
         interventionDeadlineAt: 0, updatedAt: this.now() });
+    }
+    if (this.state.mode === "daily" && this.state.route.length === 2
+        && this.state.route[0].accountLabel === this.state.route[1].accountLabel) {
+      Object.assign(this.state, { status: "running", error: "", errorAccount: "",
+        interventionDeadlineAt: 0, phaseStartedAt: this.now() });
+      if (completedToday(this.state.route[0], this.now())) this.#startMainBuy(this.state.route[0]);
+      else this.#startStandaloneMain(this.state.route[0]);
+      return this.snapshot();
     }
     return this.retry();
   }
@@ -350,8 +371,8 @@ export class EightAccountPlan {
           { sellerCleanup: true });
       }
       if (this.state.sellerReleased && seller?.task === "temple" && seller.status === "ok"
-          && Number(seller.updatedAt) >= this.state.phaseStartedAt
-          && Number(seller.finalEquipLastRunAt) >= this.state.phaseStartedAt) {
+          && this.#freshValue(leg.seller, seller, "updatedAt")
+          && this.#freshValue(leg.seller, seller, "finalEquipLastRunAt")) {
         this.state.sellerCleaned = true;
       }
       if (!this.state.buyerStarted && seller?.task === "equipment_sell" && seller.status === "running"
@@ -379,9 +400,9 @@ export class EightAccountPlan {
         return this.#intervene(`${leg.buyer.accountLabel} 道具上架失败：${buyer.lastMessage || "未知错误"}`,
           leg.buyer.accountLabel);
       }
-      const auctionDone = Number(buyer.auctionLastRunAt) >= this.state.phaseStartedAt;
+      const auctionDone = this.#freshValue(leg.buyer, buyer, "auctionLastRunAt");
       const returned = buyer.task === "temple" && buyer.status === "ok"
-        && Number(buyer.updatedAt) >= this.state.phaseStartedAt;
+        && this.#freshValue(leg.buyer, buyer, "updatedAt");
       if (auctionDone && returned) this.#completeLeg();
       return this.snapshot();
     }
@@ -392,7 +413,7 @@ export class EightAccountPlan {
           this.state.mainAccountLabel);
       }
       const returned = this.state.mainBuySeen && buyer.task === "temple" && buyer.status === "ok"
-        && Number(buyer.updatedAt) >= this.state.phaseStartedAt;
+        && this.#freshValue(leg.buyer, buyer, "updatedAt");
       if (returned) this.#completeLeg();
     }
     return this.snapshot();
@@ -434,21 +455,21 @@ export class EightAccountPlan {
   }
 
   #buyerWorkflowComplete(automation) {
-    const afterStart = (value) => Number(value) >= this.state.phaseStartedAt;
+    const buyer = this.#currentLeg()?.buyer;
     return !automation.equipmentVerificationToken
-      && afterStart(automation.equipmentTransferLastRunAt)
-      && afterStart(automation.dungeonLastRunAt)
-      && afterStart(automation.finalEquipLastRunAt)
-      && afterStart(automation.inventoryLastRunAt)
+      && this.#freshValue(buyer, automation, "equipmentTransferLastRunAt")
+      && this.#freshValue(buyer, automation, "dungeonLastRunAt")
+      && this.#freshValue(buyer, automation, "finalEquipLastRunAt")
+      && this.#freshValue(buyer, automation, "inventoryLastRunAt")
       && automation.inventoryStatus === "ok"
       && automation.task === "temple" && automation.status === "ok";
   }
 
   #standaloneMainComplete(automation) {
-    const afterStart = (value) => Number(value) >= this.state.phaseStartedAt;
-    return afterStart(automation.dungeonLastRunAt)
-      && afterStart(automation.finalEquipLastRunAt)
-      && afterStart(automation.inventoryLastRunAt)
+    const account = this.state.route[0];
+    return this.#freshValue(account, automation, "dungeonLastRunAt")
+      && this.#freshValue(account, automation, "finalEquipLastRunAt")
+      && this.#freshValue(account, automation, "inventoryLastRunAt")
       && automation.inventoryStatus === "ok"
       && automation.task === "temple" && automation.status === "ok";
   }
@@ -456,8 +477,7 @@ export class EightAccountPlan {
   #scheduleSellerAfterTransfer(leg, buyerAutomation) {
     if (buyerAutomation.equipmentVerificationToken) return;
     if (this.state.sellerReleased || this.state.sellerCleanupDueAt > 0) return;
-    const transferredAt = Number(buyerAutomation.equipmentTransferLastRunAt);
-    if (!Number.isFinite(transferredAt) || transferredAt < this.state.phaseStartedAt) return;
+    if (!this.#freshValue(leg.buyer, buyerAutomation, "equipmentTransferLastRunAt")) return;
     this.state.equipmentHolderLabel = leg.buyer.accountLabel;
     // The buyer only records equipmentTransferLastRunAt after all target pieces
     // have been purchased and audited.  At that point the seller no longer needs
@@ -547,6 +567,21 @@ export class EightAccountPlan {
       return { ...entry, deviceId: live.deviceId, accountIndex: live.accountIndex,
         online: true, automation: { ...(live.automation || {}) } };
     });
+    this.state.fullRoute = liveRoute.map((entry) => ({ ...entry }));
+  }
+
+  #remainingRoute(fullRoute, holderLabel, now) {
+    const holderIndex = fullRoute.findIndex((entry, index) =>
+      index < fullRoute.length - 1 && entry.accountLabel === holderLabel);
+    if (holderIndex < 0) throw new Error(`确认的套装账号 ${holderLabel} 不在当前路线中`);
+    const holder = { ...fullRoute[holderIndex], dungeonCompletedToday:
+      completedToday(fullRoute[holderIndex], now) };
+    const remaining = fullRoute.slice(holderIndex + 1, -1)
+      .filter((entry) => !completedToday(entry, now))
+      .map((entry) => ({ ...entry, dungeonCompletedToday: false }));
+    const main = { ...fullRoute.at(-1), dungeonCompletedToday:
+      completedToday(fullRoute.at(-1), now) };
+    return [holder, ...remaining, main];
   }
 
   #captureInventory(account, automation) {
@@ -622,6 +657,13 @@ export class EightAccountPlan {
     if (account.deviceId !== deviceId) return null;
     const accounts = Array.isArray(telemetry?.accounts) ? telemetry.accounts : [];
     return accounts.find((entry) => entry?.index === account.accountIndex)?.automation ?? null;
+  }
+
+  #freshValue(account, automation, field) {
+    const current = Number(automation?.[field]);
+    const baseline = Number(account?.automation?.[field]);
+    return Number.isFinite(current) && current > 0
+      && current > (Number.isFinite(baseline) && baseline > 0 ? baseline : 0);
   }
 
   #currentLeg() {

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
 const root = fileURLToPath(new URL("../public/", import.meta.url));
-const out = fileURLToPath(new URL("../../dist/rc7-ui-qa/", import.meta.url));
+const out = fileURLToPath(new URL("../../dist/v2.0.3-rc1-ui-qa/", import.meta.url));
 await fs.mkdir(out, { recursive: true });
 const browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || "msedge", headless: true });
 try {
@@ -51,6 +51,21 @@ try {
         inventoryCounts: { "进化宝石": 2, "曙光印记": 3 }, inventoryStatus: "ok" } },
         { index: 1, label: "杂鱼小妹", automation: {
           inventoryCounts: { "进化宝石": 5, "强化丹A": 4 }, inventoryStatus: "ok" } }] } }] }));
+    await page.evaluate(() => {
+      const labels = ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7"];
+      window.mockSocket.receive({ type: "user.settings", payload: { accountLabels: labels } });
+      window.mockSocket.receive({ type: "plan.update", plan: "eight_account_daily", payload: {
+        status: "cancelled", mode: "daily", equipmentHolderLabel: "hao", legIndex: 0,
+        error: "本地界面回归测试", errorAccount: "hao",
+        fullRoute: [...labels, "hao"].map(accountLabel => ({ accountLabel })),
+        route: ["hao", "hao6", "hao7", "hao"].map(accountLabel => ({ accountLabel })),
+        skippedDungeonAccounts: ["hao1", "hao2", "hao3", "hao4", "hao5"], history: []
+      } });
+    });
+    assert.deepEqual(await page.locator("#resumeEquipmentHolder option").evaluateAll(options =>
+      options.map(option => option.value)), ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7"]);
+    assert.match(await page.locator("#dailyPlanDetail").textContent(), /hao → hao6 → hao7 → hao/);
+    assert.match(await page.locator("#dailyPlanDetail").textContent(), /hao1、hao2、hao3、hao4、hao5/);
     await page.locator("#equipmentChecks").waitFor({ state: "visible" });
     assert.match(await page.locator(".daily-inventory-total").textContent(), /2个账号/);
     assert.match(await page.locator(".daily-inventory-total").textContent(), /进化宝石 7/);
