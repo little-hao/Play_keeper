@@ -108,6 +108,69 @@ let userSettings = { accountLabels: [], mainAccount: "", quickAuctionAccount: ""
   auctionBuyer: "", equipmentBuyer: "" };
 let adminSnapshot = { users: [], deviceOwners: {} };
 const openAdvancedDevices = new Set();
+let feedbackTimer;
+let pendingPlanSave = false;
+let singleTransfer = { status: "idle" };
+
+function showFeedback(text, kind = "info") {
+  const banner = document.querySelector("#operationFeedback");
+  banner.textContent = text;
+  banner.dataset.kind = kind;
+  clearTimeout(feedbackTimer);
+  if (kind === "pending") {
+    feedbackTimer = setTimeout(() => {
+      banner.dataset.kind = "warning";
+      banner.textContent = "尚未收到明确反馈，请刷新状态并核对任务进度，避免重复提交。";
+    }, 30_000);
+  }
+}
+
+document.querySelector(".daily-plan-panel").addEventListener("input", () => {
+  document.querySelector("#settingsSaveState").textContent = "有未保存的修改；保存后用于后续运行";
+});
+document.querySelector("#cancelSingleTransfer").addEventListener("click", () => {
+  if (socket?.readyState !== WebSocket.OPEN) return showFeedback("连接已断开，未发送中断请求", "error");
+  if (!window.confirm("中断单次转移的两方脚本并保留页面？不会自动回购或撤销已成交交易。")) return;
+  socket.send(JSON.stringify({ type: "equipment.transfer.cancel" }));
+  showFeedback("已请求中断单次转移，等待服务器确认", "pending");
+});
+
+function renderSingleTransfer() {
+  document.querySelector("#singleTransferPanel").classList.toggle("hidden", singleTransfer.status === "idle");
+  document.querySelector("#singleTransferDetail").textContent = singleTransfer.message || "";
+  document.querySelector("#cancelSingleTransfer").disabled =
+    !["running", "intervention"].includes(singleTransfer.status);
+}
+
+function renderEquipmentChecks() {
+  const panel = document.querySelector("#equipmentChecks");
+  panel.replaceChildren();
+  let count = 0;
+  for (const device of devices.values()) {
+    for (const account of device.telemetry?.accounts || []) {
+      const automation = account.automation || {};
+      if (!automation.equipmentVerificationToken) continue;
+      count++;
+      const box = document.createElement("div");
+      const title = document.createElement("h2");
+      title.textContent = `${account.label || `账号${account.index + 1}`} · 装备等待人工核验`;
+      const detail = document.createElement("p");
+      const names = (automation.equipmentVerificationItems || []).join("、");
+      detail.textContent = `${automation.equipmentVerificationReason || "未能可靠读取装备"}。请在手机画面逐件检查主宠：${names}`;
+      const confirm = document.createElement("button");
+      confirm.className = "primary";
+      confirm.textContent = "已逐件核对主宠装备，继续";
+      confirm.addEventListener("click", () => {
+        if (!window.confirm(`确认 ${account.label || "该账号"} 的主宠已穿戴以下全部装备？\n${names}\n此操作记录为人工核验，不代表自动检测成功。`)) return;
+        sendCommand(device.deviceId, "confirm_equipment_verification",
+          { accountIndex: account.index, verificationToken: automation.equipmentVerificationToken });
+      });
+      box.append(title, detail, confirm);
+      panel.append(box);
+    }
+  }
+  panel.classList.toggle("hidden", count === 0);
+}
 
 elements.loginUser.value = sessionStorage.getItem("playKeeperUser") ?? "";
 elements.adminToken.value = sessionStorage.getItem("playKeeperCredential") ?? "";
@@ -152,6 +215,7 @@ elements.startDailyPlan.addEventListener("click", () => {
   if (!options) return;
   socket.send(JSON.stringify({ type: "plan.start", plan: "eight_account_daily",
     options }));
+  showFeedback("已提交多用户挂机请求，等待服务器确认；不要重复点击", "pending");
 });
 elements.retryDailyPlan.addEventListener("click", () => {
   if (socket?.readyState === WebSocket.OPEN) {
@@ -160,11 +224,12 @@ elements.retryDailyPlan.addEventListener("click", () => {
       return;
     }
     const equipmentHolder = elements.resumeEquipmentHolder.value;
-    if (!equipmentHolder) return addLog("请先确认厄菲斯神套装所在账号");
-    if (!window.confirm(`已人工确认厄菲斯神十件套当前在 ${equipmentHolder}？继续后将由该账号作为卖方重新运行本段。`)) return;
+    if (!equipmentHolder) return addLog("请先确认当前所选套装的所在账号");
+    if (!window.confirm(`已核对当前所选套装全部在 ${equipmentHolder}？将保留原路线并继续对应阶段。装备尚未成交或分散时请取消。`)) return;
     socket.send(JSON.stringify({ type: "plan.retry", plan: "eight_account_daily",
       equipmentHolder }));
     addLog(`已提交恢复请求：从 ${equipmentHolder} 继续装备循环`);
+    showFeedback(`恢复请求已提交：${equipmentHolder}，等待服务器确认`, "pending");
   } else {
     addLog("控制台连接已断开，恢复请求未发送");
   }
@@ -172,11 +237,14 @@ elements.retryDailyPlan.addEventListener("click", () => {
 elements.cancelDailyPlan.addEventListener("click", () => {
   if (socket?.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify({ type: "plan.cancel", plan: "eight_account_daily" }));
+  showFeedback("中断请求已提交，等待服务器确认", "pending");
 });
 elements.savePlanSchedule.addEventListener("click", () => {
   if (socket?.readyState !== WebSocket.OPEN) return addLog("控制台尚未连接");
   const options = readPlanOptions();
   if (!options) return;
+  pendingPlanSave = true;
+  document.querySelector("#settingsSaveState").textContent = "正在保存…";
   socket.send(JSON.stringify({ type: "plan.schedule.update", payload: {
     enabled: elements.planScheduleEnabled.checked,
     time: elements.planScheduleTime.value,
@@ -382,6 +450,13 @@ function resetUserWorkspace() {
   dailyPlan = { status: "idle", legIndex: -1, phase: "idle", history: [] };
   planSchedule = { enabled: false, time: "04:00", options: {} };
   adminSnapshot = { users: [], deviceOwners: {} };
+  singleTransfer = { status: "idle" };
+  pendingPlanSave = false;
+  clearTimeout(feedbackTimer);
+  renderSingleTransfer();
+  renderEquipmentChecks();
+  document.querySelector("#settingsSaveState").textContent = "设置按当前登录用户保存";
+  showFeedback("请选择任务。设备接受指令后，仍需等待实际执行结果。");
   renderDailyPlan();
   renderQuickAccountControls();
 }
@@ -430,6 +505,7 @@ function handleMessage(message) {
       current.telemetry = message.payload;
       current.lastUpdate = message.timestamp;
       devices.set(message.deviceId, current);
+      renderEquipmentChecks();
       if (openAdvancedDevices.size) renderGlobalDailyMonitor();
       else renderDevices();
       break;
@@ -442,10 +518,13 @@ function handleMessage(message) {
       showSelectDialog(message.deviceId, message.payload);
       break;
     case "command.queued":
-      addLog(`命令已发送至 ${message.deviceId}`);
+      addLog(`命令已发送至 ${message.deviceId}，等待设备接受`);
+      showFeedback(`命令已发送至 ${message.deviceId}，等待设备接受`, "pending");
       break;
     case "command.result":
-      addLog(`${message.deviceId}：${message.success ? "成功" : "失败"} · ${message.message}`);
+      addLog(`${message.deviceId}：${message.success ? "设备已回执（不代表任务全部完成）" : "设备拒绝/执行失败"} · ${message.message}`);
+      showFeedback(message.message || "设备已返回回执，请查看任务实际进度",
+        message.success ? "info" : "error");
       break;
     case "command.error":
       addLog(`操作失败：${message.message}`);
@@ -454,20 +533,32 @@ function handleMessage(message) {
       if (message.plan === "eight_account_daily") {
         dailyPlan = message.payload ?? dailyPlan;
         renderDailyPlan();
+        showFeedback(`计划状态：${elements.dailyPlanStatus.textContent} · ${elements.dailyPlanDetail.textContent}`);
       }
       break;
     case "plan.schedule":
       planSchedule = message.payload ?? planSchedule;
       renderPlanSchedule();
+      if (pendingPlanSave) {
+        pendingPlanSave = false;
+        document.querySelector("#settingsSaveState").textContent = "已收到服务器保存确认";
+        showFeedback("本用户设置与每日定时已保存");
+      }
       break;
     case "plan.command":
       addLog(`每日计划：${message.accountLabel} · ${message.command}`);
       break;
     case "plan.error":
+      pendingPlanSave = false;
+      document.querySelector("#settingsSaveState").textContent = "操作未完成，请检查提示；修改仍保留在页面";
       addLog(`每日计划操作失败：${message.message}`);
       break;
     case "equipment.transfer.update":
+      singleTransfer = message.payload || { status: "idle" };
+      renderSingleTransfer();
       addLog(`装备定向转移：${message.payload?.message || message.payload?.status || "状态已更新"}`);
+      showFeedback(singleTransfer.message || "单次转移状态已更新",
+        singleTransfer.status === "intervention" ? "warning" : "info");
       break;
     case "equipment.transfer.error":
       addLog(`装备定向转移失败：${message.message}`);
@@ -766,6 +857,25 @@ function renderGlobalDailyMonitor() {
     elements.globalDailyMonitor.append(empty);
     return;
   }
+  const totals = new Map();
+  for (const { monitor } of entries) {
+    const counts = monitor.inventoryCounts && typeof monitor.inventoryCounts === "object"
+      ? monitor.inventoryCounts : {};
+    for (const [name, count] of Object.entries(counts)) {
+      if (!name.trim()) continue;
+      totals.set(name, (totals.get(name) || 0) + (Number(count) || 0));
+    }
+  }
+  const total = document.createElement("div");
+  total.className = "daily-inventory-total";
+  const totalTitle = document.createElement("strong");
+  totalTitle.textContent = `本用户全部账号背包合计（${entries.length}个账号）`;
+  const totalDetail = document.createElement("span");
+  totalDetail.textContent = totals.size
+    ? [...totals].map(([name, count]) => `${name} ${count}`).join(" · ")
+    : "尚无背包快照，请刷新全部背包";
+  total.append(totalTitle, totalDetail);
+  elements.globalDailyMonitor.append(total);
   for (const { device, account, monitor } of entries) {
     const row = document.createElement("div");
     row.className = "daily-monitor-row";
@@ -817,6 +927,7 @@ function renderGlobalDailyMonitor() {
 }
 
 function renderDevices() {
+  renderEquipmentChecks();
   elements.deviceCount.textContent = String(devices.size);
   renderGlobalControls();
   renderAdminPanel();
@@ -1332,6 +1443,9 @@ function showPreviewPlaceholder(card, text) {
 function sendCommand(deviceId, command, parameters) {
   if (socket?.readyState !== WebSocket.OPEN) return addLog("控制台未连接");
   socket.send(JSON.stringify({ type: "command.send", deviceId, command, parameters }));
+  if (!["request_status", "preview_start", "preview_stop", "pointer_tap", "pointer_swipe"].includes(command)) {
+    showFeedback("操作已提交，等待设备回执；实际执行结果请查看账号状态", "pending");
+  }
 }
 
 function setConnectionState(className, text) {
@@ -1358,6 +1472,11 @@ function isToday(timestamp) {
     && value.getDate() === now.getDate();
 }
 function addLog(text) {
+  const error = /失败|错误|未发送|尚未连接|未连接|已断开|无效|不在线/.test(text);
+  // Background logs must not erase a pending-operation timeout.
+  if (error || document.querySelector("#operationFeedback").dataset.kind !== "pending") {
+    showFeedback(text, error ? "error" : "info");
+  }
   const item = document.createElement("li");
   const time = document.createElement("time");
   time.textContent = new Date().toLocaleTimeString("zh-CN", { hour12: false });

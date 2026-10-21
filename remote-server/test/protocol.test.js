@@ -363,6 +363,14 @@ test("device telemetry and browser command complete a round trip", async (contex
   assert.equal(templeConfirmation.command, "resolve_temple_confirmation");
   assert.equal(templeConfirmation.parameters.enterTemple, true);
 
+  const verifyPromise = nextJson(device, "command.request");
+  const verificationToken = "12345678-1234-4123-8123-123456789abc";
+  control.send(JSON.stringify({ type: "command.send", deviceId: "PK-ABCDEF123456",
+    command: "confirm_equipment_verification", parameters: { accountIndex: 2, verificationToken } }));
+  const verification = await verifyPromise;
+  assert.equal(verification.command, "confirm_equipment_verification");
+  assert.equal(verification.parameters.verificationToken, verificationToken);
+
   const cancelPromise = nextJson(device, "command.request");
   control.send(JSON.stringify({
     type: "command.send",
@@ -421,6 +429,12 @@ test("invalid tokens and invalid commands are rejected", async (context) => {
   }));
   const error = await errorPromise;
   assert.match(error.message, /无效/);
+  for (const verificationToken of ["", "-".repeat(36), "stale"] ) {
+    const invalidConfirmation = nextJson(control, "command.error");
+    control.send(JSON.stringify({ type: "command.send", deviceId: "missing",
+      command: "confirm_equipment_verification", parameters: { accountIndex: 0, verificationToken } }));
+    assert.match((await invalidConfirmation).message, /无效/);
+  }
 });
 
 test("health endpoint and iPhone dashboard are served", async (context) => {

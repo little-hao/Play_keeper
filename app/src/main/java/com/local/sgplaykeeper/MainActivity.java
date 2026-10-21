@@ -616,6 +616,26 @@ public final class MainActivity extends Activity {
         scroll.addView(form, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        String verificationToken = automationCoordinator.equipmentVerificationToken(accountIndex);
+        if (!verificationToken.isEmpty()) {
+            form.addView(formLabel("等待人工核验：请先查看当前账号主宠的目标套装，未确认前不会继续副本。"));
+            Button confirmEquipment = makeButton("核对目标装备并继续", view ->
+                    new AlertDialog.Builder(this)
+                            .setTitle(accountDisplayName(accountIndex) + " · 人工装备确认")
+                            .setMessage(automationCoordinator.equipmentVerificationMessage(accountIndex)
+                                    + "\n确认会记录为人工核验，而不是自动检测成功。")
+                            .setNegativeButton("保持暂停", null)
+                            .setPositiveButton("已逐件核对，继续", (dialog, which) -> {
+                                try {
+                                    automationCoordinator.confirmEquipmentVerification(
+                                            accountIndex, verificationToken);
+                                } catch (IllegalArgumentException error) {
+                                    showToast(error.getMessage());
+                                }
+                            }).show());
+            form.addView(confirmEquipment, automationActionParams());
+        }
+
         CheckBox auctionEnabled = new CheckBox(this);
         auctionEnabled.setText("每隔固定时间自动拍卖");
         auctionEnabled.setChecked(automationCoordinator.isAuctionEnabled(accountIndex));
@@ -1324,6 +1344,14 @@ public final class MainActivity extends Activity {
                     automationCoordinator.runEquipmentBuyNow(index);
                     success = true;
                     resultMessage = "已启动装备购买";
+                    break;
+                }
+                case "confirm_equipment_verification": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.confirmEquipmentVerification(
+                            index, parameters.optString("verificationToken", ""));
+                    success = true;
+                    resultMessage = "已记录本次人工装备确认，继续执行；请关注任务进度";
                     break;
                 }
                 case "run_daily_tasks": {

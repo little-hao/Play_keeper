@@ -129,6 +129,55 @@ final class EquipmentTransferAudit {
         return normalizeEquipmentName(expected).equals(normalizeEquipmentName(actual));
     }
 
+    /** Targets may be edited/reordered in the console; never infer a slot from list position. */
+    static Result evaluateObserved(List<String> expectedNames, Map<String, String> observed) {
+        Map<String, String> actual = observed == null ? Collections.emptyMap() : observed;
+        List<ItemResult> results = new ArrayList<>();
+        Set<String> usedSlots = new LinkedHashSet<>();
+        for (String expected : expectedNames) {
+            String knownSlot = "";
+            for (Map.Entry<String, String> entry : TARGETS_BY_SLOT.entrySet()) {
+                if (matchesEquipmentName(expected, entry.getValue())) knownSlot = entry.getKey();
+            }
+            String foundSlot = "";
+            for (Map.Entry<String, String> entry : actual.entrySet()) {
+                if (!usedSlots.contains(entry.getKey())
+                        && (knownSlot.isEmpty() || knownSlot.equals(entry.getKey()))
+                        && matchesEquipmentName(expected, entry.getValue())) {
+                    foundSlot = entry.getKey();
+                    break;
+                }
+            }
+            if (!foundSlot.isEmpty()) {
+                usedSlots.add(foundSlot);
+                results.add(new ItemResult(foundSlot, expected, actual.get(foundSlot),
+                        ItemStatus.TRANSFERRED));
+            } else {
+                results.add(new ItemResult(knownSlot, expected, actual.get(knownSlot),
+                        ItemStatus.EMPTY_SLOT));
+            }
+        }
+        return new Result(results);
+    }
+
+    /**
+     * Fallback evidence for pages that do not expose names/main-pet semantics.
+     * Every configured item must have completed purchase, no item may have been
+     * skipped, and the post-wear equipment panel must contain enough filled slots.
+     */
+    static boolean workflowCompleted(List<String> expectedNames, Set<String> purchasedNames,
+                                     Set<String> skippedNames, int filledSlots) {
+        if (expectedNames == null || expectedNames.isEmpty() || expectedNames.size() > 10) {
+            return false;
+        }
+        Set<String> purchased = purchasedNames == null
+                ? Collections.emptySet() : new LinkedHashSet<>(purchasedNames);
+        Set<String> skipped = skippedNames == null
+                ? Collections.emptySet() : new LinkedHashSet<>(skippedNames);
+        return skipped.isEmpty() && purchased.containsAll(expectedNames)
+                && filledSlots >= expectedNames.size();
+    }
+
     private static String normalizeEquipmentName(String value) {
         if (value == null) return "";
         return value.replaceAll("\\s+", "")

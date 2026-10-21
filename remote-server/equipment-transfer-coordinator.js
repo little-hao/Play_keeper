@@ -1,26 +1,82 @@
+import crypto from "node:crypto";
+
 export class EquipmentTransferCoordinator {
-  constructor({ emitAction = () => {}, now = () => Date.now(), onUpdate = () => {} } = {}) {
+  constructor({ emitAction = () => {}, now = () => Date.now(), onUpdate = () => {},
+    progressTimeoutMs = 15 * 60_000 } = {}) {
     this.emitAction = emitAction;
     this.now = now;
     this.onUpdate = onUpdate;
+    this.progressTimeoutMs = progressTimeoutMs;
     this.state = this.#idle();
   }
 
   #idle() {
     return { status: "idle", phase: "idle", startedAt: 0, updatedAt: this.now(),
-      ownerId: "", seller: null, buyer: null, items: [], price: 920,
+      runId: "", ownerId: "", seller: null, buyer: null, items: [], price: 920,
       returnMap: "圣兽云殿", buyerStarted: false, sellerReleased: false, message: "" };
   }
 
   snapshot() { return JSON.parse(JSON.stringify(this.state)); }
 
+  isActive() { return ["running", "intervention"].includes(this.state.status); }
+
+  restore(saved) {
+    if (!saved || !saved.runId || !saved.seller || !saved.buyer) return this.snapshot();
+    this.state = { ...this.#idle(), ...saved };
+    if (this.isActive()) {
+      this.state.status = "intervention";
+      this.state.message = "服务已重启，单次转移已暂停。请检查两方现场后中断旧任务，再选择后续操作；不会自动重复交易。";
+    }
+    return this.snapshot();
+  }
+
+  cancel(reason = "用户中断单次转移") {
+    if (!this.isActive()) return this.snapshot();
+    this.state.status = "cancelled";
+    this.state.phase = "cancelled";
+    this.state.updatedAt = this.now();
+    this.state.message = reason;
+    this.#stopAccounts();
+    this.#publish();
+    return this.snapshot();
+  }
+
+  onCommandResult(action, success, message = "") {
+    if (this.state.status !== "running" || action?.runId !== this.state.runId
+        || action.command === "cancel_automation") return this.snapshot();
+    // A result for the old seller listing is irrelevant once cleanup owns that account.
+    if (this.state.sellerReleased
+        && ["run_equipment_sell", "configure_equipment_transfer"].includes(action.command)) {
+      return this.snapshot();
+    }
+    if (!success) return this.#fail(`${action.accountLabel} 命令被拒绝或超时：${message}`);
+    return this.snapshot();
+  }
+
+  onDeviceOffline(deviceId) {
+    if (this.state.status === "running"
+        && [this.state.seller, this.state.buyer].some(a => a.deviceId === deviceId)) {
+      return this.#fail("设备离线，单次转移已暂停，请检查现场后处理");
+    }
+    return this.snapshot();
+  }
+
+  tick() {
+    if (this.state.status === "running" && !this.state.verificationPending
+        && this.now() - this.state.updatedAt > this.progressTimeoutMs) {
+      return this.#fail("单次转移15分钟未完成阶段交接，已暂停，未自动重复交易");
+    }
+    return this.snapshot();
+  }
+
   start({ ownerId, seller, buyer, items, price, returnMap = "圣兽云殿" }) {
-    if (this.state.status === "running") throw new Error("已有装备定向转移正在运行");
+    if (this.isActive()) throw new Error("已有单次转移运行或等待处理，请先检查并中断旧任务");
     if (!seller || !buyer || seller.accountLabel === buyer.accountLabel) {
       throw new Error("卖方与买方必须是两个不同的在线账号");
     }
     const now = this.now();
     this.state = { status: "running", phase: "seller_listing", startedAt: now,
+      runId: crypto.randomUUID(), verificationPending: false,
       updatedAt: now, ownerId: String(ownerId || ""), seller: { ...seller }, buyer: { ...buyer },
       items: [...items], price, returnMap, buyerStarted: false, sellerReleased: false,
       message: `${seller.accountLabel} 正在向 ${buyer.accountLabel} 上架装备` };
@@ -37,6 +93,17 @@ export class EquipmentTransferCoordinator {
     if (this.state.status !== "running") return this.snapshot();
     const seller = this.#automationFor(this.state.seller, deviceId, telemetry);
     const buyer = this.#automationFor(this.state.buyer, deviceId, telemetry);
+    if (this.#fresh(buyer)) {
+      const pending = !!buyer.equipmentVerificationToken;
+      if (pending !== this.state.verificationPending) {
+        this.state.verificationPending = pending;
+        this.state.updatedAt = this.now();
+        this.state.message = pending
+          ? `${this.state.buyer.accountLabel} 等待人工核对主宠装备，未自动继续副本`
+          : `${this.state.buyer.accountLabel} 已结束人工核验等待，继续跟踪交接`;
+        this.#publish();
+      }
+    }
     if (!this.state.sellerReleased && this.#fresh(seller)
         && seller?.task === "equipment_sell" && seller.status === "error") {
       return this.#fail(`${this.state.seller.accountLabel} 上架失败：${seller.lastMessage || "未知错误"}`);
@@ -54,7 +121,8 @@ export class EquipmentTransferCoordinator {
       this.#publish();
     }
     const transferredAt = Number(buyer?.equipmentTransferLastRunAt);
-    if (!this.state.sellerReleased && Number.isFinite(transferredAt)
+    if (this.state.buyerStarted && this.#fresh(buyer) && !this.state.verificationPending
+        && !this.state.sellerReleased && Number.isFinite(transferredAt)
         && transferredAt >= this.state.startedAt) {
       this.state.sellerReleased = true;
       this.state.phase = "seller_cleanup";
@@ -69,8 +137,10 @@ export class EquipmentTransferCoordinator {
         && seller?.task === "seller_cleanup" && seller.status === "error") {
       return this.#fail(`${this.state.seller.accountLabel} 返回挂机失败：${seller.lastMessage || "未知错误"}`);
     }
-    if (this.state.sellerReleased && seller?.task === "temple" && seller.status === "ok"
-        && Number(seller.updatedAt) >= this.state.startedAt) {
+    if (this.state.status === "running" && this.state.sellerReleased
+        && seller?.task === "temple" && seller.status === "ok"
+        && Number(seller.updatedAt) >= this.state.startedAt
+        && Number(seller.finalEquipLastRunAt) >= this.state.startedAt) {
       this.state.status = "success";
       this.state.phase = "complete";
       this.state.updatedAt = this.now();
@@ -91,17 +161,30 @@ export class EquipmentTransferCoordinator {
   }
 
   #command(account, command, parameters) {
-    this.emitAction({ deviceId: account.deviceId, accountLabel: account.accountLabel,
-      command, parameters: { accountIndex: account.accountIndex, ...parameters } });
+    if (this.state.status !== "running" && command !== "cancel_automation") return;
+    try {
+      this.emitAction({ deviceId: account.deviceId, accountLabel: account.accountLabel,
+        runId: this.state.runId, command, parameters: { accountIndex: account.accountIndex, ...parameters } });
+    } catch (error) {
+      if (command !== "cancel_automation") {
+        this.#fail(`${account.accountLabel} 命令未能发送：${error.message}`);
+      }
+    }
   }
 
   #fail(message) {
-    this.state.status = "error";
-    this.state.phase = "error";
+    this.state.status = "intervention";
     this.state.updatedAt = this.now();
     this.state.message = message;
+    this.#stopAccounts();
     this.#publish();
     return this.snapshot();
+  }
+
+  #stopAccounts() {
+    for (const account of [this.state.seller, this.state.buyer]) {
+      if (account) this.#command(account, "cancel_automation", {});
+    }
   }
 
   #publish() { this.onUpdate(this.snapshot()); }

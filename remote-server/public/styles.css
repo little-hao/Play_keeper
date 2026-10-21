@@ -97,6 +97,8 @@ small { color: var(--muted); }
 .daily-monitor-panel { margin: 12px 0; padding: 12px; background: #0d1118; border: 1px solid var(--line); border-radius: 12px; }
 .daily-monitor-panel .section-title { align-items: baseline; gap: 8px; }
 .daily-monitor-list { display: grid; gap: 7px; margin-top: 10px; }
+.daily-inventory-total { display: grid; gap: 6px; padding: 12px; border: 1px solid #3f7657; border-radius: 10px; background: #102019; }
+.daily-inventory-total span { color: var(--muted); overflow-wrap: anywhere; }
 .daily-monitor-row { display: grid; grid-template-columns: minmax(62px, .7fr) minmax(130px, 1fr) minmax(240px, 3fr) minmax(250px, auto); align-items: center; gap: 8px; padding: 9px; background: #111722; border-radius: 9px; }
 .daily-monitor-row small { overflow-wrap: anywhere; }
 .daily-status-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
@@ -160,6 +162,15 @@ small { color: var(--muted); }
 .select-option:disabled { opacity: .45; cursor: not-allowed; }
 .select-mark { flex: none; width: 18px; height: 18px; border: 2px solid currentColor; border-radius: 50%; }
 .select-option.selected .select-mark { border-width: 5px; }
+.operation-feedback { padding: 12px 16px; margin-bottom: 16px; border: 1px solid #52647d; border-radius: 12px; overflow-wrap: anywhere; }
+.operation-feedback[data-kind="pending"] { border-color: #70b7ff; }
+.operation-feedback[data-kind="warning"], .equipment-checks { border-color: #e4b658; }
+.operation-feedback[data-kind="error"] { border-color: #ff8080; }
+.equipment-checks > div + div { border-top: 1px solid #52647d; margin-top: 16px; padding-top: 16px; }
+.equipment-checks p, .single-transfer-panel p { overflow-wrap: anywhere; }
+.equipment-checks, .single-transfer-panel { padding: 18px; margin-bottom: 18px; }
+.equipment-checks button { white-space: normal; }
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid #94cbff; outline-offset: 3px; }
 @media (max-width: 650px) {
   .shell { padding-right: 10px; padding-left: 10px; }
   header { align-items: flex-start; margin-bottom: 14px; }

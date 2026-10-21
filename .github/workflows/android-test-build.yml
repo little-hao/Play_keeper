@@ -2,9 +2,14 @@ name: Android test build
 
 on:
   workflow_dispatch:
+  pull_request:
   push:
     branches:
       - "test/**"
+      - "codex/**"
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -17,8 +22,22 @@ jobs:
           java-version: "17"
           cache: gradle
       - uses: gradle/actions/setup-gradle@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: remote-server/package-lock.json
+      - name: Test relay and recovery scenarios
+        working-directory: remote-server
+        run: npm ci && npm test
       - name: Test and build unsigned release
-        run: ./gradlew testDebugUnitTest assembleRelease --no-daemon
+        run: ./gradlew testDebugUnitTest lintDebug assembleRelease --no-daemon
+      - name: Preserve test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-test-reports
+          path: app/build/reports/
       - uses: actions/upload-artifact@v7
         with:
           name: play-keeper-unsigned-release

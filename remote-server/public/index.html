@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css?v=2.0.2-rc6">
+  <link rel="stylesheet" href="/styles.css?v=2.0.2">
 </head>
 <body>
   <main class="shell">
@@ -37,6 +37,15 @@
         <button id="refreshStatus" class="secondary">刷新状态</button>
         <button id="disconnectButton" class="secondary">断开</button>
       </div>
+      <div id="operationFeedback" class="operation-feedback" role="status" aria-live="polite">
+        请选择任务。设备接受指令后，仍需等待实际执行结果。
+      </div>
+      <section id="equipmentChecks" class="panel equipment-checks hidden" aria-label="待人工核验的装备"></section>
+      <section id="singleTransferPanel" class="panel single-transfer-panel hidden">
+        <h2>单次装备转移</h2>
+        <p id="singleTransferDetail"></p>
+        <button id="cancelSingleTransfer" class="secondary">中断单次转移并保留现场</button>
+      </section>
       <section id="userAdminPanel" class="panel hidden">
         <div class="section-title"><div><p class="eyebrow">ADMIN</p><h2>用户与设备归属</h2></div></div>
         <div class="plan-settings">
@@ -51,18 +60,6 @@
           <button id="assignDeviceButton" class="secondary">保存设备归属</button>
         </div>
         <p id="userAdminStatus" class="automation-help">普通用户只能查看和操作分配给自己的设备。</p>
-      </section>
-      <section class="panel global-control-panel">
-        <div class="section-title">
-          <div><p class="eyebrow">HIGH RISK</p><h2>KeepPlayer 进程控制</h2></div>
-          <span class="risk-badge">高风险操作</span>
-        </div>
-        <div class="global-control-row">
-          <label>目标设备<select id="keepPlayerDevice"></select></label>
-          <button id="startKeepPlayer" class="secondary">启动 KeepPlayer</button>
-          <button id="exitKeepPlayer" class="danger-action">关闭 KeepPlayer</button>
-        </div>
-        <p class="automation-help">关闭前台会保留远程连接；若进程被系统强制停止，将无法从网页重新启动。</p>
       </section>
       <section class="panel global-monitor-panel">
         <div class="section-title">
@@ -139,7 +136,7 @@
         <div class="plan-progress"><span id="dailyPlanProgress"></span></div>
         <div id="resumeConfirmation" class="resume-confirmation hidden">
           <label>人工确认套装所在账号<select id="resumeEquipmentHolder"></select></label>
-          <small>请先在手机画面确认当前所选十件套所在账号；继续后该账号会作为卖方重新开始本段。</small>
+          <small>请先核对当前所选套装的实际所在账号；继续时保留完整路线，并按原计划阶段衔接。装备分散或尚未成交时，请勿直接确认。</small>
         </div>
         <div class="automation-actions action-grid">
           <button id="startDailyPlan" class="primary">多用户挂机</button>
@@ -150,11 +147,21 @@
           <button id="savePlanSchedule" class="secondary">保存本用户设置与每日定时</button>
           <button id="downloadPlanDiagnostics" class="secondary">下载本用户报错说明</button>
           <small id="planScheduleStatus">每日定时未启用</small>
+          <small id="settingsSaveState" role="status">设置按当前登录用户保存</small>
         </div>
         <p class="automation-help">每个用户独立保存路线、脚本和快捷账号；卖方按所选保留数量上架组合道具，最后由路线首尾的主号购买。</p>
         <div id="planIntervention" class="plan-intervention hidden" role="alert"></div>
       </section>
       <div id="deviceList" class="device-list"></div>
+      <details class="panel global-control-panel">
+        <summary>高级操作 · KeepPlayer 进程控制</summary>
+        <div class="global-control-row">
+          <label>目标设备<select id="keepPlayerDevice"></select></label>
+          <button id="startKeepPlayer" class="secondary">启动 KeepPlayer</button>
+          <button id="exitKeepPlayer" class="danger-action">关闭 KeepPlayer</button>
+        </div>
+        <p class="automation-help">关闭前台会保留远程连接；若进程被系统强制停止，将无法从网页重新启动。</p>
+      </details>
       <section class="panel log-panel">
         <div class="section-title"><h2>操作记录</h2><button id="clearLog" class="text-button">清空</button></div>
         <ol id="eventLog" class="event-log"></ol>
@@ -312,6 +319,6 @@
       <div id="selectOptions" class="select-options" role="radiogroup"></div>
     </section>
   </div>
-  <script type="module" src="/app.js?v=2.0.2-rc6"></script>
+  <script type="module" src="/app.js?v=2.0.2"></script>
 </body>
 </html>

@@ -63,7 +63,8 @@ export class EightAccountPlan {
   #idleState() {
     return { status: "idle", runId: "", startedAt: 0, updatedAt: this.now(),
       phaseStartedAt: 0, legIndex: -1, phase: "idle", mode: "daily", resumePhase: "",
-      buyerStarted: false, sellerReleased: false, sellerCleaned: false, mainBuySeen: false,
+      buyerStarted: false, buyerWorkflowCompleted: false,
+      sellerReleased: false, sellerCleaned: false, mainBuySeen: false,
       sellerCleanupDueAt: 0, equipmentHolderLabel: "hao", mainAccountLabel: "hao",
       route: [], items: [...EQUIPMENT_ITEMS],
       resourceItems: [...RESOURCE_ITEMS], inventoryItems: [...RESOURCE_ITEMS],
@@ -262,6 +263,7 @@ export class EightAccountPlan {
         this.state.phase = "seller_running";
         this.state.resumePhase = "seller_running";
         this.state.buyerStarted = false;
+        this.state.buyerWorkflowCompleted = false;
         this.state.sellerReleased = false;
         this.state.sellerCleaned = false;
         this.state.sellerCleanupDueAt = 0;
@@ -359,8 +361,14 @@ export class EightAccountPlan {
         this.state.updatedAt = this.now();
         this.#command(leg.buyer, "run_equipment_buy", { accountIndex: leg.buyer.accountIndex });
       }
-      if (buyer && this.state.sellerCleaned && this.#buyerWorkflowComplete(buyer)) {
+      if (buyer && this.state.buyerStarted && this.#buyerWorkflowComplete(buyer)) {
+        this.state.buyerWorkflowCompleted = true;
         this.#captureInventory(leg.buyer, buyer);
+        this.state.updatedAt = this.now();
+      }
+      // The buyer and seller can report from different devices. Keep both
+      // completion facts so whichever report arrives last advances the plan.
+      if (this.state.sellerCleaned && this.state.buyerWorkflowCompleted) {
         if (leg.buyer.accountLabel === this.state.mainAccountLabel) this.#startMainBuy(leg.buyer);
         else this.#startResourceAuction(leg.buyer);
       }
@@ -427,7 +435,8 @@ export class EightAccountPlan {
 
   #buyerWorkflowComplete(automation) {
     const afterStart = (value) => Number(value) >= this.state.phaseStartedAt;
-    return afterStart(automation.equipmentTransferLastRunAt)
+    return !automation.equipmentVerificationToken
+      && afterStart(automation.equipmentTransferLastRunAt)
       && afterStart(automation.dungeonLastRunAt)
       && afterStart(automation.finalEquipLastRunAt)
       && afterStart(automation.inventoryLastRunAt)
@@ -445,6 +454,7 @@ export class EightAccountPlan {
   }
 
   #scheduleSellerAfterTransfer(leg, buyerAutomation) {
+    if (buyerAutomation.equipmentVerificationToken) return;
     if (this.state.sellerReleased || this.state.sellerCleanupDueAt > 0) return;
     const transferredAt = Number(buyerAutomation.equipmentTransferLastRunAt);
     if (!Number.isFinite(transferredAt) || transferredAt < this.state.phaseStartedAt) return;
@@ -490,6 +500,7 @@ export class EightAccountPlan {
         accountIndex: leg.seller.accountIndex });
       this.state.route.splice(this.state.legIndex + 1, 1);
       this.state.buyerStarted = false;
+      this.state.buyerWorkflowCompleted = false;
       this.state.sellerReleased = false;
       this.state.sellerCleaned = false;
       this.state.sellerCleanupDueAt = 0;
@@ -509,11 +520,13 @@ export class EightAccountPlan {
     if (!leg) return this.#intervene("恢复时未找到当前装备交接账号", "系统");
     if (this.state.equipmentHolderLabel !== leg.buyer.accountLabel) {
       this.state.buyerStarted = false;
+      this.state.buyerWorkflowCompleted = false;
       this.#startCurrentLeg();
       return;
     }
     this.state.phase = "buyer_running";
     this.state.buyerStarted = true;
+    this.state.buyerWorkflowCompleted = false;
     this.state.updatedAt = this.now();
     if (!this.state.sellerCleaned) {
       this.state.sellerReleased = true;
@@ -596,6 +609,7 @@ export class EightAccountPlan {
     }
     this.state.legIndex += 1;
     this.state.buyerStarted = false;
+    this.state.buyerWorkflowCompleted = false;
     this.state.sellerReleased = false;
     this.state.sellerCleaned = false;
     this.state.sellerCleanupDueAt = 0;
@@ -619,6 +633,7 @@ export class EightAccountPlan {
     const leg = this.#currentLeg();
     if (!leg) return this.#intervene("计划交接序号无效", "系统");
     this.state.sellerReleased = false;
+    this.state.buyerWorkflowCompleted = false;
     this.state.sellerCleanupDueAt = 0;
     this.state.phaseStartedAt = this.now();
     this.state.equipmentHolderLabel = leg.seller.accountLabel;

@@ -216,6 +216,49 @@ test("moves to intervention when the APP rejects a plan command", () => {
   assert.match(plan.snapshot().error, /拒绝|上一阶段/);
 });
 
+test("repeated manual resume survives restart and completes the remaining full route", () => {
+  const actions = [];
+  const initial = new EightAccountPlan({ now: () => 1000 });
+  initial.start(route());
+  initial.cancel();
+  initial.resume(route(), "hao3");
+  initial.cancel();
+  const plan = new EightAccountPlan({ now: () => 2000, emitAction: a => actions.push(a) });
+  plan.restore(JSON.parse(JSON.stringify(initial.snapshot())));
+  plan.resume(route(), "hao3");
+  assert.equal(plan.snapshot().legIndex, 3);
+  assert.deepEqual(plan.snapshot().route.map(a => a.accountLabel), route().map(a => a.accountLabel));
+  const done = { task: "temple", status: "ok", updatedAt: 10000,
+    equipmentTransferLastRunAt: 10000, dungeonLastRunAt: 10000,
+    finalEquipLastRunAt: 10000, inventoryLastRunAt: 10000, inventoryStatus: "ok" };
+  for (let i = 3; i < 8; i++) {
+    const seller = route()[i], buyer = route()[i + 1];
+    const report = (account, data) => plan.onTelemetry(account.deviceId, telemetry(account.accountIndex, data));
+    report(seller, { task: "equipment_sell", status: "running", equipmentListedInBatch: 5 });
+    report(buyer, done);
+    report(seller, done);
+    report(buyer, done);
+    if (buyer.accountLabel === "hao") {
+      report(buyer, { task: "auction_buy", status: "running", updatedAt: 10000 });
+      report(buyer, done);
+    } else report(buyer, { ...done, auctionLastRunAt: 10000 });
+  }
+  assert.equal(plan.snapshot().status, "success");
+  assert.equal(plan.snapshot().history.at(-1).buyer, "hao");
+  assert.deepEqual(actions.filter(a => a.command === "run_equipment_sell").map(a => a.accountLabel),
+    ["hao3", "hao4", "hao5", "hao6", "hao7"]);
+});
+
+test("pending manual equipment verification cannot release the daily plan seller", () => {
+  const actions = [];
+  const plan = new EightAccountPlan({ now: () => 1000, emitAction: a => actions.push(a) });
+  plan.start(route());
+  plan.onTelemetry(d1, telemetry(0, { equipmentVerificationToken: "pending",
+    equipmentTransferLastRunAt: 2000, status: "awaiting_confirmation" }));
+  assert.equal(plan.snapshot().sellerReleased, false);
+  assert.equal(actions.some(a => a.command === "run_seller_cleanup"), false);
+});
+
 test("restores a running saved state as an indefinite intervention", () => {
   const first = new EightAccountPlan({ now: () => 10_000 });
   first.start(route());
@@ -364,4 +407,43 @@ test("accepts a Chinese four-account route, nine-piece set, and blank report ema
   assert.equal(snapshot.reportEmail, "");
   assert.deepEqual(snapshot.items, loverRomance);
   assert.equal(actions[0].parameters.buyer, "杂鱼小妹");
+});
+
+test("starts main resource purchase when buyer finished before remote seller cleanup", () => {
+  const actions = [];
+  let clock = 1_000;
+  const shortRoute = [route()[0], route()[2], route().at(-1)];
+  const plan = new EightAccountPlan({ emitAction: action => actions.push(action), now: () => clock });
+  const complete = () => ({ task: "temple", status: "ok", updatedAt: clock,
+    equipmentTransferLastRunAt: clock, dungeonLastRunAt: clock,
+    finalEquipLastRunAt: clock, inventoryLastRunAt: clock,
+    inventoryStatus: "ok", inventoryCounts: { "进化宝石": 7 } });
+  plan.start(shortRoute);
+
+  // First leg: hao -> hao2, then hao2 auctions its resources.
+  plan.onTelemetry(d2, telemetry(0, { task: "equipment_sell", status: "running",
+    equipmentListedInBatch: 5 }));
+  clock = 2_000;
+  plan.onTelemetry(d1, telemetry(1, complete()));
+  plan.onTelemetry(d2, telemetry(0, { task: "temple", status: "ok", updatedAt: clock,
+    finalEquipLastRunAt: clock }));
+  assert.equal(actions.at(-1).command, "run_auto_auction");
+  plan.onTelemetry(d1, telemetry(1, { task: "temple", status: "ok", updatedAt: clock,
+    auctionLastRunAt: clock }));
+
+  // Final leg: hao finishes first and goes idle; hao2 cleanup reports later.
+  assert.equal(actions.at(-1).command, "run_equipment_sell");
+  plan.onTelemetry(d1, telemetry(1, { task: "equipment_sell", status: "running",
+    equipmentListedInBatch: 5 }));
+  clock = 3_000;
+  plan.onTelemetry(d2, telemetry(0, complete()));
+  assert.equal(plan.snapshot().buyerWorkflowCompleted, true);
+  assert.notEqual(actions.at(-1).command, "run_auction_buy");
+  clock = 4_000;
+  plan.onTelemetry(d1, telemetry(1, { task: "temple", status: "ok", updatedAt: clock,
+    finalEquipLastRunAt: clock }));
+
+  assert.equal(actions.at(-1).command, "run_auction_buy");
+  assert.equal(actions.at(-1).accountLabel, "hao");
+  assert.equal(actions.filter(action => action.command === "run_auction_buy").length, 1);
 });

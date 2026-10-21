@@ -26,14 +26,14 @@ test("starts the remote buyer and releases the seller after the equipment arrive
 
   clock = 2_000;
   coordinator.onTelemetry(buyer.deviceId, { accounts: [{ index: 1, automation: {
-    task: "equipment_buy", status: "running", equipmentTransferLastRunAt: 2_000
+    task: "equipment_buy", status: "running", equipmentTransferLastRunAt: 2_000, updatedAt: 2_000
   } }] });
   assert.deepEqual(actions.slice(-3).map((action) => action.command),
     ["cancel_automation", "configure_return_hang", "run_seller_cleanup"]);
   assert.equal(actions.at(-1).accountLabel, "hao3");
 
   coordinator.onTelemetry(seller.deviceId, { accounts: [{ index: 2, automation: {
-    task: "temple", status: "ok", updatedAt: 3_000
+    task: "temple", status: "ok", updatedAt: 3_000, finalEquipLastRunAt: 3_000
   } }] });
   assert.equal(coordinator.snapshot().status, "success");
   assert.match(coordinator.snapshot().message, /继续执行副本/);

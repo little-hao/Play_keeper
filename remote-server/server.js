@@ -149,6 +149,11 @@ const commandValidators = {
   },
   run_equipment_sell: accountParameters,
   run_equipment_buy: accountParameters,
+  confirm_equipment_verification(parameters) {
+    return accountParameters(parameters)
+      && typeof parameters.verificationToken === "string"
+      && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(parameters.verificationToken);
+  },
   run_seller_cleanup: accountParameters,
   cancel_automation: accountParameters,
   run_auction_buy: accountParameters,
@@ -388,7 +393,9 @@ function loadPlanState(file, logger) {
 function savePlanState(file, state, logger) {
   try {
     syncFs.mkdirSync(path.dirname(file), { recursive: true });
-    syncFs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+    const temporary = `${file}.tmp`;
+    syncFs.writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+    syncFs.renameSync(temporary, file);
   } catch (error) {
     logger.warn?.("Unable to save plan state", error.message);
   }
@@ -426,6 +433,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   const devices = new Map();
   const controllers = new Set();
   const pendingPlanCommands = new Map();
+  const pendingTransferCommands = new Map();
   const authStoreFile = authFile || process.env.AUTH_STORE_FILE
     || path.join(currentDirectory, "data", "users.json");
   const authStore = new AuthStore(authStoreFile, adminToken);
@@ -484,10 +492,14 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   eightAccountPlan.restore(loadPlanState(stateFile, logger));
   const equipmentTransfer = new EquipmentTransferCoordinator({
     emitAction(action) {
-      dispatchDeviceCommand(action.deviceId, action.command, action.parameters);
+      const commandId = dispatchDeviceCommand(action.deviceId, action.command, action.parameters);
+      if (action.command !== "cancel_automation") {
+        pendingTransferCommands.set(commandId, { action: structuredClone(action), sentAt: Date.now() });
+      }
       broadcast({ type: "equipment.transfer.command", ...action, timestamp: Date.now() });
     },
     onUpdate(payload) {
+      savePlanState(`${stateFile}.transfer`, payload, logger);
       for (const controller of controllers) {
         if (controller.user?.role === "admin" || controller.user?.id === payload.ownerId) {
           sendJson(controller, { type: "equipment.transfer.update", payload });
@@ -495,6 +507,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
       }
     }
   });
+  equipmentTransfer.restore(loadPlanState(`${stateFile}.transfer`, logger));
 
   function deviceSummary(entry) {
     return {
@@ -583,6 +596,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   }
 
   function startConfiguredPlan(options, user = { role: "admin" }) {
+    if (equipmentTransfer.isActive()) throw new Error("单次转移正在运行或等待处理，请先检查并中断该任务");
     const summaries = accessibleSummaries(user);
     const route = resolveAccountRoute(summaries, options.routeLabels);
     return eightAccountPlan.start(route, {
@@ -598,6 +612,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   }
 
   function startResourceSweep(options, user = { role: "admin" }) {
+    if (equipmentTransfer.isActive()) throw new Error("单次转移正在运行或等待处理，请先检查并中断该任务");
     const summaries = accessibleSummaries(user);
     const mainAccount = options.routeLabels[0];
     const routeLabels = [...options.routeLabels.slice(1, -1), mainAccount];
@@ -668,12 +683,18 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         equipmentTransfer.onTelemetry(entry.deviceId, entry.telemetry);
       } else if (message.type === "command.result" && typeof message.commandId === "string") {
         const pending = pendingPlanCommands.get(message.commandId);
-        if (pending) {
+        if (pending && pending.action.deviceId === entry.deviceId) {
           pendingPlanCommands.delete(message.commandId);
           const before = JSON.stringify(eightAccountPlan.snapshot());
           const after = eightAccountPlan.onCommandResult(pending.action,
             message.success === true, String(message.message ?? ""));
           if (JSON.stringify(after) !== before) publishPlan(after);
+        }
+        const transferPending = pendingTransferCommands.get(message.commandId);
+        if (transferPending && transferPending.action.deviceId === entry.deviceId) {
+          pendingTransferCommands.delete(message.commandId);
+          equipmentTransfer.onCommandResult(transferPending.action, message.success === true,
+            String(message.message ?? ""));
         }
         broadcast({
           type: "command.result",
@@ -722,6 +743,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         if (JSON.stringify(after) !== before) {
           publishPlan(after);
         }
+        equipmentTransfer.onDeviceOffline(socket.deviceId);
       }
     });
     socket.on("error", (error) => logger.warn?.("Device socket error", error.message));
@@ -755,6 +777,10 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
           user: { username: user.username, role: user.role } });
         broadcastSnapshot(socket);
         const planSnapshot = eightAccountPlan.snapshot();
+        const transferSnapshot = equipmentTransfer.snapshot();
+        if (user.role === "admin" || user.id === transferSnapshot.ownerId) {
+          sendJson(socket, { type: "equipment.transfer.update", payload: transferSnapshot });
+        }
         const routeIds = [...new Set((planSnapshot.route || [])
           .map((entry) => entry.deviceId).filter(Boolean))];
         if (user.role === "admin" || (routeIds.length > 0
@@ -869,12 +895,22 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         }
         return;
       }
+      if (message.type === "equipment.transfer.cancel") {
+        const snapshot = equipmentTransfer.snapshot();
+        if (socket.user?.role !== "admin" && socket.user?.id !== snapshot.ownerId) {
+          sendJson(socket, { type: "equipment.transfer.error", message: "无权中断此单次转移" });
+        } else {
+          equipmentTransfer.cancel();
+        }
+        return;
+      }
       if (message.type === "plan.retry") {
         if (!canAccessCurrentPlan(socket.user)) {
           sendJson(socket, { type: "plan.error", message: "无权恢复该计划" });
           return;
         }
         try {
+          if (equipmentTransfer.isActive()) throw new Error("请先中断正在运行或等待处理的单次转移");
           const summaries = accessibleSummaries(socket.user);
           const snapshotLabels = Array.isArray(eightAccountPlan.snapshot().route)
             ? eightAccountPlan.snapshot().route.map((entry) => entry.accountLabel) : [];
@@ -926,6 +962,13 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
       if (!target) return sendJson(socket, { type: "command.error", message: "设备当前不在线" });
       if (!authStore.canAccess(socket.user, target.deviceId)) {
         return sendJson(socket, { type: "command.error", message: "无权控制该设备" });
+      }
+      if (message.command === "cancel_automation" && equipmentTransfer.isActive()) {
+        const transfer = equipmentTransfer.snapshot();
+        if ([transfer.seller, transfer.buyer].some(account =>
+          account?.deviceId === target.deviceId && account.accountIndex === parameters.accountIndex)) {
+          equipmentTransfer.cancel("用户中断关联账号，单次转移已停止");
+        }
       }
       if (message.command === "preview_start") socket.previewDevices.add(target.deviceId);
       if (message.command === "preview_stop") socket.previewDevices.delete(target.deviceId);
@@ -979,6 +1022,12 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   heartbeat.unref();
   const planTicker = setInterval(() => {
     const now = Date.now();
+    for (const [commandId, pending] of pendingTransferCommands) {
+      if (now - pending.sentAt < 30_000) continue;
+      pendingTransferCommands.delete(commandId);
+      equipmentTransfer.onCommandResult(pending.action, false, "30秒内未收到APP确认");
+    }
+    equipmentTransfer.tick();
     for (const [commandId, pending] of pendingPlanCommands) {
       if (now - pending.sentAt < 30_000) continue;
       pendingPlanCommands.delete(commandId);
@@ -995,6 +1044,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   }, 1_000);
   planTicker.unref();
   const scheduleTicker = setInterval(() => {
+    if (equipmentTransfer.isActive()) return;
     if (["running", "intervention"].includes(eightAccountPlan.snapshot().status)) return;
     for (const user of authStore.scheduledUsers()) {
       const settings = authStore.getSettings(user);
