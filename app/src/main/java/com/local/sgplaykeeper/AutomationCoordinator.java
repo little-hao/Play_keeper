@@ -478,7 +478,25 @@ final class AutomationCoordinator {
     }
 
     void runEquipmentBuyNow(int accountIndex) {
+        runEquipmentBuyNow(accountIndex, -1);
+    }
+
+    void runEquipmentBuyNow(int accountIndex, int linkedSellerAccountIndex) {
         requireAccount(accountIndex);
+        if (linkedSellerAccountIndex >= 0) {
+            requireAccount(linkedSellerAccountIndex);
+            if (linkedSellerAccountIndex == accountIndex) {
+                throw new IllegalArgumentException("买卖账号不能相同");
+            }
+            RuntimeState sellerState = states[linkedSellerAccountIndex];
+            if (sellerState.busy && "equipment_sell".equals(sellerState.task)) {
+                sellerState.equipmentBuyerTriggered = true;
+                sellerState.linkedEquipmentAccount = accountIndex;
+                states[accountIndex].linkedEquipmentAccount = linkedSellerAccountIndex;
+                updateState(linkedSellerAccountIndex,
+                        "断线恢复：买方已同步启动，卖方继续复核上架记录");
+            }
+        }
         runEquipmentTransfer(accountIndex, false, true);
     }
 
@@ -749,6 +767,7 @@ final class AutomationCoordinator {
         automation.put("equipmentVerificationReason", state.equipmentVerificationReason);
         automation.put("equipmentVerificationSource", state.equipmentVerificationSource);
         automation.put("equipmentListedInBatch", state.equipmentListedInBatch);
+        automation.put("equipmentMarketActiveCount", state.equipmentMarketActiveCount);
         automation.put("equipmentBatchNames", new JSONArray(state.equipmentBatchNames));
         automation.put("equipmentAllTransferred", "workflow".equals(state.equipmentVerificationSource)
                 || "manual".equals(state.equipmentVerificationSource)
@@ -849,8 +868,9 @@ final class AutomationCoordinator {
         state.orientationRecoveryClicked = false;
         state.auctionListedCount = 0;
         state.equipmentListedInBatch = 0;
+        state.equipmentMarketActiveCount = 0;
         state.equipmentBatchNames.clear();
-        state.equipmentListingRecoveryNames.clear();
+        state.equipmentListingRecoveryAttempts.clear();
         state.equipmentBatchSeen = false;
         state.equipmentBatchEmptyChecks = 0;
         state.equipmentBuyerTriggered = false;
@@ -1075,12 +1095,12 @@ final class AutomationCoordinator {
                 + "const box=Array.from(document.querySelectorAll('.cont-box'))"
                 + ".find(e=>visible(e)&&(e.textContent||'').includes('价格(金币)'));"
                 + "if(!box)return JSON.stringify({status:'not_ready'});"
-                + "const names=[];for(const row of box.querySelectorAll('.ul .li')){"
+                + "const rows=Array.from(box.querySelectorAll('.ul .li'));const names=[];for(const row of rows){"
                 + "const cells=Array.from(row.children).map(e=>(e.textContent||'').trim());"
                 + "const name=cells.find(v=>wanted.has(base(v)))||'';"
                 + "const priced=cells.some(v=>parseInt(v.replace(/[^0-9]/g,''),10)===price);"
                 + "if(name&&priced&&!names.includes(name))names.push(name);}"
-                + "return JSON.stringify({status:'ok',names});})()";
+                + "return JSON.stringify({status:'ok',names,totalCount:rows.length});})()";
         evaluateTask(accountIndex, view, script, encoded -> {
             JSONObject result = decodeObject(encoded);
             if (result == null || !"ok".equals(result.optString("status"))) {
@@ -1096,10 +1116,12 @@ final class AutomationCoordinator {
                 }
             }
             EquipmentListingReconciler.Result reconciliation =
-                    EquipmentListingReconciler.reconcile(items, startIndex, activeNames);
+                    EquipmentListingReconciler.reconcile(items, startIndex, activeNames,
+                            result.optInt("totalCount", activeNames.size()));
             state.equipmentBatchNames.clear();
             state.equipmentBatchNames.addAll(reconciliation.activeNames);
             state.equipmentListedInBatch = reconciliation.activeCount();
+            state.equipmentMarketActiveCount = reconciliation.marketActiveCount();
             int nextIndex = reconciliation.resumeIndex;
             int batchEnd = Math.min(items.size(), ((startIndex / EQUIPMENT_ACTIVE_LIMIT) + 1)
                     * EQUIPMENT_ACTIVE_LIMIT);
@@ -1107,11 +1129,18 @@ final class AutomationCoordinator {
                 state.equipmentBatchSeen = true;
                 state.equipmentBatchEmptyChecks = 0;
                 state.equipmentWaitStartedAt = System.currentTimeMillis();
-                updateState(accountIndex, "交易所重入复核：当前已上架"
-                        + state.equipmentListedInBatch + "件");
+                updateState(accountIndex, "交易所重入复核：本套装已上架"
+                        + state.equipmentListedInBatch + "件，全部栏位已占用"
+                        + state.equipmentMarketActiveCount + "/" + EQUIPMENT_ACTIVE_LIMIT);
             }
-            if (state.equipmentListedInBatch >= EQUIPMENT_ACTIVE_LIMIT
+            if (state.equipmentMarketActiveCount >= EQUIPMENT_ACTIVE_LIMIT
                     || nextIndex >= batchEnd) {
+                if (state.equipmentListedInBatch == 0
+                        && state.equipmentMarketActiveCount >= EQUIPMENT_ACTIVE_LIMIT) {
+                    finish(accountIndex, "equipment_sell", "error",
+                            "装备交易所五个上架栏位均被其他商品占用，请先处理后继续", manual);
+                    return;
+                }
                 final int resumeIndex = nextIndex;
                 postTask(accountIndex, () -> startBuyerAndWaitForBatchClear(
                         accountIndex, view, items, resumeIndex, manual), 800L);
@@ -1279,13 +1308,14 @@ final class AutomationCoordinator {
         if (!state.equipmentBatchNames.contains(itemName)) {
             state.equipmentBatchNames.add(itemName);
             state.equipmentListedInBatch++;
+            state.equipmentMarketActiveCount++;
         }
         state.equipmentBatchSeen = true;
         state.equipmentBatchEmptyChecks = 0;
         state.equipmentWaitStartedAt = System.currentTimeMillis();
         updateState(accountIndex, itemName + "：检测到已有上架记录，继续等待买方成交");
         int nextIndex = itemIndex + 1;
-        boolean batchFull = state.equipmentListedInBatch >= EQUIPMENT_ACTIVE_LIMIT;
+        boolean batchFull = state.equipmentMarketActiveCount >= EQUIPMENT_ACTIVE_LIMIT;
         boolean allItemsListed = nextIndex >= items.size();
         if (batchFull || allItemsListed) {
             postTask(accountIndex, () -> startBuyerAndWaitForBatchClear(
@@ -1361,11 +1391,19 @@ final class AutomationCoordinator {
                 + ".find(e=>(e.textContent||'').includes('装备数：'));"
                 + "const count=box?Array.from(box.querySelectorAll('.ul .li')).filter(e=>{"
                 + "const c=Array.from(e.children);return c.length>=2&&base(c[1].textContent)===base(target);}).length:-1;"
-                + "return JSON.stringify({modal:!!modal,count});})()";
+                + "const market=Array.from(document.querySelectorAll('.cont-box'))"
+                + ".find(e=>(e.textContent||'').includes('价格(金币)'));"
+                + "const listed=market?Array.from(market.querySelectorAll('.ul .li')).some(e=>{"
+                + "const cells=Array.from(e.children).map(x=>(x.textContent||'').trim());"
+                + "return cells.some(v=>base(v)===base(target));}):false;"
+                + "if(!listed&&count>=before){const refresh=Array.from(document.querySelectorAll('button,uni-button,[role=button],a,view'))"
+                + ".find(e=>e.getClientRects().length>0&&(e.textContent||'').replace(/\\s+/g,'')==='点击刷新');"
+                + "if(refresh)refresh.click();}return JSON.stringify({modal:!!modal,count,listed});})()";
         evaluateTask(accountIndex, view, script, encoded -> {
             JSONObject result = decodeObject(encoded);
             boolean done = result != null && !result.optBoolean("modal", true)
-                    && result.optInt("count", before) < before;
+                    && (result.optInt("count", before) < before
+                    || result.optBoolean("listed", false));
             if (!done && attempt < 4) {
                 postTask(accountIndex, () -> verifyEquipmentSell(accountIndex, view, items,
                         itemIndex, itemName, before, manual, attempt + 1), 1_500L);
@@ -1380,10 +1418,12 @@ final class AutomationCoordinator {
             }
             updateState(accountIndex, itemName + "：已指定买家上架");
             RuntimeState state = states[accountIndex];
+            state.equipmentListingRecoveryAttempts.remove(itemName);
             state.equipmentListedInBatch++;
+            state.equipmentMarketActiveCount++;
             state.equipmentBatchNames.add(itemName);
             int nextIndex = itemIndex + 1;
-            boolean batchFull = state.equipmentListedInBatch >= EQUIPMENT_ACTIVE_LIMIT;
+            boolean batchFull = state.equipmentMarketActiveCount >= EQUIPMENT_ACTIVE_LIMIT;
             boolean allItemsListed = nextIndex >= items.size();
             if (batchFull || allItemsListed) {
                 state.equipmentBatchSeen = false;
@@ -1417,8 +1457,11 @@ final class AutomationCoordinator {
                                                   String itemName, boolean manual,
                                                   String reason) {
         RuntimeState state = states[accountIndex];
-        if (!state.equipmentListingRecoveryNames.add(itemName)) return false;
-        updateState(accountIndex, itemName + "：" + reason + "，正在重进交易所复核上架记录");
+        int recoveryAttempt = state.equipmentListingRecoveryAttempts.getOrDefault(itemName, 0);
+        if (recoveryAttempt >= 3) return false;
+        state.equipmentListingRecoveryAttempts.put(itemName, recoveryAttempt + 1);
+        updateState(accountIndex, itemName + "：" + reason + "，正在重进交易所复核上架记录（"
+                + (recoveryAttempt + 1) + "/3）");
         postTask(accountIndex, () -> navigateToEquipmentExchange(
                 accountIndex, view, items, itemIndex, true, manual, 0), 1_000L);
         return true;
@@ -1519,6 +1562,7 @@ final class AutomationCoordinator {
             if (count == 0
                     && (state.equipmentBatchSeen || state.equipmentBatchEmptyChecks >= 3)) {
                 state.equipmentListedInBatch = 0;
+                state.equipmentMarketActiveCount = 0;
                 state.equipmentBatchNames.clear();
                 state.equipmentBatchSeen = false;
                 state.equipmentBatchEmptyChecks = 0;
@@ -3963,8 +4007,9 @@ final class AutomationCoordinator {
         long lastBattleCheckAt;
         boolean orientationRecoveryClicked;
         int equipmentListedInBatch;
+        int equipmentMarketActiveCount;
         final Set<String> equipmentBatchNames = new LinkedHashSet<>();
-        final Set<String> equipmentListingRecoveryNames = new LinkedHashSet<>();
+        final Map<String, Integer> equipmentListingRecoveryAttempts = new LinkedHashMap<>();
         boolean equipmentBatchSeen;
         int equipmentBatchEmptyChecks;
         boolean equipmentBuyerTriggered;

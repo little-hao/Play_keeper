@@ -1341,9 +1341,12 @@ public final class MainActivity extends Activity {
                 case "run_equipment_buy": {
                     int index = requiredAccountIndex(parameters);
                     requireAutomationIdle(index);
-                    automationCoordinator.runEquipmentBuyNow(index);
+                    automationCoordinator.runEquipmentBuyNow(index,
+                            parameters.optInt("sellerAccountIndex", -1));
                     success = true;
-                    resultMessage = "已启动装备购买";
+                    resultMessage = parameters.optInt("sellerAccountIndex", -1) >= 0
+                            ? "已启动断线恢复购买并关联卖方"
+                            : "已启动装备购买";
                     break;
                 }
                 case "confirm_equipment_verification": {

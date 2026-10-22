@@ -53,4 +53,14 @@ public final class EquipmentListingReconcilerTest {
         assertEquals(1, result.activeCount());
         assertEquals(1, result.resumeIndex);
     }
+
+    @Test
+    public void preservesTotalMarketUsageWhenUnrelatedListingsOccupySlots() {
+        EquipmentListingReconciler.Result result = EquipmentListingReconciler.reconcile(
+                ITEMS, 0, Arrays.asList("装备1", "装备2"), 5);
+
+        assertEquals(2, result.activeCount());
+        assertEquals(5, result.marketActiveCount());
+        assertEquals(2, result.resumeIndex);
+    }
 }

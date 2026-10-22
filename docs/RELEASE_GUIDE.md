@@ -33,7 +33,8 @@ defaultConfig {
 
 - `versionCode` 必须递增，否则 Android 不允许覆盖安装。
 - `versionName` 采用语义化版本，测试包可追加 `-test`。
-- 不要修改 `applicationId`，否则会安装成另一个 APP，无法继承 Profile 数据。
+- 正式升级包不要修改 `applicationId`，否则无法继承正式版 Profile 数据。
+- 候选测试包使用独立 `candidate` 构建和 `com.local.sgplaykeeper.candidate` 包名，可与正式版同时安装；候选版设置及 WebView 会话独立保存，不用于覆盖升级正式版。
 - v1.7.1 的 Debug/Release 都保留 `applicationIdSuffix '.test'`，以覆盖历史版本并保留 WebView Profile。
 
 ## 3. Debug 构建验证
@@ -41,6 +42,14 @@ defaultConfig {
 ```bash
 ./gradlew clean assembleDebug lintDebug
 ```
+
+需要与正式版并存的候选包执行：
+
+```bash
+./gradlew testCandidateUnitTest lintCandidate assembleCandidate
+```
+
+输出为 `app/build/outputs/apk/candidate/app-candidate.apk`，应核对包名为 `com.local.sgplaykeeper.candidate`、应用名称为“Play Keeper 候选版”。候选版首次安装需独立设置远程连接，后续测试不需要修改正式 APP 的连接配置。
 
 必须满足：
 

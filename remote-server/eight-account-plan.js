@@ -255,7 +255,11 @@ export class EightAccountPlan {
     const interruptedLeg = this.#currentLeg();
     const resumeBuyerInPlace = this.state.mode === "daily"
       && this.state.resumePhase === "buyer_running"
-      && interruptedLeg?.buyer?.accountLabel === confirmedHolderLabel;
+      && interruptedLeg?.buyer?.accountLabel === confirmedHolderLabel
+      // Only skip the remaining exchange work after telemetry proved the complete
+      // target set reached the buyer.  During a network outage the phase can already
+      // be buyer_running while pieces are still split between both accounts.
+      && this.state.equipmentHolderLabel === confirmedHolderLabel;
     this.#refreshRouteBindings(liveRoute);
     if (this.state.mode === "daily") {
       if (!confirmedHolderLabel) throw new Error("请先人工确认目标套装所在账号");
@@ -299,6 +303,13 @@ export class EightAccountPlan {
         interventionDeadlineAt: 0, phaseStartedAt: this.now() });
       if (completedToday(this.state.route[0], this.now())) this.#startMainBuy(this.state.route[0]);
       else this.#startStandaloneMain(this.state.route[0]);
+      return this.snapshot();
+    }
+    if (this.state.mode === "daily" && !resumeBuyerInPlace
+        && this.state.resumePhase === "seller_running") {
+      Object.assign(this.state, { status: "running", error: "", errorAccount: "",
+        interventionDeadlineAt: 0, phaseStartedAt: this.now() });
+      this.#startCurrentLeg({ recoverPartialTransfer: true });
       return this.snapshot();
     }
     return this.retry();
@@ -671,7 +682,7 @@ export class EightAccountPlan {
     return { seller: this.state.route[this.state.legIndex], buyer: this.state.route[this.state.legIndex + 1] };
   }
 
-  #startCurrentLeg() {
+  #startCurrentLeg({ recoverPartialTransfer = false } = {}) {
     const leg = this.#currentLeg();
     if (!leg) return this.#intervene("计划交接序号无效", "系统");
     this.state.sellerReleased = false;
@@ -691,7 +702,19 @@ export class EightAccountPlan {
     this.#command(leg.buyer, "configure_return_hang", {
       accountIndex: leg.buyer.accountIndex, map: this.state.returnMap });
     this.#command(leg.seller, "run_equipment_sell", { accountIndex: leg.seller.accountIndex });
-    this.state.phase = "seller_running";
+    if (recoverPartialTransfer) {
+      this.state.buyerStarted = true;
+      this.#command(leg.buyer, "run_equipment_buy", {
+        accountIndex: leg.buyer.accountIndex,
+        sellerAccountIndex: leg.seller.deviceId === leg.buyer.deviceId
+          ? leg.seller.accountIndex : -1,
+        recovery: true
+      });
+      this.state.phase = "buyer_running";
+      this.state.resumePhase = "buyer_running";
+    } else {
+      this.state.phase = "seller_running";
+    }
     this.state.updatedAt = this.now();
   }
 

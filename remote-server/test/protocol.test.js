@@ -429,6 +429,12 @@ test("invalid tokens and invalid commands are rejected", async (context) => {
   }));
   const error = await errorPromise;
   assert.match(error.message, /无效/);
+  const invalidRecoveryPromise = nextJson(control, "command.error");
+  control.send(JSON.stringify({
+    type: "command.send", deviceId: "missing", command: "run_equipment_buy",
+    parameters: { accountIndex: 1, sellerAccountIndex: 4, recovery: true }
+  }));
+  assert.match((await invalidRecoveryPromise).message, /无效/);
   for (const verificationToken of ["", "-".repeat(36), "stale"] ) {
     const invalidConfirmation = nextJson(control, "command.error");
     control.send(JSON.stringify({ type: "command.send", deviceId: "missing",

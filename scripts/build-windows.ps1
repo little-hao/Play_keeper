@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Release', 'Debug')]
+    [ValidateSet('Release', 'Candidate', 'Debug')]
     [string]$Variant = 'Release',
     [string]$LogPath = (Join-Path $env:TEMP 'playkeeper-windows-build.log')
 )
@@ -42,10 +42,10 @@ if ($actualSigningHash -ne $expectedSigningHash) {
 
 $env:Path = "$(Join-Path $env:JAVA_HOME 'bin');$env:Path"
 Set-Location -LiteralPath $projectRoot
-$tasks = if ($Variant -eq 'Release') {
-    @('testDebugUnitTest', 'assembleRelease')
-} else {
-    @('testDebugUnitTest', 'assembleDebug')
+$tasks = switch ($Variant) {
+    'Release' { @('testDebugUnitTest', 'assembleRelease') }
+    'Candidate' { @('testCandidateUnitTest', 'lintCandidate', 'assembleCandidate') }
+    default { @('testDebugUnitTest', 'assembleDebug') }
 }
 $ErrorActionPreference = 'Continue'
 & .\gradlew.bat @tasks --no-daemon *>&1 | Tee-Object -FilePath $LogPath

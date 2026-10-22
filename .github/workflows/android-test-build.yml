@@ -30,8 +30,8 @@ jobs:
       - name: Test relay and recovery scenarios
         working-directory: remote-server
         run: npm ci && npm test
-      - name: Test and build unsigned release
-        run: ./gradlew testDebugUnitTest lintDebug assembleRelease --no-daemon
+      - name: Test and build isolated candidate
+        run: ./gradlew testCandidateUnitTest lintCandidate assembleCandidate --no-daemon
       - name: Preserve test reports
         if: always()
         uses: actions/upload-artifact@v7
@@ -40,6 +40,6 @@ jobs:
           path: app/build/reports/
       - uses: actions/upload-artifact@v7
         with:
-          name: play-keeper-unsigned-release
-          path: app/build/outputs/apk/release/*.apk
+          name: play-keeper-unsigned-candidate
+          path: app/build/outputs/apk/candidate/*.apk
           if-no-files-found: error

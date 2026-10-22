@@ -148,7 +148,7 @@ const commandValidators = {
       && validAccountLabel(parameters.buyer, true);
   },
   run_equipment_sell: accountParameters,
-  run_equipment_buy: accountParameters,
+  run_equipment_buy: equipmentBuyParameters,
   confirm_equipment_verification(parameters) {
     return accountParameters(parameters)
       && typeof parameters.verificationToken === "string"
@@ -204,6 +204,15 @@ function accountParameters(parameters) {
   return Number.isInteger(parameters?.accountIndex)
     && parameters.accountIndex >= 0
     && parameters.accountIndex <= 3;
+}
+
+function equipmentBuyParameters(parameters) {
+  return accountParameters(parameters)
+    && (parameters.sellerAccountIndex === undefined
+      || (Number.isInteger(parameters.sellerAccountIndex)
+        && parameters.sellerAccountIndex >= -1
+        && parameters.sellerAccountIndex <= 3))
+    && (parameters.recovery === undefined || typeof parameters.recovery === "boolean");
 }
 
 function emptyParameters(parameters) {

@@ -9,14 +9,20 @@ final class EquipmentListingReconciler {
     static final class Result {
         final Set<String> activeNames;
         final int resumeIndex;
+        final int marketActiveCount;
 
-        Result(Set<String> activeNames, int resumeIndex) {
+        Result(Set<String> activeNames, int resumeIndex, int marketActiveCount) {
             this.activeNames = activeNames;
             this.resumeIndex = resumeIndex;
+            this.marketActiveCount = Math.max(activeNames.size(), marketActiveCount);
         }
 
         int activeCount() {
             return activeNames.size();
+        }
+
+        int marketActiveCount() {
+            return marketActiveCount;
         }
     }
 
@@ -24,6 +30,11 @@ final class EquipmentListingReconciler {
 
     static Result reconcile(List<String> configuredItems, int startIndex,
                             List<String> marketNames) {
+        return reconcile(configuredItems, startIndex, marketNames, marketNames.size());
+    }
+
+    static Result reconcile(List<String> configuredItems, int startIndex,
+                            List<String> marketNames, int marketActiveCount) {
         Set<String> active = new LinkedHashSet<>();
         for (String name : new ArrayList<>(marketNames)) {
             String normalized = normalize(name);
@@ -38,7 +49,7 @@ final class EquipmentListingReconciler {
         while (resume < configuredItems.size() && active.contains(configuredItems.get(resume))) {
             resume++;
         }
-        return new Result(active, resume);
+        return new Result(active, resume, marketActiveCount);
     }
 
     private static String normalize(String value) {

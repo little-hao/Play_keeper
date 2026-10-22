@@ -201,9 +201,57 @@ test("restarts the remaining relay route from a manually selected equipment hold
   assert.deepEqual(snapshot.fullRoute.map((entry) => entry.accountLabel),
     ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"]);
   assert.equal(snapshot.legIndex, 0);
-  assert.equal(actions.at(-1).command, "run_equipment_sell");
-  assert.equal(actions.at(-1).accountLabel, "hao3");
+  assert.equal(snapshot.phase, "buyer_running");
+  assert.equal(actions.at(-1).command, "run_equipment_buy");
+  assert.equal(actions.at(-1).accountLabel, "hao4");
+  assert.equal(actions.at(-1).parameters.recovery, true);
   assert.equal(actions[0].parameters.buyer, "hao4");
+});
+
+test("partial transfer recovery links same-device seller and buyer", () => {
+  const actions = [];
+  const liveRoute = route().map((entry, index) => ({ ...entry,
+    deviceId: index <= 1 ? d1 : entry.deviceId,
+    accountIndex: index === 1 ? 1 : entry.accountIndex }));
+  const plan = new EightAccountPlan({ emitAction: action => actions.push(action),
+    now: () => 10_000 });
+  plan.start(liveRoute);
+  plan.cancel("网络中断");
+  actions.length = 0;
+
+  const snapshot = plan.resume(liveRoute, "hao");
+
+  assert.equal(snapshot.phase, "buyer_running");
+  assert.deepEqual(actions.slice(-2).map(action => action.command),
+    ["run_equipment_sell", "run_equipment_buy"]);
+  assert.equal(actions.at(-1).parameters.sellerAccountIndex, 0);
+  assert.equal(actions.at(-1).parameters.recovery, true);
+});
+
+test("buyer-running interruption restarts both sides when the holder is still the seller", () => {
+  const actions = [];
+  const liveRoute = route().map((entry, index) => ({ ...entry,
+    deviceId: index <= 1 ? d1 : entry.deviceId,
+    accountIndex: index === 1 ? 1 : entry.accountIndex }));
+  const plan = new EightAccountPlan({ emitAction: action => actions.push(action),
+    now: () => 10_000 });
+  plan.start(liveRoute);
+  const seller = liveRoute[0];
+  plan.onTelemetry(seller.deviceId, telemetry(seller.accountIndex, {
+    task: "equipment_sell", status: "running", equipmentListedInBatch: 5
+  }));
+  assert.equal(plan.snapshot().phase, "buyer_running");
+  assert.equal(plan.snapshot().equipmentHolderLabel, "hao");
+  plan.cancel("买方掉线");
+  actions.length = 0;
+
+  const snapshot = plan.resume(liveRoute, "hao");
+
+  assert.equal(snapshot.phase, "buyer_running");
+  assert.deepEqual(actions.slice(-2).map(action => action.command),
+    ["run_equipment_sell", "run_equipment_buy"]);
+  assert.equal(actions.at(-1).parameters.sellerAccountIndex, 0);
+  assert.equal(actions.at(-1).parameters.recovery, true);
 });
 
 test("moves to intervention when the APP rejects a plan command", () => {
