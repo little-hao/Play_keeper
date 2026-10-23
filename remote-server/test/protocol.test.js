@@ -460,7 +460,7 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    ok: true, service: "play-keeper-relay", version: "2.0.2-rc6"
+    ok: true, service: "play-keeper-relay", version: "2.0.3"
   });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);
@@ -481,6 +481,10 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   assert.match(dashboardHtml, /该账号开始挂机/);
   assert.match(dashboardHtml, /今日执行与背包汇总/);
   assert.match(dashboardHtml, /多用户挂机/);
+  assert.match(dashboardHtml, /完整默认循环（8个账号）/);
+  assert.match(dashboardHtml, /装备定向转移单价/);
+  assert.match(dashboardHtml, /道具拍卖\/购买单价/);
+  assert.match(dashboardHtml, /每个账号返回的挂机副本/);
   assert.match(dashboardHtml, /启动 KeepPlayer/);
   assert.match(dashboardHtml, /天仙玉露/);
   assert.match(dashboard.headers.get("content-security-policy"), /object-src 'none'/);

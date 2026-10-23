@@ -29,16 +29,20 @@ const elements = {
   planIntervention: document.querySelector("#planIntervention"),
   resumeConfirmation: document.querySelector("#resumeConfirmation"),
   resumeEquipmentHolder: document.querySelector("#resumeEquipmentHolder"),
+  planRoutePreset: document.querySelector("#planRoutePreset"),
   planResourcePreset: document.querySelector("#planResourcePreset"),
   planRoute: document.querySelector("#planRoute"),
   planEquipmentPreset: document.querySelector("#planEquipmentPreset"),
   planEquipmentItems: document.querySelector("#planEquipmentItems"),
+  planEquipmentPrice: document.querySelector("#planEquipmentPrice"),
   planResourceItems: document.querySelector("#planResourceItems"),
+  planResourcePrice: document.querySelector("#planResourcePrice"),
   planResourceReserve: document.querySelector("#planResourceReserve"),
   planDungeonPreset: document.querySelector("#planDungeonPreset"),
   planDungeonItems: document.querySelector("#planDungeonItems"),
   planInventoryItems: document.querySelector("#planInventoryItems"),
   planReturnMap: document.querySelector("#planReturnMap"),
+  planReturnMaps: document.querySelector("#planReturnMaps"),
   planReportEmail: document.querySelector("#planReportEmail"),
   planScheduleEnabled: document.querySelector("#planScheduleEnabled"),
   planScheduleTime: document.querySelector("#planScheduleTime"),
@@ -93,6 +97,11 @@ const auctionPresets = {
   two: "黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石"
 };
 const defaultDungeonItems = "绘画小屋,伊苏王的神墓,火龙王的宫殿,史芬克斯密穴";
+const defaultRouteLabels = ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"];
+const defaultRouteText = defaultRouteLabels.join(" → ");
+const defaultResourceItems = auctionPresets.one;
+const defaultReturnMap = "圣兽云殿";
+const defaultTransferPrice = 920;
 const defaultEquipmentItems = "厄菲斯神剑,厄菲斯神铠,厄菲斯神冠,厄菲斯神靴,厄菲斯神链,"
   + "厄菲斯神戒,厄菲斯神翼,厄菲斯神镯,厄菲斯神玉,厄菲斯神印";
 let socket;
@@ -265,6 +274,15 @@ elements.planResourcePreset.addEventListener("change", () => {
     elements.planResourceItems.value = auctionPresets[elements.planResourcePreset.value];
   }
 });
+elements.planRoutePreset.addEventListener("change", () => {
+  if (elements.planRoutePreset.value === "default") elements.planRoute.value = defaultRouteText;
+  renderPlanReturnMaps();
+});
+elements.planRoute.addEventListener("input", () => {
+  elements.planRoutePreset.value = elements.planRoute.value.trim() === defaultRouteText
+    ? "default" : "custom";
+});
+elements.planRoute.addEventListener("change", () => renderPlanReturnMaps());
 elements.planResourceItems.addEventListener("input", () => {
   elements.planResourcePreset.value = Object.entries(auctionPresets)
     .find(([, value]) => value === elements.planResourceItems.value.trim())?.[0] ?? "custom";
@@ -346,7 +364,9 @@ elements.quickSweepAll.addEventListener("click", () => {
   socket.send(JSON.stringify({ type: "plan.resource_sweep.start", options: {
     resourceItems: options.resourceItems,
     resourceReserveCount: options.resourceReserveCount,
-    returnMap: elements.planReturnMap.value.trim() || "圣兽云殿",
+    resourcePrice: options.resourcePrice,
+    returnMap: options.returnMap,
+    returnMaps: options.returnMaps,
     routeLabels: options.routeLabels
   } }));
   addLog("已启动路线卖方逐号拍卖、主号统一购买及全部账号回挂机副本");
@@ -671,24 +691,30 @@ function renderDailyPlan() {
 }
 
 function readPlanOptions() {
-  const resourceItems = elements.planResourceItems.value.split(/[,，\n]/)
+  const resourceItems = (elements.planResourceItems.value.trim() || defaultResourceItems).split(/[,，\n]/)
     .map((item) => item.trim()).filter(Boolean);
-  const dungeonItems = elements.planDungeonItems.value.split(/[,，\n]/)
+  const dungeonItems = (elements.planDungeonItems.value.trim() || defaultDungeonItems).split(/[,，\n]/)
     .map((item) => item.trim()).filter(Boolean);
-  const inventoryItems = planInventoryItems();
-  if (!inventoryItems) return null;
+  const inventoryItems = (elements.planInventoryItems.value.trim() || defaultResourceItems).split(/[,，\n]/)
+    .map((item) => item.trim()).filter(Boolean);
   const resourceReserveCount = Number(elements.planResourceReserve.value);
   const reportEmail = elements.planReportEmail.value.trim();
-  const returnMap = elements.planReturnMap.value.trim();
-  const routeLabels = elements.planRoute.value.split(/\s*(?:→|->|,|，)\s*/)
+  const returnMap = elements.planReturnMap.value.trim() || defaultReturnMap;
+  const routeLabels = (elements.planRoute.value.trim() || defaultRouteText).split(/\s*(?:→|->|,|，)\s*/)
     .map((label) => label.trim()).filter(Boolean);
-  const equipmentItems = elements.planEquipmentItems.value.split(/[,，\n]/)
+  const equipmentItems = (elements.planEquipmentItems.value.trim() || defaultEquipmentItems).split(/[,，\n]/)
     .map((item) => item.trim()).filter(Boolean);
+  const equipmentPrice = Number(elements.planEquipmentPrice.value || defaultTransferPrice);
+  const resourcePrice = Number(elements.planResourcePrice.value || defaultTransferPrice);
   if (!resourceItems.length || resourceItems.length > 10) {
     addLog("道具组合需填写1–10项"); return null;
   }
   if (!dungeonItems.length || dungeonItems.length > 20) {
     addLog("副本组合需填写1–20项"); return null;
+  }
+  if (!inventoryItems.length || inventoryItems.length > 20
+      || inventoryItems.some((item) => item.length > 30)) {
+    addLog("统一背包检查项目需填写1–20项，每项不超过30字"); return null;
   }
   if (routeLabels.length < 3 || routeLabels[0] !== routeLabels.at(-1)
       || new Set(routeLabels.slice(0, -1)).size !== routeLabels.length - 1
@@ -699,23 +725,61 @@ function readPlanOptions() {
       || new Set(equipmentItems).size !== equipmentItems.length) {
     addLog("装备转移清单必须包含1–10件不重复装备"); return null;
   }
-  if (!returnMap) { addLog("请填写流程结束后的挂机副本"); return null; }
+  if (!Number.isInteger(equipmentPrice) || equipmentPrice < 1 || equipmentPrice > 9_999_999) {
+    addLog("装备定向转移单价无效"); return null;
+  }
+  if (!Number.isInteger(resourcePrice) || resourcePrice < 1 || resourcePrice > 9_999_999) {
+    addLog("道具拍卖/购买单价无效"); return null;
+  }
+  const returnMaps = {};
+  for (const input of elements.planReturnMaps.querySelectorAll("input[data-account-label]")) {
+    returnMaps[input.dataset.accountLabel] = input.value.trim() || returnMap;
+  }
   if (reportEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) {
     addLog("完成报告邮箱格式无效"); return null;
   }
   return { resourceItems, resourceReserveCount, dungeonItems, inventoryItems,
-    routeLabels, equipmentItems, returnMap, reportEmail };
+    routeLabels, equipmentItems, equipmentPrice, resourcePrice, returnMap, returnMaps, reportEmail };
+}
+
+function renderPlanReturnMaps(savedMaps = null) {
+  const previous = {};
+  for (const input of elements.planReturnMaps.querySelectorAll("input[data-account-label]")) {
+    previous[input.dataset.accountLabel] = input.value;
+  }
+  const route = (elements.planRoute.value.trim() || defaultRouteText)
+    .split(/\s*(?:→|->|,|，)\s*/).map((label) => label.trim()).filter(Boolean);
+  const labels = [...new Set(route.at(-1) === route[0] ? route.slice(0, -1) : route)];
+  elements.planReturnMaps.replaceChildren();
+  for (const label of labels) {
+    const wrapper = document.createElement("label");
+    wrapper.textContent = label;
+    const input = document.createElement("input");
+    input.dataset.accountLabel = label;
+    input.maxLength = 30;
+    input.placeholder = defaultReturnMap;
+    input.value = savedMaps?.[label] ?? previous[label] ?? "";
+    wrapper.append(input);
+    elements.planReturnMaps.append(wrapper);
+  }
 }
 
 function renderPlanSchedule() {
   elements.planScheduleEnabled.checked = planSchedule.enabled === true;
   elements.planScheduleTime.value = planSchedule.time || "04:00";
   const options = planSchedule.options ?? {};
-  if (Array.isArray(options.routeLabels)) elements.planRoute.value = options.routeLabels.join(" → ");
+  elements.planRoute.value = Array.isArray(options.routeLabels) && options.routeLabels.length
+    ? options.routeLabels.join(" → ") : defaultRouteText;
+  elements.planRoutePreset.value = elements.planRoute.value.trim() === defaultRouteText
+    ? "default" : "custom";
   if (Array.isArray(options.equipmentItems)) elements.planEquipmentItems.value = options.equipmentItems.join(",");
   elements.planEquipmentPreset.value = Object.entries(equipmentPresets)
     .find(([, value]) => value === elements.planEquipmentItems.value.trim())?.[0] ?? "custom";
   if (Array.isArray(options.resourceItems)) elements.planResourceItems.value = options.resourceItems.join(",");
+  elements.planEquipmentPrice.value = String(Number.isInteger(options.equipmentPrice)
+    ? options.equipmentPrice : defaultTransferPrice);
+  elements.planResourcePrice.value = String(Number.isInteger(options.resourcePrice)
+    ? options.resourcePrice : defaultTransferPrice);
   if (Number.isInteger(options.resourceReserveCount)) {
     elements.planResourceReserve.value = String(options.resourceReserveCount);
   }
@@ -724,6 +788,7 @@ function renderPlanSchedule() {
     ? "default" : "custom";
   if (Array.isArray(options.inventoryItems)) elements.planInventoryItems.value = options.inventoryItems.join(",");
   if (typeof options.returnMap === "string") elements.planReturnMap.value = options.returnMap;
+  renderPlanReturnMaps(options.returnMaps);
   if (typeof options.reportEmail === "string") elements.planReportEmail.value = options.reportEmail;
   elements.planResourcePreset.value = Object.entries(auctionPresets)
     .find(([, value]) => value === elements.planResourceItems.value.trim())?.[0] ?? "custom";
@@ -754,9 +819,11 @@ function applyUserSettings() {
   elements.quickBuyerAccount.value = userSettings.auctionBuyer || userSettings.mainAccount || labels[0] || "";
   elements.quickHangAccount.value = userSettings.quickHangAccount || labels[0] || "";
   elements.quickHangMap.value = userSettings.quickHangMap || "圣兽云殿";
+  renderPlanReturnMaps(planSchedule.options?.returnMaps);
 }
 
 renderDailyPlan();
+renderPlanReturnMaps();
 setInterval(() => {
   if (["intervention", "error", "cancelled"].includes(dailyPlan.status)) renderDailyPlan();
 }, 1_000);

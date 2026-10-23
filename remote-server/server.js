@@ -257,7 +257,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.2-rc6" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.3" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -300,6 +300,8 @@ function normalizePlanOptions(value) {
     : ["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"];
   const equipmentItems = Array.isArray(source.equipmentItems)
     ? source.equipmentItems.map((item) => String(item).trim()).filter(Boolean) : undefined;
+  const equipmentPrice = source.equipmentPrice === undefined ? 920 : Number(source.equipmentPrice);
+  const resourcePrice = source.resourcePrice === undefined ? 920 : Number(source.resourcePrice);
   if (resourceItems !== undefined && !validItemList(resourceItems, 10)) {
     throw new Error("道具组合无效");
   }
@@ -320,13 +322,31 @@ function normalizePlanOptions(value) {
       && (!validItemList(equipmentItems, 10) || new Set(equipmentItems).size !== equipmentItems.length)) {
     throw new Error("装备套装必须包含1–10件不重复装备");
   }
+  if (!Number.isInteger(equipmentPrice) || equipmentPrice < 1 || equipmentPrice > 9_999_999) {
+    throw new Error("装备定向转移单价无效");
+  }
+  if (!Number.isInteger(resourcePrice) || resourcePrice < 1 || resourcePrice > 9_999_999) {
+    throw new Error("道具拍卖/购买单价无效");
+  }
   const returnMap = typeof source.returnMap === "string" ? source.returnMap.trim() : "圣兽云殿";
   if (!returnMap || returnMap.length > 30) throw new Error("返回挂机副本无效");
+  const sourceReturnMaps = source.returnMaps && typeof source.returnMaps === "object"
+    && !Array.isArray(source.returnMaps) ? source.returnMaps : {};
+  const returnMaps = {};
+  for (const label of routeLabels.slice(0, -1)) {
+    const map = typeof sourceReturnMaps[label] === "string"
+      ? sourceReturnMaps[label].trim() : returnMap;
+    if (!map || map.length > 30 || /[\r\n\t]/.test(map)) {
+      throw new Error(`${label} 返回挂机副本无效`);
+    }
+    returnMaps[label] = map;
+  }
   const reportEmail = typeof source.reportEmail === "string"
     ? source.reportEmail.trim() : "";
   if (reportEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) throw new Error("报告邮箱格式无效");
   return { resourceItems, resourceReserveCount, inventoryItems,
-    dungeonItems, routeLabels, equipmentItems, returnMap, reportEmail };
+    dungeonItems, routeLabels, equipmentItems, equipmentPrice, resourcePrice,
+    returnMap, returnMaps, reportEmail };
 }
 
 function defaultPlanSchedule() {
@@ -614,7 +634,10 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
       resourceReserveCount: options.resourceReserveCount,
       inventoryItems: Array.isArray(options.inventoryItems) ? options.inventoryItems : undefined,
       dungeonItems: Array.isArray(options.dungeonItems) ? options.dungeonItems : undefined,
+      equipmentPrice: options.equipmentPrice,
+      resourcePrice: options.resourcePrice,
       returnMap: typeof options.returnMap === "string" ? options.returnMap : undefined,
+      returnMaps: options.returnMaps,
       reportEmail: typeof options.reportEmail === "string" ? options.reportEmail : undefined,
       ownerUsername: typeof user?.username === "string" ? user.username : ""
     });
@@ -629,7 +652,9 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
     return eightAccountPlan.startResourceSweep(route, {
       resourceItems: Array.isArray(options.resourceItems) ? options.resourceItems : undefined,
       resourceReserveCount: options.resourceReserveCount,
+      resourcePrice: options.resourcePrice,
       returnMap: typeof options.returnMap === "string" ? options.returnMap : undefined,
+      returnMaps: options.returnMaps,
       ownerUsername: typeof user?.username === "string" ? user.username : ""
     });
   }

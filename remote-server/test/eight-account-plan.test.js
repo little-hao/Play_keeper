@@ -51,6 +51,22 @@ test("accepts a user-selected closed equipment route and custom ten-piece set", 
   assert.deepEqual(actions[0].parameters.items, loverSet);
 });
 
+test("uses separate equipment and resource prices with per-account return maps", () => {
+  const actions = [];
+  const shortRoute = [route()[0], route()[7], route().at(-1)];
+  const plan = new EightAccountPlan({ emitAction: action => actions.push(action), now: () => 1_000 });
+  const snapshot = plan.start(shortRoute, { equipmentPrice: 123, resourcePrice: 456,
+    returnMap: "圣兽云殿", returnMaps: { hao: "圣兽云殿", hao7: "绘画小屋" } });
+
+  assert.equal(snapshot.price, 123);
+  assert.equal(snapshot.resourcePrice, 456);
+  assert.deepEqual(snapshot.returnMaps, { hao: "圣兽云殿", hao7: "绘画小屋" });
+  assert.equal(actions.find(action => action.command === "configure_equipment_transfer")
+    .parameters.price, 123);
+  assert.equal(actions.find(action => action.command === "configure_return_hang"
+    && action.accountLabel === "hao7").parameters.map, "绘画小屋");
+});
+
 test("runs all eight relay legs and returns the equipment to hao", () => {
   const actions = [];
   let clock = 1_000;
@@ -567,4 +583,44 @@ test("starts main resource purchase when buyer finished before remote seller cle
   assert.equal(actions.at(-1).command, "run_auction_buy");
   assert.equal(actions.at(-1).accountLabel, "hao");
   assert.equal(actions.filter(action => action.command === "run_auction_buy").length, 1);
+});
+
+test("skips the final main-account item purchase after sixty seconds and returns to hang", () => {
+  const actions = [];
+  let clock = 1_000;
+  const shortRoute = [route()[0], route()[7], route().at(-1)];
+  const plan = new EightAccountPlan({ emitAction: action => actions.push(action), now: () => clock });
+  const complete = () => ({ task: "temple", status: "ok", updatedAt: clock,
+    equipmentTransferLastRunAt: clock, dungeonLastRunAt: clock,
+    finalEquipLastRunAt: clock, inventoryLastRunAt: clock, inventoryStatus: "ok" });
+  plan.start(shortRoute, { returnMaps: { hao: "圣兽云殿", hao7: "绘画小屋" } });
+
+  plan.onTelemetry(d2, telemetry(0, { task: "equipment_sell", status: "running",
+    equipmentListedInBatch: 5 }));
+  clock = 2_000;
+  plan.onTelemetry(d2, telemetry(1, complete()));
+  plan.onTelemetry(d2, telemetry(0, { task: "temple", status: "ok", updatedAt: clock,
+    finalEquipLastRunAt: clock }));
+  plan.onTelemetry(d2, telemetry(1, { task: "temple", status: "ok", updatedAt: clock,
+    auctionLastRunAt: clock }));
+
+  plan.onTelemetry(d2, telemetry(1, { task: "equipment_sell", status: "running",
+    equipmentListedInBatch: 5 }));
+  clock = 3_000;
+  plan.onTelemetry(d2, telemetry(0, complete()));
+  plan.onTelemetry(d2, telemetry(1, { task: "temple", status: "ok", updatedAt: clock,
+    finalEquipLastRunAt: clock }));
+  assert.equal(actions.at(-1).command, "run_auction_buy");
+
+  clock += 60_001;
+  plan.tick();
+  assert.deepEqual(actions.slice(-3).map(action => action.command),
+    ["cancel_automation", "configure_return_hang", "run_temple_guard"]);
+  assert.equal(actions.at(-2).parameters.map, "圣兽云殿");
+  assert.equal(plan.snapshot().mainBuyTimedOut, true);
+  plan.onTelemetry(d2, telemetry(0, { task: "temple", status: "ok", updatedAt: clock + 1 }));
+
+  assert.equal(plan.snapshot().status, "success");
+  assert.equal(plan.snapshot().history.length, 2);
+  assert.equal(plan.snapshot().history.at(-1).result, "success_purchase_skipped");
 });

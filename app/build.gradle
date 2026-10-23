@@ -15,8 +15,8 @@ android {
         applicationId 'com.local.sgplaykeeper'
         minSdk 26
         targetSdk 35
-        versionCode 47
-        versionName '2.0.3-rc2'
+        versionCode 50
+        versionName '2.0.3'
         buildConfigField 'String', 'REMOTE_PRESET_NAME', '""'
         buildConfigField 'String', 'REMOTE_PRESET_ENDPOINT', '""'
     }
@@ -54,7 +54,7 @@ android {
             // beside the formal v1.9+ line.  Each installation therefore retains its
             // own remote endpoint, device token, WebView sessions and account mapping.
             applicationIdSuffix '.candidate'
-            versionNameSuffix '.2'
+            versionNameSuffix '-rc2.2'
             resValue 'string', 'app_name', 'Play Keeper 候选版'
             buildConfigField 'String', 'REMOTE_PRESET_NAME', '"候选版测试服务器"'
             buildConfigField 'String', 'REMOTE_PRESET_ENDPOINT', '"wss://keeper-test.19990920.xyz/device"'

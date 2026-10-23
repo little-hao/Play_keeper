@@ -142,7 +142,9 @@ test("saves a daily full-route schedule with configurable dungeons", async (cont
       resourceReserveCount: 0,
       inventoryItems: ["进化宝石", "曙光印记", "黑暗徽章"],
       dungeonItems: ["绘画小屋", "史芬克斯密穴"],
-      returnMap: "圣兽云殿", reportEmail: "konghao0920@gmail.com"
+      equipmentPrice: 1023, resourcePrice: 921,
+      returnMap: "圣兽云殿", returnMaps: { hao: "圣兽云殿", hao7: "绘画小屋" },
+      reportEmail: "konghao0920@gmail.com"
     }, workspace: { quickBuyPrice: 777 }
   } }));
   const [message] = await update;
@@ -153,5 +155,8 @@ test("saves a daily full-route schedule with configurable dungeons", async (cont
   assert.deepEqual(message.payload.options.inventoryItems,
     ["进化宝石", "曙光印记", "黑暗徽章"]);
   assert.deepEqual(message.payload.options.dungeonItems, ["绘画小屋", "史芬克斯密穴"]);
+  assert.equal(message.payload.options.equipmentPrice, 1023);
+  assert.equal(message.payload.options.resourcePrice, 921);
+  assert.equal(message.payload.options.returnMaps.hao7, "绘画小屋");
   assert.equal(settingsMessage.payload.quickBuyPrice, 777);
 });

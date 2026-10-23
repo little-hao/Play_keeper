@@ -13,6 +13,8 @@ const REQUIRED_ROUTE = Object.freeze([
   "hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7", "hao"
 ]);
 
+const MAIN_BUY_TIMEOUT_MS = 60_000;
+
 function shanghaiDateKey(timestamp) {
   if (!Number.isFinite(Number(timestamp)) || Number(timestamp) <= 0) return "";
   return new Intl.DateTimeFormat("en-CA", {
@@ -65,10 +67,12 @@ export class EightAccountPlan {
       phaseStartedAt: 0, legIndex: -1, phase: "idle", mode: "daily", resumePhase: "",
       buyerStarted: false, buyerWorkflowCompleted: false,
       sellerReleased: false, sellerCleaned: false, mainBuySeen: false,
+      mainBuyTimedOut: false,
       sellerCleanupDueAt: 0, equipmentHolderLabel: "hao", mainAccountLabel: "hao",
       route: [], fullRoute: [], skippedDungeonAccounts: [], items: [...EQUIPMENT_ITEMS],
       resourceItems: [...RESOURCE_ITEMS], inventoryItems: [...RESOURCE_ITEMS],
-      resourceReserveCount: 1, price: 920, returnMap: "圣兽云殿",
+      resourceReserveCount: 1, price: 920, resourcePrice: 920,
+      returnMap: "圣兽云殿", returnMaps: {},
       dungeonItems: ["绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"],
       reportEmail: "", ownerUsername: "", error: "", errorAccount: "",
       interventionDeadlineAt: 0, emailStatus: "pending", inventoryByAccount: {}, history: [] };
@@ -98,6 +102,10 @@ export class EightAccountPlan {
           ? [...savedState.resourceItems] : [...RESOURCE_ITEMS]),
       dungeonItems: Array.isArray(savedState.dungeonItems)
         ? [...savedState.dungeonItems] : [...this.#idleState().dungeonItems],
+      resourcePrice: Number.isInteger(savedState.resourcePrice)
+        ? savedState.resourcePrice : (Number.isInteger(savedState.price) ? savedState.price : 920),
+      returnMaps: savedState.returnMaps && typeof savedState.returnMaps === "object"
+        && !Array.isArray(savedState.returnMaps) ? { ...savedState.returnMaps } : {},
       history: Array.isArray(savedState.history) ? [...savedState.history] : [],
       inventoryByAccount: savedState.inventoryByAccount
         && typeof savedState.inventoryByAccount === "object"
@@ -117,7 +125,8 @@ export class EightAccountPlan {
     if (["running", "intervention"].includes(this.state.status)) throw new Error("多用户挂机已在运行");
     this.#validateRoute(route);
     if (route.length < 3) throw new Error("新计划至少需要主号、一个中转账号并返回主号");
-    const price = options.price ?? 920;
+    const price = options.equipmentPrice ?? options.price ?? 920;
+    const resourcePrice = options.resourcePrice ?? 920;
     const items = options.items ?? EQUIPMENT_ITEMS;
     const resourceItems = options.resourceItems ?? RESOURCE_ITEMS;
     const inventoryItems = options.inventoryItems ?? resourceItems;
@@ -125,8 +134,13 @@ export class EightAccountPlan {
     const dungeonItems = options.dungeonItems
       ?? ["绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"];
     const returnMap = options.returnMap ?? "圣兽云殿";
+    const returnMaps = options.returnMaps && typeof options.returnMaps === "object"
+      && !Array.isArray(options.returnMaps) ? options.returnMaps : {};
     const reportEmail = options.reportEmail ?? "";
     if (!Number.isInteger(price) || price < 1 || price > 9_999_999) throw new Error("交易单价无效");
+    if (!Number.isInteger(resourcePrice) || resourcePrice < 1 || resourcePrice > 9_999_999) {
+      throw new Error("道具交易单价无效");
+    }
     if (!Array.isArray(items) || items.length < 1 || items.length > 10
         || new Set(items).size !== items.length
         || items.some((item) => typeof item !== "string" || !item.trim() || item.length > 30)) {
@@ -144,6 +158,13 @@ export class EightAccountPlan {
     }
     if (typeof returnMap !== "string" || !returnMap.trim() || returnMap.length > 30) {
       throw new Error("返回挂机副本无效");
+    }
+    const normalizedReturnMaps = {};
+    for (const entry of route.slice(0, -1)) {
+      const value = typeof returnMaps[entry.accountLabel] === "string"
+        ? returnMaps[entry.accountLabel].trim() : returnMap.trim();
+      if (!value || value.length > 30) throw new Error(`${entry.accountLabel} 返回挂机副本无效`);
+      normalizedReturnMaps[entry.accountLabel] = value;
     }
     if (typeof reportEmail !== "string"
         || (reportEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail.trim()))) {
@@ -168,7 +189,8 @@ export class EightAccountPlan {
       inventoryItems: [...new Set(inventoryItems.map((item) => String(item).trim()).filter(Boolean))],
       resourceReserveCount,
       dungeonItems: [...new Set(dungeonItems.map((item) => String(item).trim()).filter(Boolean))],
-      price, returnMap: returnMap.trim(), reportEmail: reportEmail.trim(),
+      price, resourcePrice, returnMap: returnMap.trim(), returnMaps: normalizedReturnMaps,
+      reportEmail: reportEmail.trim(),
       ownerUsername: String(options.ownerUsername ?? "").trim() };
     if (this.state.route.length === 2) {
       if (completedToday(this.state.route[0], now)) this.#startMainBuy(this.state.route[0]);
@@ -191,12 +213,25 @@ export class EightAccountPlan {
     }
     const resourceItems = options.resourceItems ?? RESOURCE_ITEMS;
     const resourceReserveCount = options.resourceReserveCount ?? 1;
+    const resourcePrice = options.resourcePrice ?? 920;
     const returnMap = String(options.returnMap ?? "圣兽云殿").trim();
+    const returnMaps = options.returnMaps && typeof options.returnMaps === "object"
+      && !Array.isArray(options.returnMaps) ? options.returnMaps : {};
     if (!Array.isArray(resourceItems) || resourceItems.length < 1 || resourceItems.length > 10) {
       throw new Error("道具组合需包含1–10项");
     }
     if (![0, 1].includes(resourceReserveCount)) throw new Error("道具保留数量只能是0或1");
+    if (!Number.isInteger(resourcePrice) || resourcePrice < 1 || resourcePrice > 9_999_999) {
+      throw new Error("道具交易单价无效");
+    }
     if (!returnMap || returnMap.length > 30) throw new Error("返回挂机副本无效");
+    const normalizedReturnMaps = {};
+    for (const entry of route) {
+      const value = typeof returnMaps[entry.accountLabel] === "string"
+        ? returnMaps[entry.accountLabel].trim() : returnMap;
+      if (!value || value.length > 30) throw new Error(`${entry.accountLabel} 返回挂机副本无效`);
+      normalizedReturnMaps[entry.accountLabel] = value;
+    }
     const now = this.now();
     this.state = { ...this.#idleState(), status: "running", mode: "resource_sweep",
       runId: crypto.randomUUID(), startedAt: now, updatedAt: now, phaseStartedAt: now,
@@ -205,7 +240,8 @@ export class EightAccountPlan {
       mainAccountLabel: route.at(-1).accountLabel,
       resourceItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
       inventoryItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
-      resourceReserveCount, price: 920, returnMap,
+      resourceReserveCount, price: 920, resourcePrice, returnMap,
+      returnMaps: normalizedReturnMaps,
       ownerUsername: String(options.ownerUsername ?? "").trim() };
     this.#startResourceAuction(this.state.route[0]);
     return this.snapshot();
@@ -316,6 +352,21 @@ export class EightAccountPlan {
   }
 
   tick() {
+    if (this.state.status === "running" && this.state.phase === "main_buy_running"
+        && !this.state.mainBuyTimedOut
+        && this.now() - this.state.phaseStartedAt >= MAIN_BUY_TIMEOUT_MS) {
+      const account = this.state.mode === "resource_sweep"
+        ? this.state.route[this.state.legIndex] : this.#currentLeg()?.buyer;
+      if (account) {
+        this.state.mainBuyTimedOut = true;
+        this.state.mainBuySeen = true;
+        this.state.updatedAt = this.now();
+        this.#command(account, "cancel_automation", { accountIndex: account.accountIndex });
+        this.#command(account, "configure_return_hang", {
+          accountIndex: account.accountIndex, map: this.#returnMapFor(account) });
+        this.#command(account, "run_temple_guard", { accountIndex: account.accountIndex });
+      }
+    }
     if (this.state.status === "running" && this.state.mode === "daily"
         && this.state.sellerCleanupDueAt > 0
         && this.now() >= this.state.sellerCleanupDueAt) {
@@ -350,7 +401,7 @@ export class EightAccountPlan {
     const seller = this.#automationFor(leg.seller, deviceId, telemetry);
     const buyer = this.#automationFor(leg.buyer, deviceId, telemetry);
     if (this.state.phase === "standalone_main_running" && buyer) {
-      if (buyer.status === "error") {
+      if (buyer.status === "error" && !this.state.mainBuyTimedOut) {
         return this.#handleAccountFailure(leg.buyer,
           `${this.state.mainAccountLabel} 副本执行失败：${buyer.lastMessage || "未知错误"}`);
       }
@@ -419,7 +470,7 @@ export class EightAccountPlan {
     }
     if (this.state.phase === "main_buy_running" && buyer) {
       if (buyer.task === "auction_buy" && buyer.status === "running") this.state.mainBuySeen = true;
-      if (buyer.status === "error") {
+      if (buyer.status === "error" && !this.state.mainBuyTimedOut) {
         return this.#intervene(`${this.state.mainAccountLabel} 道具购买失败：${buyer.lastMessage || "未知错误"}`,
           this.state.mainAccountLabel);
       }
@@ -435,7 +486,8 @@ export class EightAccountPlan {
     if (!account) return this.#intervene("资源归集账号序号无效", "系统");
     const automation = this.#automationFor(account, deviceId, telemetry);
     if (!automation) return this.snapshot();
-    if (automation.status === "error") {
+    if (automation.status === "error"
+        && !(this.state.phase === "main_buy_running" && this.state.mainBuyTimedOut)) {
       return this.#intervene(`${account.accountLabel} 资源归集失败：${automation.lastMessage || "未知错误"}`,
         account.accountLabel);
     }
@@ -455,11 +507,12 @@ export class EightAccountPlan {
     if (this.state.mainBuySeen && returned) {
       for (const target of this.state.route) {
         this.#command(target, "configure_return_hang", {
-          accountIndex: target.accountIndex, map: this.state.returnMap });
+          accountIndex: target.accountIndex, map: this.#returnMapFor(target) });
         this.#command(target, "run_temple_guard", { accountIndex: target.accountIndex });
       }
       this.state.history.push({ account: this.state.mainAccountLabel,
-        completedAt: this.now(), result: "success" });
+        completedAt: this.now(), result: this.state.mainBuyTimedOut
+          ? "success_purchase_skipped" : "success" });
       Object.assign(this.state, { status: "success", phase: "complete", updatedAt: this.now() });
     }
     return this.snapshot();
@@ -506,7 +559,7 @@ export class EightAccountPlan {
     this.state.updatedAt = this.now();
     this.#command(leg.seller, "cancel_automation", { accountIndex: leg.seller.accountIndex });
     this.#command(leg.seller, "configure_return_hang", {
-      accountIndex: leg.seller.accountIndex, map: this.state.returnMap });
+      accountIndex: leg.seller.accountIndex, map: this.#returnMapFor(leg.seller) });
     this.#command(leg.seller, "run_seller_cleanup", { accountIndex: leg.seller.accountIndex });
   }
 
@@ -536,6 +589,7 @@ export class EightAccountPlan {
       this.state.sellerCleaned = false;
       this.state.sellerCleanupDueAt = 0;
       this.state.mainBuySeen = false;
+      this.state.mainBuyTimedOut = false;
       if (this.state.route.length <= this.state.legIndex + 1) {
         return this.#intervene("跳过异常账号后已无下一账号", account.accountLabel);
       }
@@ -563,7 +617,7 @@ export class EightAccountPlan {
       this.state.sellerReleased = true;
       this.#command(leg.seller, "cancel_automation", { accountIndex: leg.seller.accountIndex });
       this.#command(leg.seller, "configure_return_hang", {
-        accountIndex: leg.seller.accountIndex, map: this.state.returnMap });
+        accountIndex: leg.seller.accountIndex, map: this.#returnMapFor(leg.seller) });
       this.#command(leg.seller, "run_seller_cleanup", { accountIndex: leg.seller.accountIndex });
     }
     this.#command(leg.buyer, "run_dungeon_sequence", { accountIndex: leg.buyer.accountIndex });
@@ -609,6 +663,7 @@ export class EightAccountPlan {
     this.#configureResourcesAndReturn(account);
     if (account.accountLabel === this.state.mainAccountLabel) {
       this.state.mainBuySeen = false;
+      this.state.mainBuyTimedOut = false;
       this.state.phase = "main_buy_running";
       this.#command(account, "run_auction_buy", { accountIndex: account.accountIndex });
     } else {
@@ -618,7 +673,7 @@ export class EightAccountPlan {
 
   #startMainBuy(account) {
     Object.assign(this.state, { phase: "main_buy_running", phaseStartedAt: this.now(),
-      updatedAt: this.now(), mainBuySeen: false });
+      updatedAt: this.now(), mainBuySeen: false, mainBuyTimedOut: false });
     this.#configureResourcesAndReturn(account);
     this.#command(account, "run_auction_buy", { accountIndex: account.accountIndex });
   }
@@ -631,23 +686,24 @@ export class EightAccountPlan {
     this.#command(account, "configure_dungeon_sequence", {
       accountIndex: account.accountIndex, items: [...this.state.dungeonItems] });
     this.#command(account, "configure_return_hang", {
-      accountIndex: account.accountIndex, map: this.state.returnMap });
+      accountIndex: account.accountIndex, map: this.#returnMapFor(account) });
     this.#command(account, "run_dungeon_sequence", { accountIndex: account.accountIndex });
   }
 
   #configureResourcesAndReturn(account) {
     this.#command(account, "configure_auto_auction", { accountIndex: account.accountIndex,
       enabled: false, items: [...this.state.resourceItems], buyer: this.state.mainAccountLabel,
-      price: this.state.price, reserveCount: this.state.resourceReserveCount,
+      price: this.state.resourcePrice, reserveCount: this.state.resourceReserveCount,
       intervalHours: 24 });
     this.#command(account, "configure_return_hang", {
-      accountIndex: account.accountIndex, map: this.state.returnMap });
+      accountIndex: account.accountIndex, map: this.#returnMapFor(account) });
   }
 
   #completeLeg() {
     const leg = this.#currentLeg();
     this.state.history.push({ legIndex: this.state.legIndex, seller: leg.seller.accountLabel,
-      buyer: leg.buyer.accountLabel, completedAt: this.now(), result: "success" });
+      buyer: leg.buyer.accountLabel, completedAt: this.now(),
+      result: this.state.mainBuyTimedOut ? "success_purchase_skipped" : "success" });
     if (this.state.legIndex >= this.state.route.length - 2) {
       Object.assign(this.state, { status: "success", phase: "complete", updatedAt: this.now() });
       Promise.resolve(this.onComplete(this.snapshot())).catch(() => {});
@@ -660,6 +716,7 @@ export class EightAccountPlan {
     this.state.sellerCleaned = false;
     this.state.sellerCleanupDueAt = 0;
     this.state.mainBuySeen = false;
+    this.state.mainBuyTimedOut = false;
     this.state.phase = "starting_leg";
     this.#startCurrentLeg();
   }
@@ -700,7 +757,7 @@ export class EightAccountPlan {
     this.#command(leg.buyer, "configure_dungeon_sequence", {
       accountIndex: leg.buyer.accountIndex, items: [...this.state.dungeonItems] });
     this.#command(leg.buyer, "configure_return_hang", {
-      accountIndex: leg.buyer.accountIndex, map: this.state.returnMap });
+      accountIndex: leg.buyer.accountIndex, map: this.#returnMapFor(leg.buyer) });
     this.#command(leg.seller, "run_equipment_sell", { accountIndex: leg.seller.accountIndex });
     if (recoverPartialTransfer) {
       this.state.buyerStarted = true;
@@ -722,6 +779,14 @@ export class EightAccountPlan {
     this.emitAction({ deviceId: account.deviceId, accountLabel: account.accountLabel,
       command, parameters, runId: this.state.runId, legIndex: this.state.legIndex,
       phase: this.state.phase });
+  }
+
+  #returnMapFor(account) {
+    const label = account?.accountLabel;
+    const configured = label && this.state.returnMaps
+      ? this.state.returnMaps[label] : "";
+    return typeof configured === "string" && configured.trim()
+      ? configured.trim() : this.state.returnMap;
   }
 
   onCommandResult(action, success, message = "") {
