@@ -154,7 +154,7 @@ final class RemoteConnectionManager {
         try {
             Request request = new Request.Builder()
                     .url(config.endpoint)
-                    .header("User-Agent", "PlayKeeper-Android/1.2.0")
+                    .header("User-Agent", "PlayKeeper-Android/" + BuildConfig.VERSION_NAME)
                     .build();
             webSocket = client.newWebSocket(request, new SocketListener(connectionGeneration));
         } catch (RuntimeException error) {
@@ -209,7 +209,7 @@ final class RemoteConnectionManager {
                 hello.put("type", "device.hello");
                 hello.put("deviceId", config.deviceId);
                 hello.put("token", config.token);
-                hello.put("appVersion", "1.2.0");
+                hello.put("appVersion", BuildConfig.VERSION_NAME);
                 socket.send(hello.toString());
             } catch (JSONException ignored) {
                 socket.close(1002, "invalid hello");
@@ -267,7 +267,10 @@ final class RemoteConnectionManager {
             authenticated = false;
             webSocket = null;
             if (desiredConnection) {
-                notifyState(State.ERROR, "远程服务器连接失败");
+                String detail = response == null
+                        ? "无法连接远程服务器，请检查网络和 WSS 地址"
+                        : "远程服务器拒绝 WebSocket 连接（HTTP " + response.code() + "）";
+                notifyState(State.ERROR, detail);
                 scheduleReconnect(connectionGeneration);
             }
         }

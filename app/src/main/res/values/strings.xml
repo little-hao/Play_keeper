@@ -2,5 +2,5 @@
 <resources>
     <string name="app_name">Play Keeper</string>
     <string name="remote_device_id">设备 ID：%1$s</string>
-    <string name="remote_security_notice">启用后，已鉴权的控制台可以按需查看本 APP 网页快照并发送单击。图片只经 WSS 内存转发。连接密钥使用 Android Keystore 加密保存，只允许 WSS 地址。</string>
+    <string name="remote_security_notice">VPS 设备密钥只用于设备接入，不是 APK 签名 keystore、压缩包密码或网页登录密码。密钥由 Android Keystore 加密保存；候选版与正式版的远程设置互不共享。只允许 WSS 地址。</string>
 </resources>

@@ -156,6 +156,7 @@ public final class MainActivity extends Activity {
     private RemoteConnectionManager remoteConnectionManager;
     private AutomationCoordinator automationCoordinator;
     private RemoteConnectionManager.State remoteState = RemoteConnectionManager.State.DISABLED;
+    private String remoteStateMessage = "远程连接未启用";
 
     private int activeAccount;
     private boolean blackMode;
@@ -538,6 +539,8 @@ public final class MainActivity extends Activity {
                     public void onRemoteStateChanged(RemoteConnectionManager.State state,
                                                      String message) {
                         remoteState = state;
+                        remoteStateMessage = message == null || message.isBlank()
+                                ? remoteStateLabel(state) : message;
                         if (state != RemoteConnectionManager.State.CONNECTED) {
                             stopPreview();
                         }
@@ -594,6 +597,19 @@ public final class MainActivity extends Activity {
                 remoteButton.setText("远程");
                 remoteButton.setBackground(buttonBackground(false));
                 break;
+        }
+    }
+
+    private String remoteStateLabel(RemoteConnectionManager.State state) {
+        switch (state) {
+            case CONNECTED:
+                return "远程连接已上线";
+            case CONNECTING:
+                return "正在连接远程服务器";
+            case ERROR:
+                return "远程连接异常";
+            default:
+                return "远程连接未启用";
         }
     }
 
@@ -955,6 +971,28 @@ public final class MainActivity extends Activity {
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(dp(20), dp(8), dp(20), 0);
 
+        TextView edition = new TextView(this);
+        String editionName = BuildConfig.REMOTE_PRESET_NAME.isBlank()
+                ? "正式版" : BuildConfig.REMOTE_PRESET_NAME;
+        edition.setText(editionName + " · " + BuildConfig.VERSION_NAME);
+        edition.setTextSize(13);
+        edition.setTextColor(Color.LTGRAY);
+        content.addView(edition, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView connectionStatus = new TextView(this);
+        connectionStatus.setText("当前状态：" + remoteStateMessage);
+        connectionStatus.setTextSize(15);
+        connectionStatus.setTextColor(remoteState == RemoteConnectionManager.State.CONNECTED
+                ? Color.rgb(63, 190, 104)
+                : remoteState == RemoteConnectionManager.State.ERROR
+                        ? Color.rgb(232, 151, 74) : Color.LTGRAY);
+        LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        statusParams.topMargin = dp(8);
+        statusParams.bottomMargin = dp(8);
+        content.addView(connectionStatus, statusParams);
+
         TextView deviceId = new TextView(this);
         deviceId.setText(getString(R.string.remote_device_id, config.deviceId));
         deviceId.setTextIsSelectable(true);
@@ -962,25 +1000,52 @@ public final class MainActivity extends Activity {
         content.addView(deviceId, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        TextView endpointLabel = new TextView(this);
+        endpointLabel.setText("WSS 远程地址");
+        endpointLabel.setTextSize(13);
+        content.addView(endpointLabel, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         EditText endpoint = new EditText(this);
         endpoint.setHint("wss://你的域名/device");
         endpoint.setSingleLine(true);
         endpoint.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        endpoint.setText(config.endpoint);
+        endpoint.setText(config.endpoint.isBlank()
+                ? BuildConfig.REMOTE_PRESET_ENDPOINT : config.endpoint);
         content.addView(endpoint, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        CheckBox enabled = new CheckBox(this);
+        enabled.setText("启用远程连接");
+        enabled.setChecked(config.enabled);
+
+        if (!BuildConfig.REMOTE_PRESET_ENDPOINT.isBlank()) {
+            Button preset = new Button(this);
+            preset.setAllCaps(false);
+            preset.setText("使用候选版测试服务器");
+            preset.setOnClickListener(view -> {
+                endpoint.setText(BuildConfig.REMOTE_PRESET_ENDPOINT);
+                enabled.setChecked(true);
+                showToast("已填入候选版测试地址，请继续填写 VPS 设备密钥");
+            });
+            content.addView(preset, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
+
+        TextView tokenLabel = new TextView(this);
+        tokenLabel.setText("VPS 设备密钥（不是 APK 签名密钥）");
+        tokenLabel.setTextSize(13);
+        content.addView(tokenLabel, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         EditText token = new EditText(this);
-        token.setHint("设备连接密钥");
+        token.setHint("填写测试 VPS 的 DEVICE_TOKEN");
         token.setSingleLine(true);
         token.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         token.setText(config.token);
         content.addView(token, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        CheckBox enabled = new CheckBox(this);
-        enabled.setText("启用远程连接");
-        enabled.setChecked(config.enabled);
         content.addView(enabled, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -995,7 +1060,7 @@ public final class MainActivity extends Activity {
                 .setTitle("远程连接设置")
                 .setView(content)
                 .setNegativeButton("取消", null)
-                .setPositiveButton("保存", null)
+                .setPositiveButton("保存并连接", null)
                 .create();
         dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
                 .setOnClickListener(view -> {
@@ -1003,7 +1068,7 @@ public final class MainActivity extends Activity {
                     String tokenValue = token.getText().toString().trim();
                     if (enabled.isChecked()
                             && (!endpointValue.startsWith("wss://") || tokenValue.isBlank())) {
-                        showToast("启用远程连接需要 WSS 地址和设备密钥");
+                        showToast("请填写 WSS 地址和测试 VPS 的 DEVICE_TOKEN");
                         return;
                     }
                     if (!remoteConfigStore.save(enabled.isChecked(), endpointValue, tokenValue)) {

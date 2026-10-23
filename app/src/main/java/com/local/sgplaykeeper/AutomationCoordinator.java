@@ -769,6 +769,7 @@ final class AutomationCoordinator {
         automation.put("equipmentListedInBatch", state.equipmentListedInBatch);
         automation.put("equipmentMarketActiveCount", state.equipmentMarketActiveCount);
         automation.put("equipmentBatchNames", new JSONArray(state.equipmentBatchNames));
+        automation.put("equipmentUnequipVerified", state.equipmentUnequipVerified);
         automation.put("equipmentAllTransferred", "workflow".equals(state.equipmentVerificationSource)
                 || "manual".equals(state.equipmentVerificationSource)
                 || ("observed".equals(state.equipmentVerificationSource)
@@ -875,6 +876,7 @@ final class AutomationCoordinator {
         state.equipmentBatchEmptyChecks = 0;
         state.equipmentBuyerTriggered = false;
         state.equipmentBatchSignalCount = 0;
+        state.equipmentUnequipVerified = false;
         if (selling) state.linkedEquipmentAccount = -1;
         state.equipmentWaitStartedAt = System.currentTimeMillis();
         state.equipmentPurchasedNames.clear();
@@ -954,34 +956,12 @@ final class AutomationCoordinator {
                 }
             } else if ("action_clicked".equals(result)) {
                 updateState(accountIndex, equip ? "已执行一键穿装备" : "已执行一键脱装备");
-                switch (next) {
-                    case SELL_TO_EXCHANGE:
-                        postTask(accountIndex, () -> navigateToEquipmentExchange(
-                                accountIndex, view, items, 0, true, manual, 0), 1_800L);
-                        break;
-                    case SELLER_REEQUIP_TO_TEMPLE:
-                        preferences.edit().putLong(PREF_FINAL_EQUIP_LAST + accountIndex,
-                                System.currentTimeMillis()).apply();
-                        postTask(accountIndex, () -> restoreAfkAndRunTemple(
-                                accountIndex, false,
-                                "装备已全部成交，剩余装备已重新穿戴"), 1_800L);
-                        break;
-                    case BUYER_UNEQUIP_THEN_EQUIP:
-                        postTask(accountIndex, () -> preparePetEquipment(
-                                accountIndex, view, items, true,
-                                PetEquipmentNext.BUYER_EQUIP_TO_DUNGEONS,
-                                manual, 0), 1_200L);
-                        break;
-                    case BUYER_EQUIP_TO_DUNGEONS:
-                        postTask(accountIndex, () -> repairAndVerifyTargetEquipment(
-                                accountIndex, view, items, manual, 0), 1_500L);
-                        break;
-                    case DUNGEON_FINISH_EQUIP_TO_INVENTORY:
-                        preferences.edit().putLong(PREF_FINAL_EQUIP_LAST + accountIndex,
-                                System.currentTimeMillis()).apply();
-                        postTask(accountIndex, () -> finishDungeonsWithInventory(
-                                accountIndex, manual), 1_200L);
-                        break;
+                if (equip) {
+                    continueAfterPetEquipmentAction(
+                            accountIndex, view, items, next, manual);
+                } else {
+                    postTask(accountIndex, () -> verifyPetEquipmentUnequipped(
+                            accountIndex, view, items, next, manual, attempt), 1_200L);
                 }
             } else if (result.endsWith("_clicked") && attempt < MANUAL_RECOVERY_ATTEMPTS) {
                 postTask(accountIndex, () -> preparePetEquipment(
@@ -999,6 +979,89 @@ final class AutomationCoordinator {
                         "30秒内未找到“宠物资料 → " + action + "”，已保留桌面横屏现场", manual);
             }
         });
+    }
+
+    private void verifyPetEquipmentUnequipped(int accountIndex, WebView view,
+                                               List<String> items, PetEquipmentNext next,
+                                               boolean manual, int attempt) {
+        if (!isPetEquipmentStepActive(accountIndex, next)) return;
+        String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
+                + "const panels=Array.from(document.querySelectorAll('.left-box')).filter(visible)"
+                + ".filter(e=>Array.from(e.querySelectorAll('.item')).some(x=>"
+                + "/item(?:[1-9]|10)(?:\\s|$)/.test(x.className||'')));"
+                + "if(panels.length!==1)return JSON.stringify({status:'panel_ambiguous',total:0,filled:-1});"
+                + "const panel=panels[0];"
+                + "const slots=Array.from(panel.querySelectorAll('.item')).filter(e=>"
+                + "/item(?:[1-9]|10)(?:\\s|$)/.test(e.className||''));"
+                + "const filled=slots.filter(slot=>{const img=slot.querySelector('img[src]');"
+                + "return img&&img.src&&!img.src.includes('/PetInfo/zb04.png');}).length;"
+                + "return JSON.stringify({status:'checked',total:slots.length,filled});})()";
+        evaluateTask(accountIndex, view, script, encoded -> {
+            if (!isPetEquipmentStepActive(accountIndex, next)) return;
+            JSONObject result = decodeObject(encoded);
+            int total = result == null ? 0 : result.optInt("total", 0);
+            int filled = result == null ? -1 : result.optInt("filled", -1);
+            EquipmentUnequipVerifier.Result verification =
+                    EquipmentUnequipVerifier.evaluate(total, filled);
+            if (verification == EquipmentUnequipVerifier.Result.CONFIRMED) {
+                if (next == PetEquipmentNext.SELL_TO_EXCHANGE) {
+                    states[accountIndex].equipmentUnequipVerified = true;
+                }
+                updateState(accountIndex, "已确认主宠装备栏清空，继续装备转移");
+                continueAfterPetEquipmentAction(accountIndex, view, items, next, manual);
+                return;
+            }
+            if (attempt < MANUAL_RECOVERY_ATTEMPTS) {
+                updateState(accountIndex,
+                        verification == EquipmentUnequipVerifier.Result.STILL_EQUIPPED
+                                ? "一键脱装备后仍检测到主宠穿戴" + filled + "件，正在重试"
+                                : "尚未读取到主宠装备栏，正在重新打开宠物资料复核");
+                postTask(accountIndex, () -> preparePetEquipment(
+                        accountIndex, view, items, false, next, manual, attempt + 1), 1_200L);
+                return;
+            }
+            finish(accountIndex, states[accountIndex].task, "error",
+                    verification == EquipmentUnequipVerifier.Result.STILL_EQUIPPED
+                            ? "一键脱装备多次执行后仍有" + filled
+                                    + "件装备穿戴，已停止且不会进入交易所"
+                            : "无法复核主宠装备栏是否已清空，已停止且不会进入交易所",
+                    manual);
+        });
+    }
+
+    private void continueAfterPetEquipmentAction(int accountIndex, WebView view,
+                                                   List<String> items, PetEquipmentNext next,
+                                                   boolean manual) {
+        if (!isPetEquipmentStepActive(accountIndex, next)) return;
+        switch (next) {
+            case SELL_TO_EXCHANGE:
+                postTask(accountIndex, () -> navigateToEquipmentExchange(
+                        accountIndex, view, items, 0, true, manual, 0), 1_800L);
+                break;
+            case SELLER_REEQUIP_TO_TEMPLE:
+                preferences.edit().putLong(PREF_FINAL_EQUIP_LAST + accountIndex,
+                        System.currentTimeMillis()).apply();
+                postTask(accountIndex, () -> restoreAfkAndRunTemple(
+                        accountIndex, false,
+                        "装备已全部成交，剩余装备已重新穿戴"), 1_800L);
+                break;
+            case BUYER_UNEQUIP_THEN_EQUIP:
+                postTask(accountIndex, () -> preparePetEquipment(
+                        accountIndex, view, items, true,
+                        PetEquipmentNext.BUYER_EQUIP_TO_DUNGEONS,
+                        manual, 0), 1_200L);
+                break;
+            case BUYER_EQUIP_TO_DUNGEONS:
+                postTask(accountIndex, () -> repairAndVerifyTargetEquipment(
+                        accountIndex, view, items, manual, 0), 1_500L);
+                break;
+            case DUNGEON_FINISH_EQUIP_TO_INVENTORY:
+                preferences.edit().putLong(PREF_FINAL_EQUIP_LAST + accountIndex,
+                        System.currentTimeMillis()).apply();
+                postTask(accountIndex, () -> finishDungeonsWithInventory(
+                        accountIndex, manual), 1_200L);
+                break;
+        }
     }
 
     private boolean isPetEquipmentStepActive(int accountIndex, PetEquipmentNext next) {
@@ -1138,7 +1201,10 @@ final class AutomationCoordinator {
                 if (state.equipmentListedInBatch == 0
                         && state.equipmentMarketActiveCount >= EQUIPMENT_ACTIVE_LIMIT) {
                     finish(accountIndex, "equipment_sell", "error",
-                            "装备交易所五个上架栏位均被其他商品占用，请先处理后继续", manual);
+                            (state.equipmentUnequipVerified
+                                    ? "已确认主宠装备栏清空；" : "")
+                                    + "装备交易所五个上架栏位均被其他商品占用，"
+                                    + "请先处理后继续", manual);
                     return;
                 }
                 final int resumeIndex = nextIndex;
@@ -4046,5 +4112,6 @@ final class AutomationCoordinator {
         String dungeonCompletionMessage = "";
         int linkedEquipmentAccount = -1;
         int equipmentBatchSignalCount;
+        boolean equipmentUnequipVerified;
     }
 }
