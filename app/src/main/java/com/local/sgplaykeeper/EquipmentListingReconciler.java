@@ -14,7 +14,10 @@ final class EquipmentListingReconciler {
         Result(Set<String> activeNames, int resumeIndex, int marketActiveCount) {
             this.activeNames = activeNames;
             this.resumeIndex = resumeIndex;
-            this.marketActiveCount = Math.max(activeNames.size(), marketActiveCount);
+            // The exchange can contain unrelated historical listings.  The five-item
+            // limit is the transfer batch size, not the total number of rows shown on
+            // the left side of the exchange, so only configured target listings count.
+            this.marketActiveCount = activeNames.size();
         }
 
         int activeCount() {
@@ -49,7 +52,7 @@ final class EquipmentListingReconciler {
         while (resume < configuredItems.size() && active.contains(configuredItems.get(resume))) {
             resume++;
         }
-        return new Result(active, resume, marketActiveCount);
+        return new Result(active, resume, active.size());
     }
 
     private static String normalize(String value) {

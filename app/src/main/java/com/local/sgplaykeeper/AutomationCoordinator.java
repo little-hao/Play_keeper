@@ -1163,7 +1163,7 @@ final class AutomationCoordinator {
                 + "const name=cells.find(v=>wanted.has(base(v)))||'';"
                 + "const priced=cells.some(v=>parseInt(v.replace(/[^0-9]/g,''),10)===price);"
                 + "if(name&&priced&&!names.includes(name))names.push(name);}"
-                + "return JSON.stringify({status:'ok',names,totalCount:rows.length});})()";
+                + "return JSON.stringify({status:'ok',names});})()";
         evaluateTask(accountIndex, view, script, encoded -> {
             JSONObject result = decodeObject(encoded);
             if (result == null || !"ok".equals(result.optString("status"))) {
@@ -1179,8 +1179,7 @@ final class AutomationCoordinator {
                 }
             }
             EquipmentListingReconciler.Result reconciliation =
-                    EquipmentListingReconciler.reconcile(items, startIndex, activeNames,
-                            result.optInt("totalCount", activeNames.size()));
+                    EquipmentListingReconciler.reconcile(items, startIndex, activeNames);
             state.equipmentBatchNames.clear();
             state.equipmentBatchNames.addAll(reconciliation.activeNames);
             state.equipmentListedInBatch = reconciliation.activeCount();
@@ -1193,20 +1192,11 @@ final class AutomationCoordinator {
                 state.equipmentBatchEmptyChecks = 0;
                 state.equipmentWaitStartedAt = System.currentTimeMillis();
                 updateState(accountIndex, "交易所重入复核：本套装已上架"
-                        + state.equipmentListedInBatch + "件，全部栏位已占用"
-                        + state.equipmentMarketActiveCount + "/" + EQUIPMENT_ACTIVE_LIMIT);
+                        + state.equipmentListedInBatch + "/" + EQUIPMENT_ACTIVE_LIMIT
+                        + "件；其他在售商品不占用本轮批次");
             }
-            if (state.equipmentMarketActiveCount >= EQUIPMENT_ACTIVE_LIMIT
+            if (state.equipmentListedInBatch >= EQUIPMENT_ACTIVE_LIMIT
                     || nextIndex >= batchEnd) {
-                if (state.equipmentListedInBatch == 0
-                        && state.equipmentMarketActiveCount >= EQUIPMENT_ACTIVE_LIMIT) {
-                    finish(accountIndex, "equipment_sell", "error",
-                            (state.equipmentUnequipVerified
-                                    ? "已确认主宠装备栏清空；" : "")
-                                    + "装备交易所五个上架栏位均被其他商品占用，"
-                                    + "请先处理后继续", manual);
-                    return;
-                }
                 final int resumeIndex = nextIndex;
                 postTask(accountIndex, () -> startBuyerAndWaitForBatchClear(
                         accountIndex, view, items, resumeIndex, manual), 800L);
@@ -1381,7 +1371,7 @@ final class AutomationCoordinator {
         state.equipmentWaitStartedAt = System.currentTimeMillis();
         updateState(accountIndex, itemName + "：检测到已有上架记录，继续等待买方成交");
         int nextIndex = itemIndex + 1;
-        boolean batchFull = state.equipmentMarketActiveCount >= EQUIPMENT_ACTIVE_LIMIT;
+        boolean batchFull = state.equipmentListedInBatch >= EQUIPMENT_ACTIVE_LIMIT;
         boolean allItemsListed = nextIndex >= items.size();
         if (batchFull || allItemsListed) {
             postTask(accountIndex, () -> startBuyerAndWaitForBatchClear(
@@ -1489,7 +1479,7 @@ final class AutomationCoordinator {
             state.equipmentMarketActiveCount++;
             state.equipmentBatchNames.add(itemName);
             int nextIndex = itemIndex + 1;
-            boolean batchFull = state.equipmentMarketActiveCount >= EQUIPMENT_ACTIVE_LIMIT;
+            boolean batchFull = state.equipmentListedInBatch >= EQUIPMENT_ACTIVE_LIMIT;
             boolean allItemsListed = nextIndex >= items.size();
             if (batchFull || allItemsListed) {
                 state.equipmentBatchSeen = false;

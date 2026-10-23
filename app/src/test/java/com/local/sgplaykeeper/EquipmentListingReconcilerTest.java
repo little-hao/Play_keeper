@@ -55,12 +55,22 @@ public final class EquipmentListingReconcilerTest {
     }
 
     @Test
-    public void preservesTotalMarketUsageWhenUnrelatedListingsOccupySlots() {
+    public void unrelatedHistoricalListingsDoNotConsumeTransferBatch() {
         EquipmentListingReconciler.Result result = EquipmentListingReconciler.reconcile(
                 ITEMS, 0, Arrays.asList("装备1", "装备2"), 5);
 
         assertEquals(2, result.activeCount());
-        assertEquals(5, result.marketActiveCount());
+        assertEquals(2, result.marketActiveCount());
         assertEquals(2, result.resumeIndex);
+    }
+
+    @Test
+    public void fiveUnrelatedListingsStillAllowFirstTargetListing() {
+        EquipmentListingReconciler.Result result = EquipmentListingReconciler.reconcile(
+                ITEMS, 0, Arrays.asList("其他1", "其他2", "其他3", "其他4", "其他5"), 5);
+
+        assertEquals(0, result.activeCount());
+        assertEquals(0, result.marketActiveCount());
+        assertEquals(0, result.resumeIndex);
     }
 }

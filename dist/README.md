@@ -2,7 +2,7 @@
 
 APK 属于构建产物，不提交到 Git。当前 Android 10+ 可安装包为：
 
-`PlayKeeper-Android10Plus-v2.0.3-rc2-candidate.apk`（独立安装候选版，尚未部署）
+`PlayKeeper-Android10Plus-v2.0.3-rc2.2-candidate.apk`（独立安装候选版，尚未部署）
 
 配套 VPS 服务包为：
 
