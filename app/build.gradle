@@ -15,8 +15,8 @@ android {
         applicationId 'com.local.sgplaykeeper'
         minSdk 26
         targetSdk 35
-        versionCode 51
-        versionName '2.0.4-rc1'
+        versionCode 52
+        versionName '2.0.4-rc2'
         buildConfigField 'String', 'REMOTE_PRESET_NAME', '""'
         buildConfigField 'String', 'REMOTE_PRESET_ENDPOINT', '""'
     }
@@ -89,7 +89,7 @@ android {
 androidComponents {
     onVariants(selector().withBuildType('candidate')) { variant ->
         variant.outputs.each { output ->
-            output.versionCode.set(51)
+            output.versionCode.set(52)
         }
     }
 }

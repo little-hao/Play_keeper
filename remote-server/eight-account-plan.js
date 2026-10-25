@@ -77,7 +77,7 @@ export class EightAccountPlan {
       dungeonItems: ["绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"],
       reportEmail: "", ownerUsername: "", error: "", errorAccount: "",
       interventionDeadlineAt: 0, reconnectDeadlineAt: 0, offlineDeviceId: "",
-      commandEpoch: 0, emailStatus: "pending", inventoryByAccount: {}, history: [] };
+      commandEpoch: 0, emailStatus: "pending", inventoryByAccount: {}, history: [], warnings: [] };
   }
 
   snapshot() { return JSON.parse(JSON.stringify(this.state)); }
@@ -109,6 +109,7 @@ export class EightAccountPlan {
       returnMaps: savedState.returnMaps && typeof savedState.returnMaps === "object"
         && !Array.isArray(savedState.returnMaps) ? { ...savedState.returnMaps } : {},
       history: Array.isArray(savedState.history) ? [...savedState.history] : [],
+      warnings: Array.isArray(savedState.warnings) ? [...savedState.warnings] : [],
       inventoryByAccount: savedState.inventoryByAccount
         && typeof savedState.inventoryByAccount === "object"
         ? { ...savedState.inventoryByAccount } : {} };
@@ -761,7 +762,12 @@ export class EightAccountPlan {
   }
 
   #advanceCompletedWorkflows() {
-    if (!this.state.sellerCleaned || !this.state.buyerWorkflowCompleted) return;
+    // The set is already confirmed on the buyer once buyerWorkflowCompleted is
+    // true.  Seller cleanup is best-effort housekeeping and some WebViews do
+    // not emit a fresh finalEquipLastRunAt when the seller has nothing left to
+    // change.  Waiting for that optional timestamp used to strand the route
+    // after the buyer returned to its configured hang map.
+    if (!this.state.sellerReleased || !this.state.buyerWorkflowCompleted) return;
     const leg = this.#currentLeg();
     if (!leg) return;
     if (leg.buyer.accountLabel === this.state.mainAccountLabel) this.#startMainBuy(leg.buyer);
@@ -899,6 +905,19 @@ export class EightAccountPlan {
     if (action.legIndex !== this.state.legIndex) return this.snapshot();
     if (Number(action.commandEpoch) !== Number(this.state.commandEpoch)) return this.snapshot();
     if (!success) {
+      const leg = this.#currentLeg();
+      const postTransferCleanup = ["cancel_automation", "configure_return_hang",
+        "run_seller_cleanup"].includes(action.command)
+        && action.accountLabel === leg?.seller?.accountLabel
+        && this.state.equipmentHolderLabel === leg?.buyer?.accountLabel;
+      if (postTransferCleanup) {
+        this.state.warnings.push({ account: action.accountLabel, createdAt: this.now(),
+          result: "seller_cleanup_warning",
+          message: `${action.command} 未完成：${String(message || "APP拒绝命令").slice(0, 120)}` });
+        this.state.sellerCleaned = true;
+        this.state.updatedAt = this.now();
+        return this.snapshot();
+      }
       if (this.state.phase === "main_buy_running" && action.command === "run_auction_buy") {
         const account = this.#currentLeg()?.buyer || this.state.route[this.state.legIndex];
         if (account) {

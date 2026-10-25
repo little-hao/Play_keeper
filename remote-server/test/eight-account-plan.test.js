@@ -129,6 +129,65 @@ test("runs all eight relay legs and returns the equipment to hao", () => {
   assert.equal(result.history.at(-1).buyer, "hao");
 });
 
+test("continues a custom relay after buyer dungeon even without a fresh seller cleanup timestamp", () => {
+  const actions = [];
+  const customRoute = [route()[0], route()[3], route()[4], route()[7], route().at(-1)];
+  const plan = new EightAccountPlan({ emitAction: action => actions.push(action), now: () => 1_000 });
+  plan.start(customRoute);
+
+  const seller = customRoute[0];
+  const buyer = customRoute[1];
+  plan.onTelemetry(seller.deviceId, telemetry(seller.accountIndex, {
+    task: "equipment_sell", status: "running", equipmentListedInBatch: 5
+  }));
+  plan.onTelemetry(buyer.deviceId, telemetry(buyer.accountIndex, {
+    task: "temple", status: "ok", updatedAt: 2_000,
+    equipmentTransferLastRunAt: 2_000, dungeonLastRunAt: 2_000,
+    finalEquipLastRunAt: 2_000, inventoryLastRunAt: 2_000,
+    inventoryStatus: "ok", inventoryCounts: { "进化宝石": 1 }
+  }));
+
+  assert.equal(plan.snapshot().phase, "resource_auction_running");
+  assert.equal(actions.at(-1).command, "run_auto_auction");
+  assert.equal(actions.at(-1).accountLabel, "hao3");
+
+  plan.onTelemetry(buyer.deviceId, telemetry(buyer.accountIndex, {
+    task: "temple", status: "ok", updatedAt: 3_000, auctionLastRunAt: 3_000
+  }));
+  assert.equal(plan.snapshot().legIndex, 1);
+  assert.equal(plan.snapshot().phase, "seller_running");
+  assert.equal(actions.at(-1).command, "run_equipment_sell");
+  assert.equal(actions.at(-1).accountLabel, "hao3");
+  assert.equal(actions.findLast(action => action.command === "configure_equipment_transfer"
+    && action.accountLabel === "hao3").parameters.buyer, "hao4");
+});
+
+test("a failed old-seller cleanup is a warning after the equipment reached the buyer", () => {
+  const actions = [];
+  const customRoute = [route()[0], route()[3], route()[4], route()[7], route().at(-1)];
+  const plan = new EightAccountPlan({ emitAction: action => actions.push(action), now: () => 1_000 });
+  plan.start(customRoute);
+  const seller = customRoute[0];
+  const buyer = customRoute[1];
+  plan.onTelemetry(seller.deviceId, telemetry(seller.accountIndex, {
+    task: "equipment_sell", status: "running", equipmentListedInBatch: 5
+  }));
+  plan.onTelemetry(buyer.deviceId, telemetry(buyer.accountIndex, {
+    task: "temple", status: "ok", updatedAt: 2_000,
+    equipmentTransferLastRunAt: 2_000, dungeonLastRunAt: 2_000,
+    finalEquipLastRunAt: 2_000, inventoryLastRunAt: 2_000,
+    inventoryStatus: "ok"
+  }));
+  const cleanup = actions.find(action => action.command === "run_seller_cleanup");
+  assert.equal(actions.filter(action => action.command === "run_auto_auction").length, 1);
+  plan.onCommandResult(cleanup, false, "未产生新的穿戴时间戳");
+
+  assert.equal(plan.snapshot().status, "running");
+  assert.equal(plan.snapshot().history.length, 0);
+  assert.equal(plan.snapshot().warnings.at(-1).result, "seller_cleanup_warning");
+  assert.equal(actions.filter(action => action.command === "run_auto_auction").length, 1);
+});
+
 test("skips an abnormal buyer when the equipment is still on the seller", () => {
   const actions = [];
   const plan = new EightAccountPlan({ emitAction: (action) => actions.push(action), now: () => 10_000 });
@@ -546,7 +605,7 @@ test("accepts a Chinese four-account route, nine-piece set, and blank report ema
   assert.equal(actions[0].parameters.buyer, "杂鱼小妹");
 });
 
-test("starts main resource purchase when buyer finished before remote seller cleanup", () => {
+test("starts main resource purchase without waiting for remote seller cleanup", () => {
   const actions = [];
   let clock = 1_000;
   const shortRoute = [route()[0], route()[2], route().at(-1)];
@@ -568,14 +627,15 @@ test("starts main resource purchase when buyer finished before remote seller cle
   plan.onTelemetry(d1, telemetry(1, { task: "temple", status: "ok", updatedAt: clock,
     auctionLastRunAt: clock }));
 
-  // Final leg: hao finishes first and goes idle; hao2 cleanup reports later.
+  // Final leg: hao finishes first; hao2 cleanup is allowed to report later.
   assert.equal(actions.at(-1).command, "run_equipment_sell");
   plan.onTelemetry(d1, telemetry(1, { task: "equipment_sell", status: "running",
     equipmentListedInBatch: 5 }));
   clock = 3_000;
   plan.onTelemetry(d2, telemetry(0, complete()));
   assert.equal(plan.snapshot().buyerWorkflowCompleted, true);
-  assert.notEqual(actions.at(-1).command, "run_auction_buy");
+  assert.equal(actions.at(-1).command, "run_auction_buy");
+  assert.equal(actions.at(-1).accountLabel, "hao");
   clock = 4_000;
   plan.onTelemetry(d1, telemetry(1, { task: "temple", status: "ok", updatedAt: clock,
     finalEquipLastRunAt: clock }));
