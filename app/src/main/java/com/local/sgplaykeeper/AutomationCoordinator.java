@@ -560,6 +560,7 @@ final class AutomationCoordinator {
         state.lastMessage = "正在重新穿戴剩余装备并返回" + returnHangMap(accountIndex);
         state.updatedAt = System.currentTimeMillis();
         state.manualRun = false;
+        state.orientationRecoveryClicked = false;
         host.onAutomationChanged();
         WebView view;
         try {
@@ -2472,15 +2473,12 @@ final class AutomationCoordinator {
     }
 
     private String orientationRecoveryScript(int accountIndex) {
-        boolean alreadyClicked = states[accountIndex].orientationRecoveryClicked;
         return "const orientationText=(document.body?.innerText||'').replace(/\\s+/g,'');"
                 + "if(orientationText.includes('请将手机横屏使用')){"
-                + (alreadyClicked
-                ? "return 'orientation_waiting';"
-                : "const fallback=Array.from(document.querySelectorAll('button,[role=button],uni-button,a,view,div'))"
+                + "const fallback=Array.from(document.querySelectorAll('button,[role=button],uni-button,a,view,div'))"
                 + ".filter(visible).find(e=>{const t=clean(e);"
                 + "return t.includes('手机转不动')&&t.includes('点这里继续');});"
-                + "if(!fallback)return 'orientation_waiting';fallback.click();return 'orientation_clicked';")
+                + "if(!fallback)return 'orientation_waiting';fallback.click();return 'orientation_clicked';"
                 + "}";
     }
 
@@ -3047,6 +3045,7 @@ final class AutomationCoordinator {
         RuntimeState state = states[accountIndex];
         state.task = "dungeon_queue";
         state.dungeonCompletionMessage = completedMessage;
+        state.orientationRecoveryClicked = false;
         updateState(accountIndex, completedMessage + "，正在一键穿戴剩余装备");
         host.prepareAutomation(accountIndex, true);
         host.openHome(accountIndex);
