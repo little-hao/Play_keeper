@@ -624,3 +624,64 @@ test("skips the final main-account item purchase after sixty seconds and returns
   assert.equal(plan.snapshot().history.length, 2);
   assert.equal(plan.snapshot().history.at(-1).result, "success_purchase_skipped");
 });
+
+test("uses the configured item price and returns hao to its map when purchase fails", () => {
+  const actions = [];
+  let clock = 1_000;
+  const shortRoute = [route()[0], route()[7], route().at(-1)];
+  const plan = new EightAccountPlan({ emitAction: action => actions.push(action), now: () => clock });
+  const complete = () => ({ task: "temple", status: "ok", updatedAt: clock,
+    equipmentTransferLastRunAt: clock, dungeonLastRunAt: clock,
+    finalEquipLastRunAt: clock, inventoryLastRunAt: clock, inventoryStatus: "ok" });
+  plan.start(shortRoute, { resourcePrice: 1350,
+    returnMaps: { hao: "伊苏王的神墓", hao7: "绘画小屋" } });
+  plan.onTelemetry(d2, telemetry(0, { task: "equipment_sell", status: "running",
+    equipmentListedInBatch: 5 }));
+  clock = 2_000;
+  plan.onTelemetry(d2, telemetry(1, complete()));
+  plan.onTelemetry(d2, telemetry(0, { task: "temple", status: "ok", updatedAt: clock,
+    finalEquipLastRunAt: clock }));
+  plan.onTelemetry(d2, telemetry(1, { task: "temple", status: "ok", updatedAt: clock,
+    auctionLastRunAt: clock }));
+  plan.onTelemetry(d2, telemetry(1, { task: "equipment_sell", status: "running",
+    equipmentListedInBatch: 5 }));
+  clock = 3_000;
+  plan.onTelemetry(d2, telemetry(0, complete()));
+  plan.onTelemetry(d2, telemetry(1, { task: "temple", status: "ok", updatedAt: clock,
+    finalEquipLastRunAt: clock }));
+  const buy = actions.at(-1);
+  assert.equal(buy.command, "run_auction_buy");
+  assert.equal(actions.findLast(action => action.command === "configure_auto_auction")
+    .parameters.price, 1350);
+
+  plan.onCommandResult(buy, false, "没有匹配价格的道具");
+  assert.deepEqual(actions.slice(-3).map(action => action.command),
+    ["cancel_automation", "configure_return_hang", "run_temple_guard"]);
+  assert.equal(actions.at(-2).parameters.map, "伊苏王的神墓");
+  assert.equal(plan.snapshot().status, "running");
+  assert.equal(plan.snapshot().mainBuyTimedOut, true);
+});
+
+test("brief device reconnect resumes the same relay leg and ignores old command results", () => {
+  const actions = [];
+  let clock = 10_000;
+  const shortRoute = [route()[0], route()[2], route().at(-1)];
+  const plan = new EightAccountPlan({ emitAction: action => actions.push(action), now: () => clock });
+  plan.start(shortRoute);
+  const staleSell = actions.find(action => action.command === "run_equipment_sell");
+
+  let snapshot = plan.onDeviceOffline(d1);
+  assert.equal(snapshot.status, "reconnecting");
+  assert.equal(snapshot.legIndex, 0);
+  clock += 20_000;
+  actions.length = 0;
+  snapshot = plan.onDeviceOnline(d1);
+  assert.equal(snapshot.status, "running");
+  assert.equal(snapshot.legIndex, 0);
+  assert.equal(snapshot.phase, "buyer_running");
+  assert.deepEqual(actions.slice(-2).map(action => action.command),
+    ["run_equipment_sell", "run_equipment_buy"]);
+
+  snapshot = plan.onCommandResult(staleSell, false, "旧连接超时回执");
+  assert.equal(snapshot.status, "running");
+});

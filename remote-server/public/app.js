@@ -633,11 +633,11 @@ function renderAdminPanel() {
 
 function renderDailyPlan() {
   const statusLabels = {
-    idle: "未运行", running: "运行中", success: "已完成",
+    idle: "未运行", running: "运行中", reconnecting: "等待设备重连", success: "已完成",
     intervention: "等待人工处理", error: "失败可继续", cancelled: "已中断可继续"
   };
   elements.dailyPlanStatus.textContent = statusLabels[dailyPlan.status] ?? dailyPlan.status;
-  elements.dailyPlanStatus.className = `state ${dailyPlan.status === "running" || dailyPlan.status === "success" ? "online" : "offline"}`;
+  elements.dailyPlanStatus.className = `state ${["running", "reconnecting", "success"].includes(dailyPlan.status) ? "online" : "offline"}`;
   const completed = Array.isArray(dailyPlan.history) ? dailyPlan.history.length : 0;
   const current = Number.isInteger(dailyPlan.legIndex) && dailyPlan.legIndex >= 0
     ? `${dailyPlan.route?.[dailyPlan.legIndex]?.accountLabel ?? "--"} → ${dailyPlan.route?.[dailyPlan.legIndex + 1]?.accountLabel ?? "--"}`
@@ -655,7 +655,7 @@ function renderDailyPlan() {
     ? `装备所在：${holder} · ${dailyPlan.error}`
     : `当前：${current} · 装备所在：${holder} · 已完成 ${completed}/${total}${email}`) + routeSummary;
   elements.dailyPlanProgress.style.width = `${Math.min(100, completed * 100 / total)}%`;
-  elements.startDailyPlan.disabled = ["running", "intervention"].includes(dailyPlan.status);
+  elements.startDailyPlan.disabled = ["running", "reconnecting", "intervention"].includes(dailyPlan.status);
   elements.retryDailyPlan.disabled = !["intervention", "error", "cancelled"].includes(dailyPlan.status);
   const resumable = ["intervention", "error", "cancelled"].includes(dailyPlan.status);
   const needsHolderConfirmation = resumable && dailyPlan.mode !== "resource_sweep";

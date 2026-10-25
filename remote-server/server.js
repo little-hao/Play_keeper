@@ -257,7 +257,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.3" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.4-rc1" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -624,10 +624,26 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
       authStore.canAccess(user, entry.deviceId));
   }
 
+  function planUsesAnyDevice(deviceIds) {
+    const snapshot = eightAccountPlan.snapshot();
+    if (!["running", "reconnecting", "intervention"].includes(snapshot.status)) return false;
+    const activeIds = new Set((snapshot.route || []).map((entry) => entry.deviceId).filter(Boolean));
+    return deviceIds.some((deviceId) => activeIds.has(deviceId));
+  }
+
+  function transferUsesAnyDevice(deviceIds) {
+    if (!equipmentTransfer.isActive()) return false;
+    const snapshot = equipmentTransfer.snapshot();
+    const activeIds = new Set([snapshot.seller?.deviceId, snapshot.buyer?.deviceId].filter(Boolean));
+    return deviceIds.some((deviceId) => activeIds.has(deviceId));
+  }
+
   function startConfiguredPlan(options, user = { role: "admin" }) {
-    if (equipmentTransfer.isActive()) throw new Error("单次转移正在运行或等待处理，请先检查并中断该任务");
     const summaries = accessibleSummaries(user);
     const route = resolveAccountRoute(summaries, options.routeLabels);
+    if (transferUsesAnyDevice(route.map((entry) => entry.deviceId))) {
+      throw new Error("本计划使用的设备正在执行单次转移，请完成或中断该任务后重试");
+    }
     return eightAccountPlan.start(route, {
       items: Array.isArray(options.equipmentItems) ? options.equipmentItems : undefined,
       resourceItems: Array.isArray(options.resourceItems) ? options.resourceItems : undefined,
@@ -644,11 +660,13 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   }
 
   function startResourceSweep(options, user = { role: "admin" }) {
-    if (equipmentTransfer.isActive()) throw new Error("单次转移正在运行或等待处理，请先检查并中断该任务");
     const summaries = accessibleSummaries(user);
     const mainAccount = options.routeLabels[0];
     const routeLabels = [...options.routeLabels.slice(1, -1), mainAccount];
     const route = resolveAccountRoute(summaries, routeLabels);
+    if (transferUsesAnyDevice(route.map((entry) => entry.deviceId))) {
+      throw new Error("本计划使用的设备正在执行单次转移，请完成或中断该任务后重试");
+    }
     return eightAccountPlan.startResourceSweep(route, {
       resourceItems: Array.isArray(options.resourceItems) ? options.resourceItems : undefined,
       resourceReserveCount: options.resourceReserveCount,
@@ -695,6 +713,26 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         devices.set(entry.deviceId, entry);
         sendJson(socket, { type: "device.accepted", serverTime: Date.now() });
         broadcast({ type: "device.online", device: deviceSummary(entry) });
+        try {
+          const before = JSON.stringify(eightAccountPlan.snapshot());
+          const reconnecting = eightAccountPlan.snapshot();
+          const currentAccounts = reconnecting.mode === "resource_sweep"
+            || reconnecting.phase === "standalone_main_running"
+            ? [reconnecting.route?.[reconnecting.legIndex < 0 ? 0 : reconnecting.legIndex]]
+            : ["main_buy_running", "resource_auction_running"].includes(reconnecting.phase)
+              ? [reconnecting.route?.[reconnecting.legIndex + 1]]
+              : [reconnecting.route?.[reconnecting.legIndex],
+                reconnecting.route?.[reconnecting.legIndex + 1]];
+          const currentDeviceIds = [...new Set(currentAccounts
+            .map((account) => account?.deviceId).filter(Boolean))];
+          const currentDevicesOnline = currentDeviceIds.every((deviceId) => devices.has(deviceId));
+          const after = currentDevicesOnline
+            ? eightAccountPlan.onDeviceOnline(reconnecting.offlineDeviceId || entry.deviceId)
+            : reconnecting;
+          if (JSON.stringify(after) !== before) publishPlan(after);
+        } catch (error) {
+          logger.warn?.("Plan reconnect recovery failed", error.message);
+        }
         return;
       }
 
@@ -905,9 +943,6 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
       }
       if (message.type === "equipment.transfer.start") {
         try {
-          if (eightAccountPlan.snapshot().status === "running") {
-            throw new Error("多用户挂机正在运行，请先中断计划后再使用单次定向转移");
-          }
           const sellerLabel = String(message.sellerLabel || "").trim();
           const buyerLabel = String(message.buyerLabel || "").trim();
           const items = Array.isArray(message.items)
@@ -921,6 +956,9 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
           }
           const [seller, buyer] = resolveAccountRoute(
             accessibleSummaries(socket.user), [sellerLabel, buyerLabel]);
+          if (planUsesAnyDevice([seller.deviceId, buyer.deviceId])) {
+            throw new Error("所选账号设备正在执行多用户挂机，请改用其他设备或等待当前交接完成");
+          }
           equipmentTransfer.start({ ownerId: socket.user?.id, seller, buyer,
             items, price, returnMap });
         } catch (error) {
@@ -1080,7 +1118,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   planTicker.unref();
   const scheduleTicker = setInterval(() => {
     if (equipmentTransfer.isActive()) return;
-    if (["running", "intervention"].includes(eightAccountPlan.snapshot().status)) return;
+    if (["running", "reconnecting", "intervention"].includes(eightAccountPlan.snapshot().status)) return;
     for (const user of authStore.scheduledUsers()) {
       const settings = authStore.getSettings(user);
       let schedule;
