@@ -99,7 +99,8 @@ export class EightAccountPlan {
       diagnosticReason: "", gptSuggestion: null, recoveryPending: false,
       dungeonItems: ["绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"],
       reportEmail: "", ownerUsername: "", error: "", errorAccount: "",
-      interventionDeadlineAt: 0, emailStatus: "pending", inventoryByAccount: {}, history: [] };
+      interventionDeadlineAt: 0, emailStatus: "pending", inventoryByAccount: {},
+      history: [], warnings: [] };
   }
 
   snapshot() { return JSON.parse(JSON.stringify(this.state)); }
@@ -137,6 +138,7 @@ export class EightAccountPlan {
       stepLedger: Array.isArray(savedState.stepLedger) ? savedState.stepLedger.slice(-200) : [],
       eventLedger: Array.isArray(savedState.eventLedger) ? savedState.eventLedger.slice(-300) : [],
       history: Array.isArray(savedState.history) ? [...savedState.history] : [],
+      warnings: Array.isArray(savedState.warnings) ? [...savedState.warnings] : [],
       inventoryByAccount: savedState.inventoryByAccount
         && typeof savedState.inventoryByAccount === "object"
         ? { ...savedState.inventoryByAccount } : {} };
@@ -771,6 +773,30 @@ export class EightAccountPlan {
     this.#command(account, "run_auction_buy", { accountIndex: account.accountIndex });
   }
 
+  #advanceCompletedWorkflows() {
+    // The set is already confirmed on the buyer once buyerWorkflowCompleted is
+    // true.  Seller cleanup is best-effort housekeeping and some WebViews do
+    // not emit a fresh finalEquipLastRunAt when the seller has nothing left to
+    // change.  Waiting for that optional timestamp used to strand the route
+    // after the buyer returned to its configured hang map.
+    if (!this.state.sellerReleased || !this.state.buyerWorkflowCompleted) return;
+    const leg = this.#currentLeg();
+    if (!leg) return;
+    if (leg.buyer.accountLabel === this.state.mainAccountLabel) this.#startMainBuy(leg.buyer);
+    else this.#startResourceAuction(leg.buyer);
+  }
+
+  #skipMainBuyAndReturn(account, reason) {
+    this.state.mainBuyTimedOut = true;
+    this.state.mainBuySeen = true;
+    this.state.updatedAt = this.now();
+    this.state.mainBuySkipReason = reason;
+    this.#command(account, "cancel_automation", { accountIndex: account.accountIndex });
+    this.#command(account, "configure_return_hang", {
+      accountIndex: account.accountIndex, map: this.#returnMapFor(account) });
+    this.#command(account, "run_temple_guard", { accountIndex: account.accountIndex });
+  }
+
   #startStandaloneMain(account) {
     Object.assign(this.state, { phase: "standalone_main_running", phaseStartedAt: this.now(),
       updatedAt: this.now(), equipmentHolderLabel: account.accountLabel });
@@ -904,6 +930,27 @@ export class EightAccountPlan {
     }
     if (action.legIndex !== this.state.legIndex) return this.snapshot();
     if (!success) {
+      const leg = this.#currentLeg();
+      const postTransferCleanup = ["cancel_automation", "configure_return_hang",
+        "run_seller_cleanup"].includes(action.command)
+        && action.accountLabel === leg?.seller?.accountLabel
+        && this.state.equipmentHolderLabel === leg?.buyer?.accountLabel;
+      if (postTransferCleanup) {
+        this.state.warnings.push({ account: action.accountLabel, createdAt: this.now(),
+          result: "seller_cleanup_warning",
+          message: `${action.command} 未完成：${String(message || "APP拒绝命令").slice(0, 120)}` });
+        this.state.sellerCleaned = true;
+        this.state.updatedAt = this.now();
+        return this.snapshot();
+      }
+      if (this.state.phase === "main_buy_running" && action.command === "run_auction_buy") {
+        const account = this.#currentLeg()?.buyer || this.state.route[this.state.legIndex];
+        if (account) {
+          this.#skipMainBuyAndReturn(account,
+            `${action.accountLabel} 按设置价格 ${this.state.resourcePrice} 金币购买命令失败：${String(message || "APP拒绝命令").slice(0, 120)}`);
+          return this.snapshot();
+        }
+      }
       return this.#intervene(
         `${action.accountLabel} 未能执行 ${action.command}：${String(message || "APP拒绝命令").slice(0, 120)}`,
         action.accountLabel);
