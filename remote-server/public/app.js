@@ -11,6 +11,10 @@ const elements = {
   connectionState: document.querySelector("#connectionState"),
   loginError: document.querySelector("#loginError"),
   deviceCount: document.querySelector("#deviceCount"),
+  sessionUser: document.querySelector("#sessionUser"),
+  sessionTask: document.querySelector("#sessionTask"),
+  sessionStartedAt: document.querySelector("#sessionStartedAt"),
+  sessionRuntime: document.querySelector("#sessionRuntime"),
   deviceList: document.querySelector("#deviceList"),
   deviceTemplate: document.querySelector("#deviceTemplate"),
   eventLog: document.querySelector("#eventLog"),
@@ -154,6 +158,7 @@ function renderSingleTransfer() {
   document.querySelector("#singleTransferDetail").textContent = singleTransfer.message || "";
   document.querySelector("#cancelSingleTransfer").disabled =
     !["running", "intervention"].includes(singleTransfer.status);
+  renderSessionOverview();
 }
 
 function renderEquipmentChecks() {
@@ -488,6 +493,7 @@ function resetUserWorkspace() {
   showFeedback("请选择任务。设备接受指令后，仍需等待实际执行结果。");
   renderDailyPlan();
   renderQuickAccountControls();
+  renderSessionOverview();
 }
 
 function handleMessage(message) {
@@ -499,6 +505,7 @@ function handleMessage(message) {
       elements.dashboard.classList.remove("hidden");
       addLog("控制台已安全连接");
       elements.userAdminPanel.classList.toggle("hidden", signedInUser.role !== "admin");
+      renderSessionOverview();
       break;
     case "control.rejected":
       manuallyClosed = true;
@@ -715,6 +722,69 @@ function renderDailyPlan() {
   } else {
     elements.planIntervention.classList.add("hidden");
   }
+  renderSessionOverview();
+}
+
+function formatDuration(milliseconds) {
+  const total = Math.max(0, Math.floor(Number(milliseconds || 0) / 1_000));
+  const hours = Math.floor(total / 3_600);
+  const minutes = Math.floor((total % 3_600) / 60);
+  const seconds = total % 60;
+  return [hours, minutes, seconds].map((part) => String(part).padStart(2, "0")).join(":");
+}
+
+function activeDeviceScript() {
+  const active = [];
+  for (const device of devices.values()) {
+    for (const account of device.telemetry?.accounts || []) {
+      const automation = account?.automation || {};
+      if (!automation.busy && automation.status !== "running") continue;
+      active.push({ label: account.label || `账号${Number(account.index) + 1}`,
+        message: automation.lastMessage || automation.task || "正在执行",
+        startedAt: Number(automation.startedAt) || 0 });
+    }
+  }
+  if (!active.length) return null;
+  const starts = active.map((entry) => entry.startedAt).filter((value) => value > 0);
+  return { label: active.length === 1
+    ? `${active[0].label} · ${active[0].message}` : `${active.length}个账号脚本正在运行`,
+  startedAt: starts.length ? Math.min(...starts) : 0, running: true };
+}
+
+function activeScriptSummary() {
+  const planActive = ["running", "reconnecting", "intervention"].includes(dailyPlan.status);
+  if (planActive) {
+    const labels = { running: "运行中", reconnecting: "等待设备重连",
+      intervention: "等待人工处理" };
+    return { label: `多用户挂机 · ${labels[dailyPlan.status] || dailyPlan.status}`,
+      startedAt: Number(dailyPlan.startedAt) || 0,
+      running: true };
+  }
+  if (["running", "intervention"].includes(singleTransfer.status)) {
+    return { label: `单次装备转移 · ${singleTransfer.message || "正在执行"}`,
+      startedAt: Number(singleTransfer.startedAt) || 0, running: true };
+  }
+  const deviceScript = activeDeviceScript();
+  if (deviceScript) return deviceScript;
+  if (dailyPlan.status === "success" && Number(dailyPlan.startedAt) > 0) {
+    return { label: "多用户挂机 · 已完成", startedAt: Number(dailyPlan.startedAt),
+      endedAt: Number(dailyPlan.updatedAt) || Date.now(), running: false };
+  }
+  return { label: "暂无运行中的脚本", startedAt: 0, running: false };
+}
+
+function renderSessionOverview() {
+  if (!elements.sessionUser) return;
+  const role = signedInUser?.role === "admin" ? "管理员" : "用户";
+  elements.sessionUser.textContent = signedInUser?.username
+    ? `${signedInUser.username} · ${role}` : "未登录";
+  const script = activeScriptSummary();
+  elements.sessionTask.textContent = script.label;
+  elements.sessionStartedAt.textContent = script.startedAt
+    ? new Date(script.startedAt).toLocaleTimeString("zh-CN", { hour12: false }) : "--";
+  const end = script.endedAt || Date.now();
+  elements.sessionRuntime.textContent = script.startedAt
+    ? formatDuration(end - script.startedAt) : "00:00:00";
 }
 
 function readPlanOptions() {
@@ -877,6 +947,7 @@ renderDailyPlan();
 renderPlanReturnMaps();
 setInterval(() => {
   if (["intervention", "error", "cancelled"].includes(dailyPlan.status)) renderDailyPlan();
+  else renderSessionOverview();
 }, 1_000);
 
 function runKeepPlayerCommand(command) {
