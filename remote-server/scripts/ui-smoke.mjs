@@ -8,11 +8,11 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
 const root = fileURLToPath(new URL("../public/", import.meta.url));
-const out = fileURLToPath(new URL("../../dist/v2.0.3-rc1-ui-qa/", import.meta.url));
+const out = fileURLToPath(new URL("../../dist/v2.0.4-ui-qa/", import.meta.url));
 await fs.mkdir(out, { recursive: true });
 const browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || "msedge", headless: true });
 try {
-  for (const width of [390, 1440]) {
+  for (const width of [390, 768, 1440]) {
     const page = await browser.newPage({ viewport: { width, height: 900 } });
     const errors = [];
     page.on("pageerror", e => errors.push(e.message));
@@ -84,10 +84,18 @@ try {
     await page.evaluate(() => window.mockSocket.receive({ type: "equipment.transfer.update", payload: { status: "intervention", message: "设备离线，已暂停" } }));
     await page.locator("#singleTransferPanel").waitFor({ state: "visible" });
     assert.equal(await page.locator("#cancelSingleTransfer").isEnabled(), true);
+    await page.evaluate(() => window.mockSocket.receive({ type: "plan.update", plan: "eight_account_daily", payload: {
+      status: "running", mode: "daily", phase: "dungeons", equipmentHolderLabel: "hao6", legIndex: 2,
+      startedAt: Date.now() - 3_723_000, updatedAt: Date.now(), history: []
+    } }));
+    assert.match(await page.locator("#sessionUser").textContent(), /fixture · 用户/);
+    assert.match(await page.locator("#sessionTask").textContent(), /多用户挂机 · 运行中/);
+    assert.notEqual(await page.locator("#sessionStartedAt").textContent(), "--");
+    assert.match(await page.locator("#sessionRuntime").textContent(), /^01:02:/);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     assert.deepEqual(errors, []);
     await page.screenshot({ path: path.join(out, `console-${width}.png`), fullPage: true });
     await page.close();
-    console.log(`PASS ${width}px: page load, manual confirmation/cancel, error feedback, transfer panel, no horizontal overflow`);
+    console.log(`PASS ${width}px: responsive status cards, live user/runtime, confirmation/cancel and no horizontal overflow`);
   }
 } finally { await browser.close(); }

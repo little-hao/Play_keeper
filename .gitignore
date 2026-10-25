@@ -13,6 +13,7 @@ dist/*.apk
 dist/*.tar.gz
 dist/*/*.apk
 dist/*/*.idsig
+dist/*-ui-qa/
 captures/
 externalNativeBuild/
 .cxx/

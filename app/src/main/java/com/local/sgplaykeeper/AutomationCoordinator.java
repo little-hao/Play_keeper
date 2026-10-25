@@ -558,7 +558,8 @@ final class AutomationCoordinator {
         state.task = "seller_cleanup";
         state.status = "running";
         state.lastMessage = "正在重新穿戴剩余装备并返回" + returnHangMap(accountIndex);
-        state.updatedAt = System.currentTimeMillis();
+        state.startedAt = System.currentTimeMillis();
+        state.updatedAt = state.startedAt;
         state.manualRun = false;
         state.orientationRecoveryClicked = false;
         host.onAutomationChanged();
@@ -592,7 +593,8 @@ final class AutomationCoordinator {
         state.task = "daily_tasks";
         state.status = "running";
         state.lastMessage = "正在打开日常任务并一键接受";
-        state.updatedAt = System.currentTimeMillis();
+        state.startedAt = System.currentTimeMillis();
+        state.updatedAt = state.startedAt;
         state.manualRun = true;
         host.onAutomationChanged();
         WebView view;
@@ -747,6 +749,7 @@ final class AutomationCoordinator {
         automation.put("task", state.task);
         automation.put("status", state.status);
         automation.put("lastMessage", state.lastMessage);
+        automation.put("startedAt", state.startedAt);
         automation.put("updatedAt", state.updatedAt);
         automation.put("monitorStatus", state.monitorStatus);
         automation.put("monitorMessage", state.monitorMessage);
@@ -866,7 +869,8 @@ final class AutomationCoordinator {
         state.task = selling ? "equipment_sell" : "equipment_buy";
         state.status = "running";
         state.lastMessage = selling ? "正在打开主宠资料并执行一键脱装备" : "正在打开装备交易所购买";
-        state.updatedAt = System.currentTimeMillis();
+        state.startedAt = System.currentTimeMillis();
+        state.updatedAt = state.startedAt;
         state.orientationRecoveryClicked = false;
         state.auctionListedCount = 0;
         state.equipmentListedInBatch = 0;
@@ -1843,7 +1847,8 @@ final class AutomationCoordinator {
         state.task = "auction";
         state.status = "running";
         state.lastMessage = "正在打开道具交易所";
-        state.updatedAt = System.currentTimeMillis();
+        state.startedAt = System.currentTimeMillis();
+        state.updatedAt = state.startedAt;
         state.orientationRecoveryClicked = false;
         state.auctionListedCount = 0;
         state.manualRun = manual;
@@ -2081,7 +2086,8 @@ final class AutomationCoordinator {
         state.task = "auction_buy";
         state.status = "running";
         state.lastMessage = "正在打开道具交易所购买";
-        state.updatedAt = System.currentTimeMillis();
+        state.startedAt = System.currentTimeMillis();
+        state.updatedAt = state.startedAt;
         state.orientationRecoveryClicked = false;
         state.auctionPurchasedCount = 0;
         state.manualRun = manual;
@@ -2279,7 +2285,8 @@ final class AutomationCoordinator {
         state.task = completion == null ? "store_sell" : "equipment_buy";
         state.status = "running";
         state.lastMessage = "正在打开中心城镇道具商店";
-        state.updatedAt = System.currentTimeMillis();
+        state.startedAt = System.currentTimeMillis();
+        state.updatedAt = state.startedAt;
         state.orientationRecoveryClicked = false;
         host.onAutomationChanged();
         WebView view;
@@ -3124,7 +3131,8 @@ final class AutomationCoordinator {
             state.task = "dungeon_queue";
             state.status = "running";
             state.lastMessage = "正在进入指定副本组合";
-            state.updatedAt = System.currentTimeMillis();
+            state.startedAt = System.currentTimeMillis();
+            state.updatedAt = state.startedAt;
             state.manualRun = manual;
             state.dungeonIndex = 0;
             state.dungeonStarted = false;
@@ -3186,7 +3194,8 @@ final class AutomationCoordinator {
             state.task = "inventory_snapshot";
             state.status = "running";
             state.lastMessage = "正在读取背包物资快照";
-            state.updatedAt = System.currentTimeMillis();
+            state.startedAt = System.currentTimeMillis();
+            state.updatedAt = state.startedAt;
             state.manualRun = manual;
             host.onAutomationChanged();
             host.prepareAutomation(accountIndex, false);
@@ -3307,7 +3316,8 @@ final class AutomationCoordinator {
             state.task = "prestige";
             state.status = "running";
             state.lastMessage = "正在检查圣殿挂机与威望道具";
-            state.updatedAt = System.currentTimeMillis();
+            state.startedAt = System.currentTimeMillis();
+            state.updatedAt = state.startedAt;
             state.manualRun = manual;
             host.onAutomationChanged();
             host.prepareAutomation(accountIndex, false);
@@ -3509,7 +3519,8 @@ final class AutomationCoordinator {
             state.task = "warehouse";
             state.status = "running";
             state.lastMessage = "正在检查背包存仓组合：" + warehouseItemsText(accountIndex);
-            state.updatedAt = System.currentTimeMillis();
+            state.startedAt = System.currentTimeMillis();
+            state.updatedAt = state.startedAt;
             state.manualRun = manual;
             host.onAutomationChanged();
             host.prepareAutomation(accountIndex, false);
@@ -3718,7 +3729,8 @@ final class AutomationCoordinator {
             state.task = "temple";
             state.status = "running";
             state.lastMessage = "正在检查" + returnMap + "挂机";
-            state.updatedAt = System.currentTimeMillis();
+            state.startedAt = System.currentTimeMillis();
+            state.updatedAt = state.startedAt;
             state.templeStoragePrepared = false;
             host.onAutomationChanged();
             host.prepareAutomation(accountIndex, false);
@@ -4054,6 +4066,7 @@ final class AutomationCoordinator {
         String task = "none";
         String status = "idle";
         String lastMessage = "尚未运行";
+        long startedAt;
         long updatedAt;
         final Set<String> storeSoldNames = new LinkedHashSet<>();
         String monitorStatus = "unknown";
