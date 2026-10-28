@@ -89,6 +89,9 @@ test("relay starts the cross-device first leg and starts buyer after exchange li
   const [sellerCommands, buyerCommands] = await Promise.all([sellerStart, buyerConfig]);
   assert.deepEqual(sellerCommands.map((message) => message.command),
     ["configure_equipment_transfer", "run_equipment_sell"]);
+  assert.ok([...sellerCommands, ...buyerCommands].every((message) =>
+    typeof message.stepId === "string" && message.stepId.length > 20));
+  assert.equal(new Set([...sellerCommands, ...buyerCommands].map((message) => message.stepId)).size, 6);
   assert.equal(sellerCommands[0].parameters.buyer, "hao1");
   assert.equal(sellerCommands[0].parameters.items.length, 10);
   assert.deepEqual(buyerCommands.map((message) => message.command), [

@@ -19,5 +19,12 @@ test("persists one diagnostic entry per user and deduplicates repeated updates",
   assert.match(document, /霜冻前夜 多用户挂机报错说明/);
   assert.equal(document.match(/测试错误/g)?.length, 1);
   assert.doesNotMatch(store.read("hao"), /测试错误/);
+  assert.equal(store.writeBundle(plan, { devices: [{ deviceId: "PK-1" }],
+    screenshot: { accountIndex: 0, mime: "image/jpeg", imageBase64: "AA==" },
+    gptSuggestion: { summary: "只读建议", suggestionOnly: true } }), true);
+  const bundle = JSON.parse(store.readBundle("霜冻前夜"));
+  assert.equal(bundle.format, "play-keeper-stall-diagnostic/v1");
+  assert.equal(bundle.plan.gptSuggestion.summary, "只读建议");
+  assert.match(bundle.notice, /未触发/);
   fs.rmSync(directory, { recursive: true, force: true });
 });

@@ -1,11 +1,17 @@
 package com.local.sgplaykeeper;
 
+import android.content.Context;
+
 import android.os.Handler;
 import android.os.Looper;
 
 import org.json.JSONException;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.OkHttpClient;
@@ -25,7 +31,7 @@ final class RemoteConnectionManager {
     interface Listener {
         void onRemoteStateChanged(State state, String message);
 
-        void onRemoteCommand(String commandId, String command, JSONObject parameters);
+        void onRemoteCommand(String commandId, String stepId, String command, JSONObject parameters);
 
         JSONObject createTelemetry();
     }
@@ -36,6 +42,10 @@ final class RemoteConnectionManager {
     private static final int MAX_MESSAGE_CHARS = 262_144;
 
     private final Listener listener;
+    private final ExecutionLedgerStore executionLedger;
+    private final Map<String, String> stepByCommandId = new ConcurrentHashMap<>();
+    private final String connectionSessionId = UUID.randomUUID().toString();
+    private long telemetrySequence;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final OkHttpClient client = new OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
@@ -51,8 +61,9 @@ final class RemoteConnectionManager {
     private int reconnectAttempt;
     private int generation;
 
-    RemoteConnectionManager(Listener listener) {
+    RemoteConnectionManager(Context context, Listener listener) {
         this.listener = listener;
+        this.executionLedger = new ExecutionLedgerStore(context.getApplicationContext());
     }
 
     void start(RemoteConfigStore.Config newConfig) {
@@ -88,6 +99,8 @@ final class RemoteConnectionManager {
             envelope.put("type", "telemetry.update");
             envelope.put("deviceId", config.deviceId);
             envelope.put("timestamp", System.currentTimeMillis());
+            envelope.put("connectionSessionId", connectionSessionId);
+            envelope.put("telemetrySequence", ++telemetrySequence);
             envelope.put("payload", listener.createTelemetry());
             webSocket.send(envelope.toString());
         } catch (JSONException ignored) {
@@ -96,16 +109,27 @@ final class RemoteConnectionManager {
     }
 
     void sendCommandResult(String commandId, boolean success, String message) {
-        if (!authenticated || webSocket == null) {
-            return;
-        }
+        String stepId = stepByCommandId.remove(commandId);
+        if (stepId != null) executionLedger.finish(stepId, success, message);
+        sendCommandResultEnvelope(commandId, stepId, success, message, false);
+    }
+
+    JSONArray executionLedgerTelemetry() {
+        return executionLedger.toTelemetry();
+    }
+
+    private void sendCommandResultEnvelope(String commandId, String stepId, boolean success,
+                                           String message, boolean replayed) {
+        if (!authenticated || webSocket == null) return;
         try {
             JSONObject result = new JSONObject();
             result.put("type", "command.result");
             result.put("deviceId", config.deviceId);
             result.put("commandId", commandId);
+            if (stepId != null && !stepId.isBlank()) result.put("stepId", stepId);
             result.put("success", success);
             result.put("message", message);
+            result.put("replayed", replayed);
             result.put("timestamp", System.currentTimeMillis());
             webSocket.send(result.toString());
         } catch (JSONException ignored) {
@@ -126,6 +150,20 @@ final class RemoteConnectionManager {
             webSocket.send(envelope.toString());
         } catch (JSONException ignored) {
             // Preview is best effort. The next scheduled frame can recover.
+        }
+    }
+
+    void sendDiagnosticSnapshot(JSONObject frame) {
+        if (!authenticated || webSocket == null) return;
+        try {
+            JSONObject envelope = new JSONObject();
+            envelope.put("type", "diagnostic.snapshot");
+            envelope.put("deviceId", config.deviceId);
+            envelope.put("timestamp", System.currentTimeMillis());
+            envelope.put("payload", frame);
+            webSocket.send(envelope.toString());
+        } catch (JSONException ignored) {
+            // Diagnostic capture is advisory and never interrupts automation.
         }
     }
 
@@ -277,6 +315,7 @@ final class RemoteConnectionManager {
 
         private void handleCommand(JSONObject message) throws JSONException {
             String commandId = message.optString("commandId");
+            String stepId = message.optString("stepId", commandId).trim();
             String command = message.optString("command");
             long expiresAt = message.optLong("expiresAt", 0L);
             JSONObject parameters = message.optJSONObject("parameters");
@@ -287,12 +326,26 @@ final class RemoteConnectionManager {
                 return;
             }
             if (expiresAt > 0L && System.currentTimeMillis() > expiresAt) {
-                sendCommandResult(commandId, false, "命令已过期");
+                sendCommandResultEnvelope(commandId, stepId, false, "命令已过期", false);
                 return;
             }
+            ExecutionLedgerStore.Entry previous = executionLedger.find(stepId);
+            if (previous != null) {
+                if (previous.isFinal()) {
+                    sendCommandResultEnvelope(commandId, stepId, previous.success,
+                            previous.message.isBlank() ? "已回放本机步骤结果" : previous.message, true);
+                } else {
+                    sendCommandResultEnvelope(commandId, stepId, true,
+                            "相同步骤已在本机执行，未重复启动", true);
+                }
+                return;
+            }
+            int accountIndex = parameters.optInt("accountIndex", -1);
+            executionLedger.markRunning(stepId, command, accountIndex);
+            stepByCommandId.put(commandId, stepId);
             JSONObject safeParameters = parameters;
             mainHandler.post(() -> listener.onRemoteCommand(
-                    commandId, command, safeParameters));
+                    commandId, stepId, command, safeParameters));
         }
     }
 }

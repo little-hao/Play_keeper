@@ -14,6 +14,25 @@ const REQUIRED_ROUTE = Object.freeze([
 ]);
 
 const MAIN_BUY_TIMEOUT_MS = 60_000;
+export const DEFAULT_DISCONNECT_GRACE_MS = 120_000;
+export const DEFAULT_PHASE_TIMEOUTS = Object.freeze({
+  starting_leg: 120_000,
+  seller_running: 240_000,
+  buyer_running: 720_000,
+  resource_auction_running: 240_000,
+  standalone_main_running: 900_000,
+  main_buy_running: 90_000
+});
+
+function normalizedTimeouts(value = {}) {
+  const result = { ...DEFAULT_PHASE_TIMEOUTS };
+  for (const [phase, fallback] of Object.entries(DEFAULT_PHASE_TIMEOUTS)) {
+    const candidate = Number(value?.[phase]);
+    result[phase] = Number.isFinite(candidate) && candidate >= 30_000 && candidate <= 3_600_000
+      ? Math.round(candidate) : fallback;
+  }
+  return result;
+}
 
 function shanghaiDateKey(timestamp) {
   if (!Number.isFinite(Number(timestamp)) || Number(timestamp) <= 0) return "";
@@ -73,6 +92,11 @@ export class EightAccountPlan {
       resourceItems: [...RESOURCE_ITEMS], inventoryItems: [...RESOURCE_ITEMS],
       resourceReserveCount: 1, price: 920, resourcePrice: 920,
       returnMap: "圣兽云殿", returnMaps: {},
+      disconnectGraceMs: DEFAULT_DISCONNECT_GRACE_MS, disconnectedDevices: {},
+      phaseTimeouts: { ...DEFAULT_PHASE_TIMEOUTS }, lastProgressAt: 0,
+      lastProgressSignature: "", currentStepId: "", stepSequence: 0,
+      stepLedger: [], eventLedger: [], diagnosticRequested: false,
+      diagnosticReason: "", gptSuggestion: null, recoveryPending: false,
       dungeonItems: ["绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"],
       reportEmail: "", ownerUsername: "", error: "", errorAccount: "",
       interventionDeadlineAt: 0, emailStatus: "pending", inventoryByAccount: {}, history: [] };
@@ -106,15 +130,27 @@ export class EightAccountPlan {
         ? savedState.resourcePrice : (Number.isInteger(savedState.price) ? savedState.price : 920),
       returnMaps: savedState.returnMaps && typeof savedState.returnMaps === "object"
         && !Array.isArray(savedState.returnMaps) ? { ...savedState.returnMaps } : {},
+      phaseTimeouts: normalizedTimeouts(savedState.phaseTimeouts),
+      disconnectedDevices: savedState.disconnectedDevices
+        && typeof savedState.disconnectedDevices === "object"
+        ? { ...savedState.disconnectedDevices } : {},
+      stepLedger: Array.isArray(savedState.stepLedger) ? savedState.stepLedger.slice(-200) : [],
+      eventLedger: Array.isArray(savedState.eventLedger) ? savedState.eventLedger.slice(-300) : [],
       history: Array.isArray(savedState.history) ? [...savedState.history] : [],
       inventoryByAccount: savedState.inventoryByAccount
         && typeof savedState.inventoryByAccount === "object"
         ? { ...savedState.inventoryByAccount } : {} };
     if (this.state.status === "running") {
-      this.state.resumePhase = this.state.phase;
-      this.state.status = "intervention";
-      this.state.error = `服务恢复后已暂停；请人工确认目标套装所在账号`;
-      this.state.errorAccount = this.state.equipmentHolderLabel || "当前账号";
+      this.state.recoveryPending = true;
+      const offlineAt = this.now();
+      for (const account of this.#currentAccounts()) {
+        this.state.disconnectedDevices[account.deviceId] = {
+          offlineAt, deadlineAt: offlineAt + this.state.disconnectGraceMs,
+          accountLabel: account.accountLabel
+        };
+      }
+      this.#event("vps_recovery_started", { outstandingSteps:
+        this.state.stepLedger.filter((entry) => entry.status === "dispatched").length });
     }
     if (this.state.status === "intervention") this.state.interventionDeadlineAt = 0;
     this.state.updatedAt = this.now();
@@ -137,6 +173,8 @@ export class EightAccountPlan {
     const returnMaps = options.returnMaps && typeof options.returnMaps === "object"
       && !Array.isArray(options.returnMaps) ? options.returnMaps : {};
     const reportEmail = options.reportEmail ?? "";
+    const disconnectGraceMs = Number(options.disconnectGraceMs ?? DEFAULT_DISCONNECT_GRACE_MS);
+    const phaseTimeouts = normalizedTimeouts(options.phaseTimeouts);
     if (!Number.isInteger(price) || price < 1 || price > 9_999_999) throw new Error("交易单价无效");
     if (!Number.isInteger(resourcePrice) || resourcePrice < 1 || resourcePrice > 9_999_999) {
       throw new Error("道具交易单价无效");
@@ -170,6 +208,8 @@ export class EightAccountPlan {
         || (reportEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail.trim()))) {
       throw new Error("报告邮箱格式无效");
     }
+    if (!Number.isFinite(disconnectGraceMs) || disconnectGraceMs < 30_000
+        || disconnectGraceMs > 600_000) throw new Error("断线宽限期需为30–600秒");
     const now = this.now();
     const fullRoute = route.map((entry) => ({ ...entry,
       dungeonCompletedToday: completedToday(entry, now) }));
@@ -190,6 +230,8 @@ export class EightAccountPlan {
       resourceReserveCount,
       dungeonItems: [...new Set(dungeonItems.map((item) => String(item).trim()).filter(Boolean))],
       price, resourcePrice, returnMap: returnMap.trim(), returnMaps: normalizedReturnMaps,
+      disconnectGraceMs: Math.round(disconnectGraceMs), phaseTimeouts,
+      lastProgressAt: now,
       reportEmail: reportEmail.trim(),
       ownerUsername: String(options.ownerUsername ?? "").trim() };
     if (this.state.route.length === 2) {
@@ -241,6 +283,9 @@ export class EightAccountPlan {
       resourceItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
       inventoryItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
       resourceReserveCount, price: 920, resourcePrice, returnMap,
+      disconnectGraceMs: Math.round(Number(options.disconnectGraceMs)
+        || DEFAULT_DISCONNECT_GRACE_MS), phaseTimeouts: normalizedTimeouts(options.phaseTimeouts),
+      lastProgressAt: now,
       returnMaps: normalizedReturnMaps,
       ownerUsername: String(options.ownerUsername ?? "").trim() };
     this.#startResourceAuction(this.state.route[0]);
@@ -352,6 +397,24 @@ export class EightAccountPlan {
   }
 
   tick() {
+    if (this.state.status === "running") {
+      for (const [deviceId, offline] of Object.entries(this.state.disconnectedDevices || {})) {
+        if (this.now() < Number(offline?.deadlineAt || 0)) continue;
+        const account = this.#currentAccounts().find((entry) => entry?.deviceId === deviceId);
+        if (account) return this.#intervene(
+          `设备 ${deviceId} 超过${Math.round(this.state.disconnectGraceMs / 1000)}秒未重连`,
+          account.accountLabel);
+        delete this.state.disconnectedDevices[deviceId];
+      }
+      const timeout = Number(this.state.phaseTimeouts?.[this.state.phase] || 0);
+      const waitingForReconnect = Object.keys(this.state.disconnectedDevices || {}).length > 0;
+      if (!waitingForReconnect && timeout > 0 && this.state.lastProgressAt > 0
+          && this.now() - this.state.lastProgressAt >= timeout) {
+        return this.#intervene(
+          `阶段 ${this.state.phase} 已连续${Math.round(timeout / 1000)}秒无可验证进展`,
+          this.#currentLeg()?.buyer?.accountLabel || this.state.equipmentHolderLabel || "当前账号");
+      }
+    }
     if (this.state.status === "running" && this.state.phase === "main_buy_running"
         && !this.state.mainBuyTimedOut
         && this.now() - this.state.phaseStartedAt >= MAIN_BUY_TIMEOUT_MS) {
@@ -383,16 +446,46 @@ export class EightAccountPlan {
 
   onDeviceOffline(deviceId) {
     if (this.state.status !== "running") return this.snapshot();
-    const leg = this.#currentLeg();
-    if (leg && (leg.seller.deviceId === deviceId || leg.buyer.deviceId === deviceId)) {
-      const account = leg.seller.deviceId === deviceId ? leg.seller : leg.buyer;
-      return this.#handleAccountFailure(account, `设备 ${deviceId} 已离线`);
+    const account = this.#currentAccounts().find((entry) => entry?.deviceId === deviceId);
+    if (account) {
+      const offlineAt = this.now();
+      this.state.disconnectedDevices[deviceId] = {
+        offlineAt, deadlineAt: offlineAt + this.state.disconnectGraceMs,
+        accountLabel: account.accountLabel
+      };
+      this.#event("device_offline", { deviceId, accountLabel: account.accountLabel,
+        deadlineAt: offlineAt + this.state.disconnectGraceMs });
+      this.state.updatedAt = offlineAt;
     }
     return this.snapshot();
   }
 
+  onDeviceOnline(deviceId) {
+    if (!this.state.disconnectedDevices?.[deviceId]) return this.snapshot();
+    const offlineAt = Number(this.state.disconnectedDevices[deviceId].offlineAt || 0);
+    delete this.state.disconnectedDevices[deviceId];
+    this.state.recoveryPending = Object.keys(this.state.disconnectedDevices).length > 0;
+    this.#event("device_reconnected", { deviceId,
+      outageMs: Math.max(0, this.now() - offlineAt) });
+    this.state.lastProgressAt = this.now();
+    this.state.updatedAt = this.now();
+    return this.snapshot();
+  }
+
+  isDeviceInGrace(deviceId) {
+    const entry = this.state.disconnectedDevices?.[deviceId];
+    return Boolean(entry && this.now() < Number(entry.deadlineAt || 0));
+  }
+
   onTelemetry(deviceId, telemetry) {
     if (this.state.status !== "running") return this.snapshot();
+    this.onDeviceOnline(deviceId);
+    const signature = this.#progressSignature(deviceId, telemetry);
+    if (signature && signature !== this.state.lastProgressSignature) {
+      this.state.lastProgressSignature = signature;
+      this.state.lastProgressAt = this.now();
+      this.#event("progress", { deviceId, phase: this.state.phase });
+    }
     if (this.state.mode === "resource_sweep") {
       return this.#onResourceSweepTelemetry(deviceId, telemetry);
     }
@@ -776,9 +869,19 @@ export class EightAccountPlan {
   }
 
   #command(account, command, parameters) {
+    const stepId = `${this.state.runId}:${this.state.legIndex}:${++this.state.stepSequence}`;
+    const step = { stepId, deviceId: account.deviceId, accountLabel: account.accountLabel,
+      command, accountIndex: parameters?.accountIndex, legIndex: this.state.legIndex,
+      phase: this.state.phase, parameters: JSON.parse(JSON.stringify(parameters || {})),
+      status: "dispatched", createdAt: this.now(), updatedAt: this.now() };
+    this.state.currentStepId = stepId;
+    this.state.stepLedger.push(step);
+    if (this.state.stepLedger.length > 200) this.state.stepLedger.splice(0,
+      this.state.stepLedger.length - 200);
+    this.#event("step_dispatched", { stepId, command, accountLabel: account.accountLabel });
     this.emitAction({ deviceId: account.deviceId, accountLabel: account.accountLabel,
       command, parameters, runId: this.state.runId, legIndex: this.state.legIndex,
-      phase: this.state.phase });
+      phase: this.state.phase, stepId });
   }
 
   #returnMapFor(account) {
@@ -790,6 +893,12 @@ export class EightAccountPlan {
   }
 
   onCommandResult(action, success, message = "") {
+    const step = action?.stepId
+      ? this.state.stepLedger.find((entry) => entry.stepId === action.stepId) : null;
+    if (step) Object.assign(step, { status: success ? "acknowledged" : "failed",
+      success: Boolean(success), message: String(message || "").slice(0, 240), updatedAt: this.now() });
+    if (action?.stepId) this.#event(success ? "step_acknowledged" : "step_failed",
+      { stepId: action.stepId, command: action.command, message: String(message || "").slice(0, 160) });
     if (!action || action.runId !== this.state.runId || this.state.status !== "running") {
       return this.snapshot();
     }
@@ -805,8 +914,60 @@ export class EightAccountPlan {
   #intervene(message, accountLabel) {
     this.state.resumePhase = this.state.phase;
     Object.assign(this.state, { status: "intervention", error: message, errorAccount: accountLabel,
-      interventionDeadlineAt: 0, updatedAt: this.now() });
+      interventionDeadlineAt: 0, diagnosticRequested: true,
+      diagnosticReason: String(message || "").slice(0, 240), updatedAt: this.now() });
+    this.#event("intervention", { accountLabel, message: String(message || "").slice(0, 240) });
     return this.snapshot();
+  }
+
+  applyGptSuggestion(suggestion) {
+    this.state.gptSuggestion = suggestion && typeof suggestion === "object"
+      ? JSON.parse(JSON.stringify(suggestion)) : null;
+    this.state.diagnosticRequested = false;
+    this.state.updatedAt = this.now();
+    return this.snapshot();
+  }
+
+  outstandingActionsForDevice(deviceId) {
+    if (this.state.status !== "running") return [];
+    return this.state.stepLedger.filter((entry) => entry.deviceId === deviceId
+      && entry.status === "dispatched").map((entry) => ({
+      deviceId: entry.deviceId, accountLabel: entry.accountLabel, command: entry.command,
+      parameters: JSON.parse(JSON.stringify(entry.parameters || {})),
+      runId: this.state.runId, legIndex: entry.legIndex, phase: entry.phase,
+      stepId: entry.stepId
+    }));
+  }
+
+  #currentAccounts() {
+    if (this.state.mode === "resource_sweep") {
+      const entry = this.state.route[this.state.legIndex];
+      return entry ? [entry] : [];
+    }
+    const leg = this.#currentLeg();
+    return [leg?.seller, leg?.buyer].filter(Boolean);
+  }
+
+  #progressSignature(deviceId, telemetry) {
+    const accounts = Array.isArray(telemetry?.accounts) ? telemetry.accounts : [];
+    const relevant = this.#currentAccounts().filter((entry) => entry.deviceId === deviceId);
+    const values = relevant.map((entry) => {
+      const account = accounts.find((candidate) => candidate?.index === entry.accountIndex);
+      const automation = account?.automation || {};
+      return [entry.accountLabel, automation.task, automation.status, automation.lastMessage,
+        automation.updatedAt, automation.equipmentListedInBatch,
+        automation.equipmentTransferLastRunAt, automation.dungeonLastRunAt,
+        automation.finalEquipLastRunAt, automation.auctionLastRunAt].join("|");
+    });
+    return values.length ? `${this.state.phase}:${values.join(";")}` : "";
+  }
+
+  #event(type, details = {}) {
+    this.state.eventLedger.push({ eventId: crypto.randomUUID(), type,
+      runId: this.state.runId, legIndex: this.state.legIndex, phase: this.state.phase,
+      timestamp: this.now(), ...details });
+    if (this.state.eventLedger.length > 300) this.state.eventLedger.splice(0,
+      this.state.eventLedger.length - 300);
   }
 
   #validateRoute(route) {

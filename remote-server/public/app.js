@@ -44,6 +44,10 @@ const elements = {
   planReturnMap: document.querySelector("#planReturnMap"),
   planReturnMaps: document.querySelector("#planReturnMaps"),
   planReportEmail: document.querySelector("#planReportEmail"),
+  planDisconnectGrace: document.querySelector("#planDisconnectGrace"),
+  planSellerTimeout: document.querySelector("#planSellerTimeout"),
+  planBuyerTimeout: document.querySelector("#planBuyerTimeout"),
+  planResourceTimeout: document.querySelector("#planResourceTimeout"),
   planScheduleEnabled: document.querySelector("#planScheduleEnabled"),
   planScheduleTime: document.querySelector("#planScheduleTime"),
   savePlanSchedule: document.querySelector("#savePlanSchedule"),
@@ -60,6 +64,7 @@ const elements = {
   quickHangMap: document.querySelector("#quickHangMap"),
   quickStartHang: document.querySelector("#quickStartHang"),
   downloadPlanDiagnostics: document.querySelector("#downloadPlanDiagnostics"),
+  downloadDiagnosticBundle: document.querySelector("#downloadDiagnosticBundle"),
   keepPlayerDevice: document.querySelector("#keepPlayerDevice"),
   startKeepPlayer: document.querySelector("#startKeepPlayer"),
   exitKeepPlayer: document.querySelector("#exitKeepPlayer"),
@@ -268,6 +273,10 @@ elements.savePlanSchedule.addEventListener("click", () => {
 elements.downloadPlanDiagnostics.addEventListener("click", () => {
   if (socket?.readyState !== WebSocket.OPEN) return addLog("控制台尚未连接");
   socket.send(JSON.stringify({ type: "plan.diagnostics.request" }));
+});
+elements.downloadDiagnosticBundle.addEventListener("click", () => {
+  if (socket?.readyState !== WebSocket.OPEN) return addLog("控制台尚未连接");
+  socket.send(JSON.stringify({ type: "plan.diagnostics.bundle.request" }));
 });
 elements.planResourcePreset.addEventListener("change", () => {
   if (auctionPresets[elements.planResourcePreset.value]) {
@@ -595,6 +604,18 @@ function handleMessage(message) {
       addLog("本用户多用户挂机报错说明已下载");
       break;
     }
+    case "plan.diagnostics.bundle": {
+      const content = typeof message.content === "string" ? message.content : "{}";
+      const filename = message.filename || "PlayKeeper-卡顿诊断包.json";
+      const url = URL.createObjectURL(new Blob([content], { type: "application/json;charset=utf-8" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1_000);
+      addLog("最新卡顿诊断包已下载");
+      break;
+    }
     case "admin.snapshot":
       adminSnapshot = message.payload ?? adminSnapshot;
       renderAdminPanel();
@@ -651,9 +672,13 @@ function renderDailyPlan() {
     ? dailyPlan.skippedDungeonAccounts.filter(Boolean) : [];
   const routeSummary = skipped.length
     ? ` · 本轮路线：${effectiveRoute}（已跳过今日副本完成：${skipped.join("、")}）` : "";
+  const offlineEntries = Object.values(dailyPlan.disconnectedDevices || {});
+  const reconnectSummary = offlineEntries.length
+    ? ` · 等待设备重连：${offlineEntries.map((entry) => entry.accountLabel || "设备").join("、")}` : "";
   elements.dailyPlanDetail.textContent = (dailyPlan.error
     ? `装备所在：${holder} · ${dailyPlan.error}`
-    : `当前：${current} · 装备所在：${holder} · 已完成 ${completed}/${total}${email}`) + routeSummary;
+    : `当前：${current} · 装备所在：${holder} · 已完成 ${completed}/${total}${email}`)
+    + routeSummary + reconnectSummary;
   elements.dailyPlanProgress.style.width = `${Math.min(100, completed * 100 / total)}%`;
   elements.startDailyPlan.disabled = ["running", "intervention"].includes(dailyPlan.status);
   elements.retryDailyPlan.disabled = !["intervention", "error", "cancelled"].includes(dailyPlan.status);
@@ -683,7 +708,9 @@ function renderDailyPlan() {
     ? "确认套装账号并继续" : "重试当前步骤";
   elements.cancelDailyPlan.disabled = !["running", "intervention"].includes(dailyPlan.status);
   if (["intervention", "error", "cancelled"].includes(dailyPlan.status)) {
-    elements.planIntervention.textContent = `报错账号：${dailyPlan.errorAccount || "当前账号"}；装备所在：${holder}；${dailyPlan.error || "任务已中断"}。现场会持续保留，人工处理后可从装备所在账号继续。`;
+    const advice = dailyPlan.gptSuggestion?.summary
+      ? ` GPT诊断建议（只读）：${dailyPlan.gptSuggestion.summary}；${dailyPlan.gptSuggestion.recommendation || ""}` : "";
+    elements.planIntervention.textContent = `报错账号：${dailyPlan.errorAccount || "当前账号"}；装备所在：${holder}；${dailyPlan.error || "任务已中断"}。现场会持续保留，人工处理后可从装备所在账号继续。${advice}`;
     elements.planIntervention.classList.remove("hidden");
   } else {
     elements.planIntervention.classList.add("hidden");
@@ -706,6 +733,15 @@ function readPlanOptions() {
     .map((item) => item.trim()).filter(Boolean);
   const equipmentPrice = Number(elements.planEquipmentPrice.value || defaultTransferPrice);
   const resourcePrice = Number(elements.planResourcePrice.value || defaultTransferPrice);
+  const disconnectGraceSeconds = Number(elements.planDisconnectGrace.value || 120);
+  const phaseTimeoutSeconds = {
+    starting_leg: 120,
+    seller_running: Number(elements.planSellerTimeout.value || 240),
+    buyer_running: Number(elements.planBuyerTimeout.value || 720),
+    resource_auction_running: Number(elements.planResourceTimeout.value || 240),
+    standalone_main_running: Number(elements.planBuyerTimeout.value || 720),
+    main_buy_running: 90
+  };
   if (!resourceItems.length || resourceItems.length > 10) {
     addLog("道具组合需填写1–10项"); return null;
   }
@@ -731,6 +767,12 @@ function readPlanOptions() {
   if (!Number.isInteger(resourcePrice) || resourcePrice < 1 || resourcePrice > 9_999_999) {
     addLog("道具拍卖/购买单价无效"); return null;
   }
+  if (!Number.isInteger(disconnectGraceSeconds) || disconnectGraceSeconds < 30
+      || disconnectGraceSeconds > 600
+      || Object.values(phaseTimeoutSeconds).some((value) => !Number.isInteger(value)
+        || value < 30 || value > 3600)) {
+    addLog("断线宽限期需为30–600秒，阶段超时需为30–3600秒"); return null;
+  }
   const returnMaps = {};
   for (const input of elements.planReturnMaps.querySelectorAll("input[data-account-label]")) {
     returnMaps[input.dataset.accountLabel] = input.value.trim() || returnMap;
@@ -739,7 +781,8 @@ function readPlanOptions() {
     addLog("完成报告邮箱格式无效"); return null;
   }
   return { resourceItems, resourceReserveCount, dungeonItems, inventoryItems,
-    routeLabels, equipmentItems, equipmentPrice, resourcePrice, returnMap, returnMaps, reportEmail };
+    routeLabels, equipmentItems, equipmentPrice, resourcePrice, returnMap, returnMaps, reportEmail,
+    disconnectGraceSeconds, phaseTimeoutSeconds };
 }
 
 function renderPlanReturnMaps(savedMaps = null) {
@@ -790,6 +833,14 @@ function renderPlanSchedule() {
   if (typeof options.returnMap === "string") elements.planReturnMap.value = options.returnMap;
   renderPlanReturnMaps(options.returnMaps);
   if (typeof options.reportEmail === "string") elements.planReportEmail.value = options.reportEmail;
+  elements.planDisconnectGrace.value = String(Number.isInteger(options.disconnectGraceSeconds)
+    ? options.disconnectGraceSeconds : 120);
+  elements.planSellerTimeout.value = String(Number.isInteger(options.phaseTimeoutSeconds?.seller_running)
+    ? options.phaseTimeoutSeconds.seller_running : 240);
+  elements.planBuyerTimeout.value = String(Number.isInteger(options.phaseTimeoutSeconds?.buyer_running)
+    ? options.phaseTimeoutSeconds.buyer_running : 720);
+  elements.planResourceTimeout.value = String(Number.isInteger(options.phaseTimeoutSeconds?.resource_auction_running)
+    ? options.phaseTimeoutSeconds.resource_auction_running : 240);
   elements.planResourcePreset.value = Object.entries(auctionPresets)
     .find(([, value]) => value === elements.planResourceItems.value.trim())?.[0] ?? "custom";
   const last = planSchedule.lastRunDate ? ` · 上次运行 ${planSchedule.lastRunDate}` : "";

@@ -533,7 +533,7 @@ public final class MainActivity extends Activity {
         batteryMonitor.start();
 
         remoteConfigStore = new RemoteConfigStore(this);
-        remoteConnectionManager = new RemoteConnectionManager(
+        remoteConnectionManager = new RemoteConnectionManager(this,
                 new RemoteConnectionManager.Listener() {
                     @Override
                     public void onRemoteStateChanged(RemoteConnectionManager.State state,
@@ -548,7 +548,7 @@ public final class MainActivity extends Activity {
                     }
 
                     @Override
-                    public void onRemoteCommand(String commandId, String command,
+                    public void onRemoteCommand(String commandId, String stepId, String command,
                                                 JSONObject parameters) {
                         executeRemoteCommand(commandId, command, parameters);
                     }
@@ -1180,6 +1180,13 @@ public final class MainActivity extends Activity {
                     success = true;
                     resultMessage = "状态已更新";
                     break;
+                case "capture_diagnostic_snapshot": {
+                    int index = requiredAccountIndex(parameters);
+                    captureDiagnosticSnapshot(index, parameters.optString("diagnosticId", ""));
+                    success = true;
+                    resultMessage = "已采集只读诊断截图";
+                    break;
+                }
                 case "preview_start": {
                     int index = requiredAccountIndex(parameters);
                     int maxWidth = parameters.optInt("maxWidth", PREVIEW_DEFAULT_WIDTH);
@@ -1586,6 +1593,42 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void captureDiagnosticSnapshot(int accountIndex, String diagnosticId) {
+        Session session = getOrCreateSession(accountIndex);
+        WebView view = session.webView;
+        if (view.getWidth() <= 0 || view.getHeight() <= 0) return;
+        int sourceWidth = view.getWidth();
+        int sourceHeight = view.getHeight();
+        int targetWidth = Math.min(1_280, sourceWidth);
+        int targetHeight = Math.max(1, Math.round(sourceHeight * targetWidth / (float) sourceWidth));
+        Bitmap bitmap = null;
+        try {
+            bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.RGB_565);
+            Canvas canvas = new Canvas(bitmap);
+            canvas.drawColor(Color.WHITE);
+            canvas.scale(targetWidth / (float) sourceWidth, targetHeight / (float) sourceHeight);
+            view.draw(canvas);
+            byte[] encoded = compressPreview(bitmap, 64);
+            if (encoded.length > PREVIEW_MAX_ENCODED_BYTES) encoded = compressPreview(bitmap, 42);
+            if (encoded.length > PREVIEW_MAX_ENCODED_BYTES) return;
+            JSONObject frame = new JSONObject();
+            frame.put("diagnosticId", diagnosticId);
+            frame.put("accountIndex", accountIndex);
+            frame.put("accountLabel", accountDisplayName(accountIndex));
+            frame.put("sequence", ++previewSequence);
+            frame.put("width", targetWidth);
+            frame.put("height", targetHeight);
+            frame.put("mime", "image/jpeg");
+            frame.put("blackOverlay", blackMode);
+            frame.put("imageBase64", Base64.encodeToString(encoded, Base64.NO_WRAP));
+            remoteConnectionManager.sendDiagnosticSnapshot(frame);
+        } catch (RuntimeException | JSONException ignored) {
+            // GPT diagnostics are suggestion-only and must not affect the workflow.
+        } finally {
+            if (bitmap != null) bitmap.recycle();
+        }
+    }
+
     private void captureAutomationFailureSnapshot(int accountIndex, String task, String message) {
         long capturedAt = System.currentTimeMillis();
         preferences.edit()
@@ -1972,6 +2015,9 @@ public final class MainActivity extends Activity {
                 accounts.put(account);
             }
             telemetry.put("accounts", accounts);
+            if (remoteConnectionManager != null) {
+                telemetry.put("executionLedger", remoteConnectionManager.executionLedgerTelemetry());
+            }
         } catch (JSONException ignored) {
             // All telemetry values are controlled by the app.
         }

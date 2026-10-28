@@ -121,6 +121,15 @@
           <label>默认返回挂机副本<input id="planReturnMap" value="圣兽云殿" maxlength="30" placeholder="默认 圣兽云殿"></label>
           <label>完成报告邮箱<input id="planReportEmail" type="email" placeholder="可留空，不发送报告"></label>
           <fieldset class="plan-account-maps span-2">
+            <legend>接力可靠性（秒）</legend>
+            <div class="plan-settings">
+              <label>断线宽限期<input id="planDisconnectGrace" type="number" min="30" max="600" value="120"></label>
+              <label>卖方上架阶段<input id="planSellerTimeout" type="number" min="30" max="3600" value="240"></label>
+              <label>买方购买/副本阶段<input id="planBuyerTimeout" type="number" min="30" max="3600" value="720"></label>
+              <label>道具拍卖阶段<input id="planResourceTimeout" type="number" min="30" max="3600" value="240"></label>
+            </div>
+          </fieldset>
+          <fieldset class="plan-account-maps span-2">
             <legend>每个账号返回的挂机副本（留空使用默认值）</legend>
             <div id="planReturnMaps"></div>
           </fieldset>
@@ -162,6 +171,7 @@
         <div class="automation-actions">
           <button id="savePlanSchedule" class="secondary">保存本用户设置与每日定时</button>
           <button id="downloadPlanDiagnostics" class="secondary">下载本用户报错说明</button>
+          <button id="downloadDiagnosticBundle" class="secondary">下载最新卡顿诊断包</button>
           <small id="planScheduleStatus">每日定时未启用</small>
           <small id="settingsSaveState" role="status">设置按当前登录用户保存</small>
         </div>
@@ -335,6 +345,6 @@
       <div id="selectOptions" class="select-options" role="radiogroup"></div>
     </section>
   </div>
-  <script type="module" src="/app.js?v=2.0.2"></script>
+  <script type="module" src="/app.js?v=2.0.4-rc3"></script>
 </body>
 </html>
