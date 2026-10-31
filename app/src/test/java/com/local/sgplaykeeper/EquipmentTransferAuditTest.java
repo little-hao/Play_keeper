@@ -120,6 +120,16 @@ public class EquipmentTransferAuditTest {
     }
 
     @Test
+    public void commonPageFormattingDoesNotHideConfiguredEquipment() {
+        assertTrue(EquipmentTransferAudit.matchesEquipmentName(
+                "柔情方巾·改", " 柔情方巾・改 （＋12） "));
+        assertTrue(EquipmentTransferAudit.matchesEquipmentName(
+                "龙神印记·庆", "龙神印记•庆 已装备"));
+        assertFalse(EquipmentTransferAudit.matchesEquipmentName(
+                "柔情方巾·改", "柔情方巾§恋§"));
+    }
+
+    @Test
     public void ninePieceLoverRomanceSetCanBeAudited() {
         List<String> expected = List.of("柔情方巾§恋§", "轻罗流萤衫§恋§", "逢羡履§恋§",
                 "君我剑§恋§", "佳人之恋§恋§", "三生戒§恋§", "比翼§恋§",

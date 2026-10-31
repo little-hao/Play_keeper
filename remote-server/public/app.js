@@ -1303,6 +1303,7 @@ function renderDevices() {
     const warehouseStoreAll = card.querySelector(".warehouse-store-all");
     const warehouseItem = card.querySelector(".warehouse-item");
     const dungeonItemsInput = card.querySelector(".dungeon-items");
+    const dungeonSkillInput = card.querySelector(".dungeon-skill");
     const prestigeEnabled = card.querySelector(".prestige-enabled");
     const prestigeItemsInput = card.querySelector(".prestige-items");
     const inventoryItemsInput = card.querySelector(".inventory-items");
@@ -1342,6 +1343,8 @@ function renderDevices() {
       && automation.warehouseItem.trim() ? automation.warehouseItem.trim() : "护宠仙石";
     dungeonItemsInput.value = Array.isArray(automation.dungeonItems)
       ? automation.dungeonItems.join(",") : "绘画小屋,伊苏王的神墓,火龙王的宫殿,史芬克斯密穴";
+    dungeonSkillInput.value = typeof automation.dungeonSkill === "string"
+      && automation.dungeonSkill.trim() ? automation.dungeonSkill.trim() : "auto";
     prestigeEnabled.checked = automation.prestigeEnabled === true;
     prestigeItemsInput.value = Array.isArray(automation.prestigeItems)
       ? automation.prestigeItems.join(",") : "黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石";
@@ -1391,6 +1394,7 @@ function renderDevices() {
         .map((item) => item.trim()).filter(Boolean);
       const dungeonItems = dungeonItemsInput.value.split(/[,，\n]/)
         .map((item) => item.trim()).filter(Boolean);
+      const dungeonSkill = dungeonSkillInput.value.trim() || "auto";
       const prestigeItems = prestigeItemsInput.value.split(/[,，\n]/)
         .map((item) => item.trim()).filter(Boolean);
       const inventoryItems = inventoryItemsInput.value.split(/[,，\n]/)
@@ -1423,6 +1427,9 @@ function renderDevices() {
       if (!dungeonItems.length || dungeonItems.length > 20
           || dungeonItems.some((item) => item.length > 30)) {
         return addLog("副本组合需填写1–20项，每项不超过30字");
+      }
+      if (dungeonSkill.length > 30 || /[\r\n\t]/.test(dungeonSkill)) {
+        return addLog("副本技能名称无效");
       }
       if (!prestigeItems.length || prestigeItems.length > 10
           || prestigeItems.some((item) => item.length > 30)) {
@@ -1463,7 +1470,8 @@ function renderDevices() {
       });
       sendCommand(device.deviceId, "configure_dungeon_sequence", {
         accountIndex: activeAccountIndex,
-        items: dungeonItems
+        items: dungeonItems,
+        skill: dungeonSkill
       });
       sendCommand(device.deviceId, "configure_prestige_items", {
         accountIndex: activeAccountIndex,

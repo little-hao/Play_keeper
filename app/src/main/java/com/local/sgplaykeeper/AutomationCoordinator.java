@@ -119,6 +119,7 @@ final class AutomationCoordinator {
     private static final String PREF_WAREHOUSE_STORE_ALL = "automation_warehouse_store_all_";
     private static final String PREF_WAREHOUSE_LAST = "automation_warehouse_last_";
     private static final String PREF_DUNGEON_ITEMS = "automation_dungeon_items_";
+    private static final String PREF_DUNGEON_SKILL = "automation_dungeon_skill_";
     private static final String PREF_PRESTIGE_ENABLED = "automation_prestige_enabled_";
     private static final String PREF_PRESTIGE_ITEMS = "automation_prestige_items_";
     private static final String PREF_PRESTIGE_LAST = "automation_prestige_last_";
@@ -230,6 +231,10 @@ final class AutomationCoordinator {
                 String.join(",", DEFAULT_DUNGEON_SEQUENCE)), 20, "副本");
         return items.isEmpty() ? String.join(",", DEFAULT_DUNGEON_SEQUENCE)
                 : String.join(",", items);
+    }
+
+    String dungeonSkill(int accountIndex) {
+        return preferences.getString(PREF_DUNGEON_SKILL + accountIndex, "auto").trim();
     }
 
     boolean isPrestigeEnabled(int accountIndex) {
@@ -399,12 +404,18 @@ final class AutomationCoordinator {
         host.onAutomationChanged();
     }
 
-    void configureDungeonSequence(int accountIndex, String itemText) {
+    void configureDungeonSequence(int accountIndex, String itemText, String skill) {
         requireAccount(accountIndex);
         List<String> items = parseAutomationItems(itemText, 20, "副本");
         if (items.isEmpty()) throw new IllegalArgumentException("至少需要一个副本");
-        preferences.edit().putString(PREF_DUNGEON_ITEMS + accountIndex,
-                String.join(",", items)).apply();
+        String safeSkill = skill == null || skill.trim().isEmpty() ? "auto" : skill.trim();
+        if (safeSkill.length() > 30 || safeSkill.matches(".*[\\r\\n\\t].*")) {
+            throw new IllegalArgumentException("副本技能名称无效");
+        }
+        preferences.edit()
+                .putString(PREF_DUNGEON_ITEMS + accountIndex, String.join(",", items))
+                .putString(PREF_DUNGEON_SKILL + accountIndex, safeSkill)
+                .apply();
         host.onAutomationChanged();
     }
 
@@ -718,6 +729,8 @@ final class AutomationCoordinator {
         automation.put("equipmentBuyer", equipmentBuyer(accountIndex));
         automation.put("dungeonItems", new JSONArray(parseAutomationItems(
                 dungeonItemsText(accountIndex), 20, "副本")));
+        automation.put("dungeonSkill", dungeonSkill(accountIndex));
+        automation.put("selectedDungeonSkill", state.selectedDungeonSkill);
         automation.put("prestigeEnabled", isPrestigeEnabled(accountIndex));
         automation.put("prestigeItems", new JSONArray(parseAutomationItems(
                 prestigeItemsText(accountIndex), 10, "威望道具")));
@@ -1236,29 +1249,33 @@ final class AutomationCoordinator {
         String itemName = items.get(itemIndex);
         updateState(accountIndex, (selling ? "正在上架 " : "正在查找 ") + itemName);
         if (selling) {
-            openEquipmentSellDialog(accountIndex, view, items, itemIndex, itemName, manual);
+            openEquipmentSellDialog(accountIndex, view, items, itemIndex, itemName, manual, 0);
         } else {
             openEquipmentBuyDialog(accountIndex, view, items, itemIndex, itemName, manual, 0);
         }
     }
 
     private void openEquipmentSellDialog(int accountIndex, WebView view, List<String> items,
-                                         int itemIndex, String itemName, boolean manual) {
+                                         int itemIndex, String itemName, boolean manual,
+                                         int loadAttempt) {
         String script = "(function(){const target=" + JSONObject.quote(itemName) + ";"
                 + "const visible=e=>e&&e.getClientRects().length>0;"
-                + "const clean=v=>(v||'').replace(/\\s+/g,'').trim();"
-                + "const base=v=>clean(v).replace(/[（(][+＋](?:[1-9]|1[0-5])[）)]$/,'');"
+                + "const clean=v=>(v||'').normalize('NFKC').replace(/\\s+/g,'').trim().replace(/[•・．]/g,'·');"
+                + "const base=v=>clean(v).replace(/(?:已装备|主宠|装备)$/,'')"
+                + ".replace(/[（(][+＋](?:[1-9]|1[0-5])[）)]$/,'');"
                 + "const boxes=Array.from(document.querySelectorAll('.cont-box'));"
                 + "const box=boxes.find(e=>(e.textContent||'').includes('装备数：'));"
                 + "if(!box)return JSON.stringify({status:'not_ready'});"
                 + "const rows=Array.from(box.querySelectorAll('.ul .li'));"
                 + "const rowName=e=>{const named=e.querySelector('.item-name,.name,[data-name]');"
                 + "if(named)return(named.getAttribute('data-name')||named.textContent||'').trim();"
-                + "const c=Array.from(e.children);return c.find(x=>base(x.textContent)===base(target))?.textContent?.trim()||'';};"
+                + "const c=Array.from(e.children);if(c[1]&&(c[1].textContent||'').trim())return c[1].textContent.trim();"
+                + "return c.map(x=>(x.textContent||'').trim()).find(v=>base(v)===base(target))||'';};"
+                + "const observed=rows.map(rowName).filter(Boolean).slice(0,20);"
                 + "const matches=rows.filter(e=>base(rowName(e))===base(target));"
                 + "if(!matches.length){const refresh=Array.from(document.querySelectorAll('button,uni-button,[role=button],a,view'))"
                 + ".find(e=>visible(e)&&(e.textContent||'').replace(/\\s+/g,'')==='点击刷新');"
-                + "if(refresh)refresh.click();return JSON.stringify({status:'missing'});}"
+                + "if(refresh)refresh.click();return JSON.stringify({status:'missing',observed,rows:rows.length});}"
                 + "if(matches.length>1)return JSON.stringify({status:'ambiguous',count:matches.length});"
                 + "const row=matches[0];row.scrollIntoView({block:'nearest'});row.click();"
                 + "return JSON.stringify({status:'selected',before:matches.length});})()";
@@ -1266,10 +1283,29 @@ final class AutomationCoordinator {
             JSONObject result = decodeObject(encoded);
             String status = result == null ? "invalid" : result.optString("status");
             if ("missing".equals(status)) {
-                updateState(accountIndex, itemName + "：背包无此装备");
-                states[accountIndex].equipmentSkippedNames.add(itemName);
-                postTask(accountIndex, () -> processEquipmentItem(
-                        accountIndex, view, items, itemIndex + 1, true, manual), 350L);
+                JSONArray observed = result.optJSONArray("observed");
+                int rowCount = result.optInt("rows", 0);
+                if (loadAttempt < 5) {
+                    updateState(accountIndex, itemName + "：页面暂未识别，刷新后重试（"
+                            + (loadAttempt + 1) + "/5，当前读取" + rowCount + "条）");
+                    postTask(accountIndex, () -> openEquipmentSellDialog(accountIndex, view,
+                            items, itemIndex, itemName, manual, loadAttempt + 1), 1_500L);
+                    return;
+                }
+                StringBuilder detail = new StringBuilder();
+                if (observed != null) {
+                    for (int i = 0; i < observed.length() && i < 10; i++) {
+                        String name = observed.optString(i).trim();
+                        if (!name.isEmpty()) {
+                            if (detail.length() > 0) detail.append('、');
+                            detail.append(name);
+                        }
+                    }
+                }
+                finish(accountIndex, "equipment_sell", "error",
+                        itemName + "：连续刷新后仍未识别，已停止以避免整套被误跳过"
+                                + (detail.length() == 0 ? "；页面未读取到装备名称"
+                                : "；页面读取到：" + detail), manual);
                 return;
             }
             if ("not_ready".equals(status)) {
@@ -2720,6 +2756,7 @@ final class AutomationCoordinator {
             return;
         }
         String dungeonLiteral = JSONObject.quote(dungeon);
+        String skillLiteral = JSONObject.quote(dungeonSkill(accountIndex));
         String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
                 + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'');"
                 + "const controls=Array.from(document.querySelectorAll('button,[role=button],uni-button,view')).filter(visible);"
@@ -2736,14 +2773,22 @@ final class AutomationCoordinator {
                 + "select.value=option.value;select.selectedIndex=option.index;"
                 + "select.dispatchEvent(new Event('input',{bubbles:true}));"
                 + "select.dispatchEvent(new Event('change',{bubbles:true}));"
+                + "let selectedSkill='';"
                 + "const skill=Array.from(document.querySelectorAll('select')).find(s=>s!==select"
                 + "&&Array.from(s.options).some(o=>/(?:普通攻击|技能)/.test(o.textContent||'')));"
-                + "if(skill&&skill.options.length){const choice=Array.from(skill.options).find(o=>!o.disabled)"
-                + "||skill.options[0];skill.selectedIndex=choice.index;skill.value=choice.value;"
+                + "if(skill&&skill.options.length){const configured=" + skillLiteral + ";"
+                + "const norm=v=>(v||'').normalize('NFKC').replace(/\\s+/g,'').replace(/[·•・．]/g,'·');"
+                + "const options=Array.from(skill.options).filter(o=>!o.disabled&&!/请选择/.test(o.textContent||''));"
+                + "let choice=configured&&configured!=='auto'?options.find(o=>norm(o.textContent)===norm(configured)):null;"
+                + "if(!choice){const damage=options.filter(o=>/(攻击|伤害)/.test(o.textContent||'')"
+                + "&&!/(回血|治疗|恢复|辅助)/.test(o.textContent||''));choice=damage[1]||damage[0]||options[0];}"
+                + "if(!choice)return 'missing_skill';skill.selectedIndex=choice.index;skill.value=choice.value;"
+                + "selectedSkill=(choice.textContent||'').trim();"
                 + "skill.dispatchEvent(new Event('input',{bubbles:true}));"
                 + "skill.dispatchEvent(new Event('change',{bubbles:true}));}"
                 + "const manualButton=controls.find(e=>clean(e).includes('手动挂机'));"
-                + "if(!manualButton)return 'missing_manual';manualButton.click();return 'configured';})()";
+                + "if(!manualButton)return 'missing_manual';manualButton.click();"
+                + "return 'configured|'+selectedSkill;})()";
         evaluateTask(accountIndex, view, script, encoded -> {
             String result = decodeString(encoded);
             if ("completed".equals(result)) {
@@ -2774,8 +2819,11 @@ final class AutomationCoordinator {
                 updateState(accountIndex, dungeon + "未解锁，已安全跳过");
                 postTask(accountIndex, () -> runCurrentDungeon(
                         accountIndex, view, manual, 0), 500L);
-            } else if ("configured".equals(result)) {
-                updateState(accountIndex, "已配置" + dungeon + "手动挂机");
+            } else if (result.startsWith("configured|")) {
+                state.selectedDungeonSkill = result.substring("configured|".length());
+                updateState(accountIndex, "已配置" + dungeon + "手动挂机"
+                        + (state.selectedDungeonSkill.isBlank() ? ""
+                        : "，技能：" + state.selectedDungeonSkill));
                 postTask(accountIndex, () -> clickDungeonStart(
                         accountIndex, view, dungeon, manual, 0), 900L);
             } else if ("stopping_previous".equals(result)) {
@@ -4115,5 +4163,6 @@ final class AutomationCoordinator {
         int linkedEquipmentAccount = -1;
         int equipmentBatchSignalCount;
         boolean equipmentUnequipVerified;
+        String selectedDungeonSkill = "";
     }
 }

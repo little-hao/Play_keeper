@@ -283,10 +283,11 @@ test("device telemetry and browser command complete a round trip", async (contex
     type: "command.send",
     deviceId: "PK-ABCDEF123456",
     command: "configure_dungeon_sequence",
-    parameters: { accountIndex: 2, items: ["绘画小屋", "伊苏王的神墓"] }
+    parameters: { accountIndex: 2, items: ["绘画小屋", "伊苏王的神墓"], skill: "毒咬 · 伤害" }
   }));
   const dungeon = await dungeonPromise;
   assert.deepEqual(dungeon.parameters.items, ["绘画小屋", "伊苏王的神墓"]);
+  assert.equal(dungeon.parameters.skill, "毒咬 · 伤害");
 
   const prestigePromise = nextJson(device, "command.request");
   control.send(JSON.stringify({

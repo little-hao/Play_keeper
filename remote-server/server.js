@@ -121,7 +121,10 @@ const commandValidators = {
   },
   run_warehouse_sync: accountParameters,
   configure_dungeon_sequence(parameters) {
-    return accountParameters(parameters) && validItemList(parameters.items, 20);
+    return accountParameters(parameters) && validItemList(parameters.items, 20)
+      && (parameters.skill === undefined
+        || (typeof parameters.skill === "string" && parameters.skill.length <= 30
+          && !/[\r\n\t]/.test(parameters.skill)));
   },
   run_dungeon_sequence: accountParameters,
   run_daily_tasks: accountParameters,

@@ -892,7 +892,8 @@ public final class MainActivity extends Activity {
                     warehouseEnabled.isChecked(), warehouseItem.getText().toString(),
                     warehouseStoreAll.isChecked());
             automationCoordinator.configureDungeonSequence(accountIndex,
-                    dungeonItems.getText().toString());
+                    dungeonItems.getText().toString(),
+                    automationCoordinator.dungeonSkill(accountIndex));
             automationCoordinator.configurePrestige(accountIndex,
                     prestigeEnabled.isChecked(), prestigeItems.getText().toString());
             int transferPrice = Integer.parseInt(equipmentPrice.getText().toString().trim());
@@ -1317,7 +1318,9 @@ public final class MainActivity extends Activity {
                         if (i > 0) itemText.append(',');
                         itemText.append(itemArray.optString(i));
                     }
-                    automationCoordinator.configureDungeonSequence(index, itemText.toString());
+                    automationCoordinator.configureDungeonSequence(index, itemText.toString(),
+                            parameters.has("skill") ? parameters.optString("skill", "auto")
+                                    : automationCoordinator.dungeonSkill(index));
                     success = true;
                     resultMessage = "副本组合已更新";
                     break;
