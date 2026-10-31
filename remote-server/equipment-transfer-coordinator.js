@@ -13,7 +13,8 @@ export class EquipmentTransferCoordinator {
   #idle() {
     return { status: "idle", phase: "idle", startedAt: 0, updatedAt: this.now(),
       runId: "", ownerId: "", seller: null, buyer: null, items: [], price: 920,
-      returnMap: "圣兽云殿", buyerStarted: false, sellerReleased: false, message: "" };
+      returnMap: "圣兽云殿", configuredAccounts: [], buyerStarted: false,
+      sellerReleased: false, message: "" };
   }
 
   snapshot() { return JSON.parse(JSON.stringify(this.state)); }
@@ -50,6 +51,19 @@ export class EquipmentTransferCoordinator {
       return this.snapshot();
     }
     if (!success) return this.#fail(`${action.accountLabel} 命令被拒绝或超时：${message}`);
+    if (action.command === "configure_equipment_transfer"
+        && !this.state.configuredAccounts.includes(action.accountLabel)) {
+      this.state.configuredAccounts.push(action.accountLabel);
+      this.state.updatedAt = this.now();
+      if (this.state.configuredAccounts.length === 2) {
+        this.state.phase = "seller_listing";
+        this.state.message = `${this.state.seller.accountLabel} 与 ${this.state.buyer.accountLabel}`
+          + " 已确认目标套装，正在启动上架";
+        this.#command(this.state.seller, "configure_return_hang", { map: this.state.returnMap });
+        this.#command(this.state.seller, "run_equipment_sell", {});
+        this.#publish();
+      }
+    }
     return this.snapshot();
   }
 
@@ -75,16 +89,14 @@ export class EquipmentTransferCoordinator {
       throw new Error("卖方与买方必须是两个不同的在线账号");
     }
     const now = this.now();
-    this.state = { status: "running", phase: "seller_listing", startedAt: now,
+    this.state = { status: "running", phase: "configuring", startedAt: now,
       runId: crypto.randomUUID(), verificationPending: false,
       updatedAt: now, ownerId: String(ownerId || ""), seller: { ...seller }, buyer: { ...buyer },
-      items: [...items], price, returnMap, buyerStarted: false, sellerReleased: false,
-      message: `${seller.accountLabel} 正在向 ${buyer.accountLabel} 上架装备` };
+      items: [...items], price, returnMap, configuredAccounts: [], buyerStarted: false,
+      sellerReleased: false, message: `正在等待 ${seller.accountLabel} 与 ${buyer.accountLabel} 确认目标套装` };
     const common = { items: [...items], price };
     this.#command(seller, "configure_equipment_transfer", { ...common, buyer: buyer.accountLabel });
     this.#command(buyer, "configure_equipment_transfer", { ...common, buyer: "" });
-    this.#command(seller, "configure_return_hang", { map: returnMap });
-    this.#command(seller, "run_equipment_sell", {});
     this.#publish();
     return this.snapshot();
   }
@@ -93,6 +105,17 @@ export class EquipmentTransferCoordinator {
     if (this.state.status !== "running") return this.snapshot();
     const seller = this.#automationFor(this.state.seller, deviceId, telemetry);
     const buyer = this.#automationFor(this.state.buyer, deviceId, telemetry);
+    for (const [account, automation] of [[this.state.seller, seller], [this.state.buyer, buyer]]) {
+      if (!automation || !this.state.configuredAccounts.includes(account.accountLabel)
+          || !Array.isArray(automation.equipmentItems)) continue;
+      const actual = automation.equipmentItems.map(item => String(item).trim()).filter(Boolean);
+      if (actual.length !== this.state.items.length
+          || actual.some((item, index) => item !== this.state.items[index])) {
+        return this.#fail(`${account.accountLabel} 回传的装备组合与网页选择不一致；`
+          + `期望：${this.state.items.join("、")}；设备：${actual.join("、") || "空"}。`
+          + "已停止，避免按错误套装重复刷新");
+      }
+    }
     if (this.#fresh(buyer)) {
       const pending = !!buyer.equipmentVerificationToken;
       if (pending !== this.state.verificationPending) {

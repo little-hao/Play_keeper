@@ -91,6 +91,10 @@ const devices = new Map();
 const previewFrames = new Map();
 const activePreviews = new Set();
 const previewSettings = new Map();
+// Device telemetry can refresh while the operator is editing the advanced form.
+// Keep equipment fields outside the replaced DOM until the APP reports the same
+// configuration, otherwise a preset selection can silently revert to defaults.
+const equipmentDrafts = new Map();
 const previewProfiles = {
   "720": { maxWidth: 720, fps: 1, label: "流畅" },
   "1280": { maxWidth: 1280, fps: 0.33, label: "高清" },
@@ -1312,6 +1316,15 @@ function renderDevices() {
     const equipmentPriceInput = card.querySelector(".equipment-price");
     const equipmentSellerInput = card.querySelector(".equipment-seller");
     const equipmentBuyerInput = card.querySelector(".equipment-buyer");
+    const equipmentDraftKey = `${device.deviceId}:${activeAccountIndex}`;
+    let equipmentDraft = equipmentDrafts.get(equipmentDraftKey);
+    if (equipmentDraft && Array.isArray(automation.equipmentItems)
+        && automation.equipmentItems.join(",") === equipmentDraft.items
+        && Number(automation.equipmentPrice) === equipmentDraft.price
+        && String(automation.equipmentBuyer || "") === equipmentDraft.buyer) {
+      equipmentDrafts.delete(equipmentDraftKey);
+      equipmentDraft = null;
+    }
     const auctionItems = Array.isArray(automation.auctionItems)
       ? automation.auctionItems : (automation.sellItems ?? ["进化宝石", "曙光印记"]);
     auctionEnabled.checked = automation.auctionEnabled === true || automation.sellEnabled === true;
@@ -1350,24 +1363,37 @@ function renderDevices() {
       ? automation.prestigeItems.join(",") : "黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石";
     inventoryItemsInput.value = Array.isArray(automation.inventoryItems)
       ? automation.inventoryItems.join(",") : "进化宝石,曙光印记,强化丹A,强化丹B,天仙玉露";
-    equipmentItemsInput.value = Array.isArray(automation.equipmentItems)
-      ? automation.equipmentItems.join(",") : defaultEquipmentItems;
+    equipmentItemsInput.value = equipmentDraft?.items ?? (Array.isArray(automation.equipmentItems)
+      ? automation.equipmentItems.join(",") : defaultEquipmentItems);
     equipmentPreset.value = Object.entries(equipmentPresets)
       .find(([, value]) => value === equipmentItemsInput.value.trim())?.[0] ?? "custom";
     equipmentPreset.addEventListener("change", () => {
       if (equipmentPreset.value !== "custom") {
         equipmentItemsInput.value = equipmentPresets[equipmentPreset.value];
       }
+      persistEquipmentDraft();
     });
     equipmentItemsInput.addEventListener("input", () => {
       equipmentPreset.value = Object.entries(equipmentPresets)
         .find(([, value]) => value === equipmentItemsInput.value.trim())?.[0] ?? "custom";
+      persistEquipmentDraft();
     });
-    equipmentPriceInput.value = String(Number.isInteger(automation.equipmentPrice)
-      ? automation.equipmentPrice : 920);
-    equipmentSellerInput.value = accountLabel(accounts, activeAccountIndex);
-    equipmentBuyerInput.value = typeof automation.equipmentBuyer === "string"
-      ? automation.equipmentBuyer : "";
+    equipmentPriceInput.value = String(equipmentDraft?.price ?? (Number.isInteger(automation.equipmentPrice)
+      ? automation.equipmentPrice : 920));
+    equipmentSellerInput.value = equipmentDraft?.seller ?? accountLabel(accounts, activeAccountIndex);
+    equipmentBuyerInput.value = equipmentDraft?.buyer ?? (typeof automation.equipmentBuyer === "string"
+      ? automation.equipmentBuyer : "");
+    function persistEquipmentDraft() {
+      equipmentDrafts.set(equipmentDraftKey, {
+        items: equipmentItemsInput.value.trim(),
+        price: Number.parseInt(equipmentPriceInput.value, 10),
+        seller: equipmentSellerInput.value.trim(),
+        buyer: equipmentBuyerInput.value.trim()
+      });
+    }
+    equipmentPriceInput.addEventListener("input", persistEquipmentDraft);
+    equipmentSellerInput.addEventListener("input", persistEquipmentDraft);
+    equipmentBuyerInput.addEventListener("input", persistEquipmentDraft);
     card.querySelector(".automation-status").textContent = automation.busy
       ? `运行中 · ${automation.lastMessage || "正在执行"}`
       : (automation.lastMessage || "尚未运行");

@@ -145,6 +145,22 @@ public class EquipmentTransferAuditTest {
         assertEquals(9, result.items().size());
     }
 
+    @Test
+    public void tenPieceLegacyLoverSetRemainsASelectableTransferTarget() {
+        List<String> expected = List.of("柔情方巾·改", "轻罗流萤衫·改", "逢羡履·改",
+                "君我剑·改", "佳人之恋·改", "三生戒·改", "比翼·改",
+                "相望镯·改", "尾生之泪·改", "龙神印记·庆");
+        String[] slots = {"头部", "身体", "脚部", "武器", "项链", "戒指", "翅膀", "手镯", "宝石", "道具"};
+        Map<String, String> actual = new LinkedHashMap<>();
+        for (int index = 0; index < expected.size(); index++) actual.put(slots[index], expected.get(index));
+
+        EquipmentTransferAudit.Result result = EquipmentTransferAudit.evaluate(
+                EquipmentTransferAudit.PetScope.MAIN, expected, actual, Collections.emptySet());
+
+        assertTrue(result.allTransferred());
+        assertEquals(expected, result.items().stream().map(item -> item.expectedName).toList());
+    }
+
     private static Map<String, String> completeTargetSet() {
         Map<String, String> actual = new LinkedHashMap<>();
         actual.put("头部", "厄菲斯神冠");

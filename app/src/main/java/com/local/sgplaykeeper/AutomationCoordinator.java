@@ -81,9 +81,6 @@ final class AutomationCoordinator {
     static final String LOVER_ROMANCE_EQUIPMENT_ITEMS =
             "柔情方巾§恋§,轻罗流萤衫§恋§,逢羡履§恋§,君我剑§恋§,佳人之恋§恋§,"
                     + "三生戒§恋§,比翼§恋§,相望镯§恋§,尾生之泪§恋§";
-    private static final Set<String> LEGACY_EQUIPMENT_ITEMS = new LinkedHashSet<>(Arrays.asList(
-            "柔情方巾·改", "轻罗流萤衫·改", "逢羡履·改", "君我剑·改", "佳人之恋·改",
-            "三生戒·改", "比翼·改", "相望镯·改", "尾生之泪·改", "龙神印记·庆"));
     private static final int DEFAULT_EQUIPMENT_PRICE = 920;
     private static final int EQUIPMENT_ACTIVE_LIMIT = 5;
     private static final long EQUIPMENT_WAIT_INTERVAL_MS = 10_000L;
@@ -295,12 +292,6 @@ final class AutomationCoordinator {
     String equipmentItemsText(int accountIndex) {
         List<String> items = parseEquipmentItems(preferences.getString(
                 PREF_EQUIPMENT_ITEMS + accountIndex, DEFAULT_EQUIPMENT_ITEMS));
-        if (items.size() == LEGACY_EQUIPMENT_ITEMS.size()
-                && new LinkedHashSet<>(items).equals(LEGACY_EQUIPMENT_ITEMS)) {
-            preferences.edit().putString(PREF_EQUIPMENT_ITEMS + accountIndex,
-                    DEFAULT_EQUIPMENT_ITEMS).apply();
-            return DEFAULT_EQUIPMENT_ITEMS;
-        }
         return items.isEmpty() ? DEFAULT_EQUIPMENT_ITEMS : String.join(",", items);
     }
 
