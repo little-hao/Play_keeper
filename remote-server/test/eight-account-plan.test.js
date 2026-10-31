@@ -770,26 +770,24 @@ test("uses the configured item price and returns hao to its map when purchase fa
   assert.equal(plan.snapshot().mainBuyTimedOut, true);
 });
 
-test("brief device reconnect resumes the same relay leg and ignores old command results", () => {
+test("brief device reconnect keeps the same relay leg pending for command replay", () => {
   const actions = [];
   let clock = 10_000;
   const shortRoute = [route()[0], route()[2], route().at(-1)];
   const plan = new EightAccountPlan({ emitAction: action => actions.push(action), now: () => clock });
   plan.start(shortRoute);
-  const staleSell = actions.find(action => action.command === "run_equipment_sell");
-
   let snapshot = plan.onDeviceOffline(d1);
-  assert.equal(snapshot.status, "reconnecting");
+  assert.equal(snapshot.status, "running");
   assert.equal(snapshot.legIndex, 0);
+  assert.equal(plan.isDeviceInGrace(d1), true);
   clock += 20_000;
   actions.length = 0;
   snapshot = plan.onDeviceOnline(d1);
   assert.equal(snapshot.status, "running");
   assert.equal(snapshot.legIndex, 0);
-  assert.equal(snapshot.phase, "buyer_running");
-  assert.deepEqual(actions.slice(-2).map(action => action.command),
-    ["run_equipment_sell", "run_equipment_buy"]);
-
-  snapshot = plan.onCommandResult(staleSell, false, "旧连接超时回执");
-  assert.equal(snapshot.status, "running");
+  assert.equal(snapshot.phase, "seller_running");
+  assert.equal(plan.isDeviceInGrace(d1), false);
+  // The VPS transport replays the still-pending command with its original
+  // stepId. The plan must not create a second transaction on reconnect.
+  assert.deepEqual(actions, []);
 });

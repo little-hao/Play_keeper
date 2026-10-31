@@ -509,8 +509,7 @@ export class EightAccountPlan {
     if (["seller_running", "buyer_running"].includes(this.state.phase)) {
       if (buyer) {
         this.#scheduleSellerAfterTransfer(leg, buyer);
-        if (this.state.sellerCleanupDueAt > 0
-            && this.now() >= this.state.sellerCleanupDueAt) this.#releaseScheduledSeller();
+        if (this.state.sellerCleanupDueAt > 0) this.#releaseScheduledSeller();
       }
       if (!this.state.sellerReleased
           && seller?.task === "equipment_sell" && seller.status === "error") {
@@ -546,10 +545,8 @@ export class EightAccountPlan {
       }
       // The buyer and seller can report from different devices. Keep both
       // completion facts so whichever report arrives last advances the plan.
-      if (this.state.sellerCleaned && this.state.buyerWorkflowCompleted) {
-        if (leg.buyer.accountLabel === this.state.mainAccountLabel) this.#startMainBuy(leg.buyer);
-        else this.#startResourceAuction(leg.buyer);
-      }
+      // Seller cleanup is best effort once the buyer has audited the set.
+      this.#advanceCompletedWorkflows();
       return this.snapshot();
     }
     if (this.state.phase === "resource_auction_running" && buyer) {
@@ -642,7 +639,9 @@ export class EightAccountPlan {
     // have been purchased and audited.  At that point the seller no longer needs
     // to poll the exchange, so release it immediately before stale page controls
     // can turn a completed transfer into a false listing error.
-    this.state.sellerCleanupDueAt = this.now();
+    // Zero is the "not scheduled" sentinel, while tests and fresh processes can
+    // legitimately start with a zero clock.
+    this.state.sellerCleanupDueAt = Math.max(1, this.now());
     this.state.updatedAt = this.now();
   }
 
