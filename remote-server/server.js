@@ -122,11 +122,22 @@ const commandValidators = {
   run_warehouse_sync: accountParameters,
   configure_dungeon_sequence(parameters) {
     return accountParameters(parameters) && validItemList(parameters.items, 20)
+      && (parameters.completeTasks === undefined
+        || typeof parameters.completeTasks === "boolean")
       && (parameters.skill === undefined
         || (typeof parameters.skill === "string" && parameters.skill.length <= 30
           && !/[\r\n\t]/.test(parameters.skill)));
   },
   run_dungeon_sequence: accountParameters,
+  configure_adventure(parameters) {
+    return accountParameters(parameters)
+      && typeof parameters.map === "string"
+      && parameters.map.trim().length >= 1
+      && parameters.map.trim().length <= 30
+      && !/[\r\n\t]/.test(parameters.map);
+  },
+  run_auto_capture: accountParameters,
+  run_tower_battle: accountParameters,
   run_daily_tasks: accountParameters,
   configure_prestige_items(parameters) {
     return accountParameters(parameters)
@@ -266,7 +277,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.5-rc2" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.6-rc1" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {

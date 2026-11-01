@@ -91,6 +91,8 @@ final class AutomationCoordinator {
     private static final long DUNGEON_STUCK_RETRY_MS = 10L * 60L * 1000L;
     private static final int DUNGEON_MAX_RECOVERY_ATTEMPTS = 3;
     private static final long DUNGEON_TIMEOUT_MS = 3L * 60L * 60L * 1000L;
+    private static final long ADVENTURE_STEP_DELAY_MS = 800L;
+    private static final int ADVENTURE_RECOVERY_STEPS = 30;
     private static final long TEMPLE_CONFIRM_TIMEOUT_MS = 30_000L;
     static final List<String> DEFAULT_DUNGEON_SEQUENCE = Arrays.asList(
             "绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴");
@@ -117,6 +119,9 @@ final class AutomationCoordinator {
     private static final String PREF_WAREHOUSE_LAST = "automation_warehouse_last_";
     private static final String PREF_DUNGEON_ITEMS = "automation_dungeon_items_";
     private static final String PREF_DUNGEON_SKILL = "automation_dungeon_skill_";
+    private static final String PREF_DUNGEON_COMPLETE_TASKS =
+            "automation_dungeon_complete_tasks_";
+    private static final String PREF_CAPTURE_MAP = "automation_capture_map_";
     private static final String PREF_PRESTIGE_ENABLED = "automation_prestige_enabled_";
     private static final String PREF_PRESTIGE_ITEMS = "automation_prestige_items_";
     private static final String PREF_PRESTIGE_LAST = "automation_prestige_last_";
@@ -232,6 +237,16 @@ final class AutomationCoordinator {
 
     String dungeonSkill(int accountIndex) {
         return preferences.getString(PREF_DUNGEON_SKILL + accountIndex, "auto").trim();
+    }
+
+    boolean isDungeonTaskCompletionEnabled(int accountIndex) {
+        return preferences.getBoolean(PREF_DUNGEON_COMPLETE_TASKS + accountIndex, false);
+    }
+
+    String captureMap(int accountIndex) {
+        String value = preferences.getString(PREF_CAPTURE_MAP + accountIndex, "圣诞小屋");
+        value = value == null ? "" : value.replaceAll("[\\r\\n\\t]", " ").trim();
+        return value.isEmpty() ? "圣诞小屋" : value;
     }
 
     boolean isPrestigeEnabled(int accountIndex) {
@@ -396,6 +411,12 @@ final class AutomationCoordinator {
     }
 
     void configureDungeonSequence(int accountIndex, String itemText, String skill) {
+        configureDungeonSequence(accountIndex, itemText, skill,
+                isDungeonTaskCompletionEnabled(accountIndex));
+    }
+
+    void configureDungeonSequence(int accountIndex, String itemText, String skill,
+                                  boolean completeTasks) {
         requireAccount(accountIndex);
         List<String> items = parseAutomationItems(itemText, 20, "副本");
         if (items.isEmpty()) throw new IllegalArgumentException("至少需要一个副本");
@@ -406,7 +427,18 @@ final class AutomationCoordinator {
         preferences.edit()
                 .putString(PREF_DUNGEON_ITEMS + accountIndex, String.join(",", items))
                 .putString(PREF_DUNGEON_SKILL + accountIndex, safeSkill)
+                .putBoolean(PREF_DUNGEON_COMPLETE_TASKS + accountIndex, completeTasks)
                 .apply();
+        host.onAutomationChanged();
+    }
+
+    void configureAdventure(int accountIndex, String map) {
+        requireAccount(accountIndex);
+        String safe = map == null ? "" : map.replaceAll("[\\r\\n\\t]", " ").trim();
+        if (safe.isEmpty() || safe.length() > 30) {
+            throw new IllegalArgumentException("自动捕捉地图名称无效");
+        }
+        preferences.edit().putString(PREF_CAPTURE_MAP + accountIndex, safe).apply();
         host.onAutomationChanged();
     }
 
@@ -583,6 +615,69 @@ final class AutomationCoordinator {
         runDungeonQueue(accountIndex, true, false);
     }
 
+    void runAutoCaptureNow(int accountIndex) {
+        requireAccount(accountIndex);
+        RuntimeState state = states[accountIndex];
+        if (state.busy) {
+            host.showMessage(accountName(accountIndex) + "脚本正在执行");
+            return;
+        }
+        state.epoch.advance();
+        state.busy = true;
+        state.task = "auto_capture";
+        state.status = "running";
+        state.lastMessage = "正在进入" + captureMap(accountIndex) + "并准备自动捕捉";
+        state.startedAt = System.currentTimeMillis();
+        state.updatedAt = state.startedAt;
+        state.manualRun = true;
+        state.captureAutoAttackEnabled = false;
+        state.captureAttemptedThisBattle = false;
+        state.captureRounds = 0;
+        state.adventureRecoverySteps = 0;
+        host.onAutomationChanged();
+        host.prepareAutomation(accountIndex, true);
+        host.openHome(accountIndex);
+        WebView view;
+        try {
+            view = host.requireWebView(accountIndex);
+        } catch (RuntimeException error) {
+            finish(accountIndex, state.task, "error", "账号页面未就绪", true);
+            return;
+        }
+        postTask(accountIndex, () -> runAutoCaptureStep(accountIndex, view), 2_000L);
+    }
+
+    void runTowerNow(int accountIndex) {
+        requireAccount(accountIndex);
+        RuntimeState state = states[accountIndex];
+        if (state.busy) {
+            host.showMessage(accountName(accountIndex) + "脚本正在执行");
+            return;
+        }
+        state.epoch.advance();
+        state.busy = true;
+        state.task = "tower_battle";
+        state.status = "running";
+        state.lastMessage = "正在进入通天塔新地图";
+        state.startedAt = System.currentTimeMillis();
+        state.updatedAt = state.startedAt;
+        state.manualRun = true;
+        state.towerSkillSelected = false;
+        state.towerAutoAttackEnabled = false;
+        state.adventureRecoverySteps = 0;
+        host.onAutomationChanged();
+        host.prepareAutomation(accountIndex, true);
+        host.openHome(accountIndex);
+        WebView view;
+        try {
+            view = host.requireWebView(accountIndex);
+        } catch (RuntimeException error) {
+            finish(accountIndex, state.task, "error", "账号页面未就绪", true);
+            return;
+        }
+        postTask(accountIndex, () -> runTowerStep(accountIndex, view), 2_000L);
+    }
+
     void runDailyTasksNow(int accountIndex) {
         requireAccount(accountIndex);
         RuntimeState state = states[accountIndex];
@@ -721,7 +816,10 @@ final class AutomationCoordinator {
         automation.put("dungeonItems", new JSONArray(parseAutomationItems(
                 dungeonItemsText(accountIndex), 20, "副本")));
         automation.put("dungeonSkill", dungeonSkill(accountIndex));
+        automation.put("dungeonCompleteTasks", isDungeonTaskCompletionEnabled(accountIndex));
         automation.put("selectedDungeonSkill", state.selectedDungeonSkill);
+        automation.put("captureMap", captureMap(accountIndex));
+        automation.put("captureRounds", state.captureRounds);
         automation.put("prestigeEnabled", isPrestigeEnabled(accountIndex));
         automation.put("prestigeItems", new JSONArray(parseAutomationItems(
                 prestigeItemsText(accountIndex), 10, "威望道具")));
@@ -902,6 +1000,7 @@ final class AutomationCoordinator {
         state.prestigePreparedDungeonIndex = -1;
         state.dungeonDailySignInPrepared = false;
         state.dungeonDailyTasksPrepared = false;
+        state.dungeonCompletionTasksPrepared = false;
         state.templeStoragePrepared = false;
         state.manualRun = manual;
         host.onAutomationChanged();
@@ -2687,6 +2786,7 @@ final class AutomationCoordinator {
         state.prestigePreparedDungeonIndex = -1;
         state.dungeonDailySignInPrepared = false;
         state.dungeonDailyTasksPrepared = false;
+        state.dungeonCompletionTasksPrepared = false;
         state.skippedDungeons.clear();
         postTask(accountIndex, () -> runDungeonQueue(accountIndex, manual, true), 4_000L);
     }
@@ -2710,9 +2810,24 @@ final class AutomationCoordinator {
         if (state.dungeonIndex >= dungeons.size()) {
             String skipped = state.skippedDungeons.isEmpty() ? ""
                     : "；未解锁已跳过：" + String.join("、", state.skippedDungeons);
+            String completedMessage = "副本队列已完成" + skipped;
+            if (isDungeonTaskCompletionEnabled(accountIndex)
+                    && !state.dungeonCompletionTasksPrepared) {
+                updateState(accountIndex, completedMessage + "，正在完成可领取任务");
+                host.prepareAutomation(accountIndex, true);
+                host.openHome(accountIndex);
+                postTask(accountIndex, () -> completeAvailableTasksAfterDungeons(
+                        accountIndex, view, () -> {
+                            state.dungeonCompletionTasksPrepared = true;
+                            preferences.edit().putLong(PREF_DUNGEON_LAST + accountIndex,
+                                    System.currentTimeMillis()).apply();
+                            startFinalEquipmentAndInventory(accountIndex, manual,
+                                    completedMessage + "；可完成任务已处理");
+                        }, 0), 2_000L);
+                return;
+            }
             preferences.edit().putLong(PREF_DUNGEON_LAST + accountIndex,
                     System.currentTimeMillis()).apply();
-            String completedMessage = "副本队列已完成" + skipped;
             startFinalEquipmentAndInventory(accountIndex, manual, completedMessage);
             return;
         }
@@ -3158,6 +3273,212 @@ final class AutomationCoordinator {
         postTask(accountIndex, () -> runTempleGuard(accountIndex, manual, true), 4_000L);
     }
 
+    private void completeAvailableTasksAfterDungeons(int accountIndex, WebView view,
+                                                      Runnable continuation, int attempt) {
+        String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
+                + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'').trim();"
+                + "const content=document.querySelector('.task-content');"
+                + "if(!content||!visible(content)){const entry=Array.from(document.querySelectorAll('[name=\"任务\"],button,uni-button,[role=button]'))"
+                + ".filter(visible).find(e=>(e.getAttribute('name')||'')==='任务'||clean(e)==='任务');"
+                + "if(!entry)return 'missing';entry.click();return 'opened';}"
+                + "const actions=Array.from(content.querySelectorAll('button,uni-button,[role=button],view,uni-view,div,span')).filter(visible);"
+                + "const action=actions.find(e=>/^(完成|领取|领取奖励|提交)$/.test(clean(e))&&!e.disabled);"
+                + "if(action&&window.__pkAcceptedTaskSelection){const label=clean(action);"
+                + "window.__pkAcceptedTaskSelection='';action.click();return 'clicked|'+label;}"
+                + "const accepted=Array.from(content.querySelectorAll('.task-section')).find(e=>"
+                + "clean(e.querySelector('.task-section-title'))==='已接受的任务');"
+                + "if(!accepted)return 'loading';"
+                + "const completed=Array.from(accepted.querySelectorAll('.task-item')).find(e=>{"
+                + "const icon=e.querySelector('img');const src=icon?.getAttribute('src')||'';"
+                + "return /task_ico_ok(?:\\.|_)/.test(src)||!!e.querySelector('.ok');});"
+                + "if(completed){const name=clean(completed);window.__pkAcceptedTaskSelection=name;"
+                + "completed.scrollIntoView({block:'center'});completed.click();return 'task_selected|'+name;}"
+                + "const close=content.querySelector('.close-btn,[class*=close],[aria-label*=关闭]')"
+                + "||document.querySelector('.close-btn');if(close)close.click();return 'done';})()";
+        evaluateTask(accountIndex, view, script, encoded -> {
+            String result = decodeString(encoded);
+            if (result.startsWith("clicked|")) {
+                updateState(accountIndex, "已处理可完成任务："
+                        + result.substring("clicked|".length()));
+                if (attempt < 30) {
+                    postTask(accountIndex, () -> completeAvailableTasksAfterDungeons(
+                            accountIndex, view, continuation, attempt + 1), 900L);
+                } else {
+                    postTask(accountIndex, continuation, 400L);
+                }
+            } else if (result.startsWith("task_selected|")) {
+                updateState(accountIndex, "已选择可完成任务："
+                        + result.substring("task_selected|".length()));
+                postTask(accountIndex, () -> completeAvailableTasksAfterDungeons(
+                        accountIndex, view, continuation, attempt + 1), 600L);
+            } else if (("opened".equals(result) || "missing".equals(result)
+                    || "loading".equals(result))
+                    && attempt < 15) {
+                postTask(accountIndex, () -> completeAvailableTasksAfterDungeons(
+                        accountIndex, view, continuation, attempt + 1), 800L);
+            } else {
+                postTask(accountIndex, continuation, 400L);
+            }
+        });
+    }
+
+    private void runAutoCaptureStep(int accountIndex, WebView view) {
+        RuntimeState state = states[accountIndex];
+        if (stopped || !state.busy || !"auto_capture".equals(state.task)) return;
+        String mapLiteral = JSONObject.quote(captureMap(accountIndex));
+        String script = "(function(){const inView=e=>{if(!e)return false;const r=e.getBoundingClientRect();"
+                + "return r.width>0&&r.height>0&&r.right>0&&r.bottom>0&&r.left<innerWidth&&r.top<innerHeight;};"
+                + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'').trim();"
+                + "const body=(document.body.innerText||'').replace(/\\s+/g,'');"
+                + "const controls=Array.from(document.querySelectorAll('button,uni-button,[role=button],view,uni-view,div,span')).filter(inView);"
+                + "const clickBattlePoint=(rx,ry)=>{const box=document.querySelector('.battle-box');if(!box)return false;"
+                + "const r=box.getBoundingClientRect(),x=r.left+r.width*rx,y=r.top+r.height*ry;"
+                + "const e=document.elementFromPoint(x,y);if(!e)return false;e.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:x,clientY:y}));return true;};"
+                + "if(/战斗(?:胜利|失败)|捕捉成功/.test(body)&&body.includes('继续探险')){"
+                + "const next=controls.find(e=>clean(e)==='继续探险');if(next)next.click();else clickBattlePoint(.38,.73);return 'continue_clicked';}"
+                + "const auto=document.querySelector('[name=\"自动攻击\"]'),catchBtn=document.querySelector('[name=\"捕捉\"]');"
+                + "if(auto&&catchBtn&&document.querySelector('.battle-box')){"
+                + "const menu=Array.from(document.querySelectorAll('.jineng-list .li,.jineng-list button,.jineng-list uni-button')).filter(inView);"
+                + (state.captureAutoAttackEnabled ? ""
+                : "const enable=menu.find(e=>/^自动攻击/.test(clean(e)));if(enable){enable.click();return 'auto_enabled';}"
+                        + "auto.click();return 'auto_menu_opened';")
+                + (state.captureAttemptedThisBattle
+                ? "const ball=menu.find(e=>/精灵球/.test(clean(e))&&!/没有可用/.test(clean(e)));if(ball){ball.click();return 'ball_used';}return 'fighting';"
+                : "catchBtn.click();return 'capture_clicked';")
+                + "}"
+                + "const fight=Array.from(document.querySelectorAll('[name=\"战斗\"]')).find(inView);"
+                + "if(fight){fight.click();return 'battle_started';}"
+                + "const target=Array.from(document.querySelectorAll('[name]')).find(e=>inView(e)&&e.getAttribute('name')===" + mapLiteral + ");"
+                + "if(target){target.click();return 'map_clicked';}"
+                + "const adventure=Array.from(document.querySelectorAll('[name=\"野外探险\"],.nav-btn.bg1')).find(inView);"
+                + "if(adventure){adventure.click();return 'adventure_clicked';}return 'loading';})()";
+        evaluateTask(accountIndex, view, script, encoded -> {
+            String result = decodeString(encoded);
+            long delay = ADVENTURE_STEP_DELAY_MS;
+            if ("auto_enabled".equals(result)) {
+                state.captureAutoAttackEnabled = true;
+                state.adventureRecoverySteps = 0;
+                updateState(accountIndex, "自动攻击已开启；本次进入仅触发一次");
+                delay = 900L;
+            } else if ("capture_clicked".equals(result)) {
+                state.captureAttemptedThisBattle = true;
+                state.adventureRecoverySteps = 0;
+                updateState(accountIndex, "第" + (state.captureRounds + 1)
+                        + "场已触发一次捕捉，正在检查可用精灵球");
+                delay = 300L;
+            } else if ("ball_used".equals(result)) {
+                state.adventureRecoverySteps = 0;
+                updateState(accountIndex, "已点击可用精灵球，不等待结算");
+                delay = 700L;
+            } else if ("continue_clicked".equals(result)) {
+                state.captureRounds++;
+                state.captureAttemptedThisBattle = false;
+                state.adventureRecoverySteps = 0;
+                updateState(accountIndex, "已进入下一场自动战斗（累计"
+                        + state.captureRounds + "场）");
+                delay = 700L;
+            } else if ("battle_started".equals(result)) {
+                state.captureAttemptedThisBattle = false;
+                state.adventureRecoverySteps = 0;
+                updateState(accountIndex, "战斗页面加载中，等待自动攻击与捕捉控件");
+                delay = 700L;
+            } else if ("auto_menu_opened".equals(result)
+                    || "map_clicked".equals(result)
+                    || "adventure_clicked".equals(result)
+                    || "fighting".equals(result)) {
+                state.adventureRecoverySteps = 0;
+            } else {
+                state.adventureRecoverySteps++;
+                if (state.adventureRecoverySteps >= ADVENTURE_RECOVERY_STEPS) {
+                    state.adventureRecoverySteps = 0;
+                    state.captureAutoAttackEnabled = false;
+                    state.captureAttemptedThisBattle = false;
+                    updateState(accountIndex, "页面长时间未就绪，已返回首页恢复自动捕捉");
+                    host.openHome(accountIndex);
+                    delay = 2_000L;
+                }
+            }
+            postTask(accountIndex, () -> runAutoCaptureStep(accountIndex, view), delay);
+        });
+    }
+
+    private void runTowerStep(int accountIndex, WebView view) {
+        RuntimeState state = states[accountIndex];
+        if (stopped || !state.busy || !"tower_battle".equals(state.task)) return;
+        String script = "(function(){const inView=e=>{if(!e)return false;const r=e.getBoundingClientRect();"
+                + "return r.width>0&&r.height>0&&r.right>0&&r.bottom>0&&r.left<innerWidth&&r.top<innerHeight;};"
+                + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'').trim();"
+                + "const body=(document.body.innerText||'').replace(/\\s+/g,'');"
+                + "if(/战斗(?:胜利|失败)/.test(body))return body.includes('战斗胜利')?'complete':'failed';"
+                + "const auto=document.querySelector('[name=\"自动攻击\"]'),settings=document.querySelector('[name=\"攻击设置\"]');"
+                + "if(auto&&settings&&document.querySelector('.battle-box')){"
+                + "const menu=Array.from(document.querySelectorAll('.jineng-list .li,.jineng-list button,.jineng-list uni-button')).filter(inView);"
+                + (state.towerSkillSelected ? ""
+                : "const skills=menu.filter(e=>!/^自动攻击/.test(clean(e))&&!/^关闭自动战斗/.test(clean(e)));"
+                        + "if(skills.length>=2){skills[1].click();return 'skill_selected|'+clean(skills[1]);}"
+                        + "settings.click();return 'skill_menu_opened';")
+                + (state.towerSkillSelected && !state.towerAutoAttackEnabled
+                ? "const enable=menu.find(e=>/^自动攻击/.test(clean(e)));if(enable){enable.click();return 'auto_enabled';}"
+                        + "auto.click();return 'auto_menu_opened';"
+                : "")
+                + (state.towerAutoAttackEnabled ? "return 'fighting';" : "")
+                + "}"
+                + "const fight=Array.from(document.querySelectorAll('[name=\"战斗\"]')).find(inView);"
+                + "if(fight){if(/剩余挑战次数[:：]?0次/.test(body))return 'no_attempts';fight.click();return 'battle_started';}"
+                + "const tower=Array.from(document.querySelectorAll('[name=\"通天塔\"]')).find(inView);"
+                + "if(tower){tower.click();return 'tower_clicked';}"
+                + "const nextMap=Array.from(document.querySelectorAll('.map-btn2')).find(inView);"
+                + "if(nextMap){nextMap.click();return 'next_map_clicked';}"
+                + "const adventure=Array.from(document.querySelectorAll('[name=\"野外探险\"],.nav-btn.bg1')).find(inView);"
+                + "if(adventure){adventure.click();return 'adventure_clicked';}return 'loading';})()";
+        evaluateTask(accountIndex, view, script, encoded -> {
+            String result = decodeString(encoded);
+            if ("complete".equals(result)) {
+                finish(accountIndex, state.task, "ok", "通天塔自动战斗已胜利结束", true);
+                return;
+            }
+            if ("failed".equals(result)) {
+                finish(accountIndex, state.task, "error", "通天塔本场战斗失败", true);
+                return;
+            }
+            if ("no_attempts".equals(result)) {
+                finish(accountIndex, state.task, "ok", "通天塔今日无剩余挑战次数", true);
+                return;
+            }
+            long delay = ADVENTURE_STEP_DELAY_MS;
+            if (result.startsWith("skill_selected|")) {
+                state.towerSkillSelected = true;
+                state.adventureRecoverySteps = 0;
+                updateState(accountIndex, "通天塔已选择第一排第二个伤害技能："
+                        + result.substring("skill_selected|".length()));
+                delay = 500L;
+            } else if ("auto_enabled".equals(result)) {
+                state.towerAutoAttackEnabled = true;
+                state.adventureRecoverySteps = 0;
+                updateState(accountIndex, "通天塔自动攻击已开启，等待本场结束");
+                delay = 900L;
+            } else if ("battle_started".equals(result)) {
+                state.adventureRecoverySteps = 0;
+                updateState(accountIndex, "已进入通天塔战斗，等待攻击设置加载");
+                delay = 700L;
+            } else if ("skill_menu_opened".equals(result)
+                    || "auto_menu_opened".equals(result)
+                    || "tower_clicked".equals(result)
+                    || "next_map_clicked".equals(result)
+                    || "adventure_clicked".equals(result)
+                    || "fighting".equals(result)) {
+                state.adventureRecoverySteps = 0;
+            } else {
+                state.adventureRecoverySteps++;
+                if (state.adventureRecoverySteps >= ADVENTURE_RECOVERY_STEPS) {
+                    finish(accountIndex, state.task, "error", "通天塔页面加载超时", true);
+                    return;
+                }
+            }
+            postTask(accountIndex, () -> runTowerStep(accountIndex, view), delay);
+        });
+    }
+
     private void runDungeonQueue(int accountIndex, boolean manual, boolean afkRetried) {
         RuntimeState state = states[accountIndex];
         if (!afkRetried) {
@@ -3182,6 +3503,7 @@ final class AutomationCoordinator {
             state.prestigePreparedDungeonIndex = -1;
             state.dungeonDailySignInPrepared = false;
             state.dungeonDailyTasksPrepared = false;
+            state.dungeonCompletionTasksPrepared = false;
             state.skippedDungeons.clear();
             host.onAutomationChanged();
             host.prepareAutomation(accountIndex, false);
@@ -4146,6 +4468,13 @@ final class AutomationCoordinator {
         int prestigePreparedDungeonIndex = -1;
         boolean dungeonDailySignInPrepared;
         boolean dungeonDailyTasksPrepared;
+        boolean dungeonCompletionTasksPrepared;
+        boolean captureAutoAttackEnabled;
+        boolean captureAttemptedThisBattle;
+        int captureRounds;
+        boolean towerSkillSelected;
+        boolean towerAutoAttackEnabled;
+        int adventureRecoverySteps;
         boolean templeStoragePrepared;
         int preHangStoreRows = -1;
         int preHangStoreNoProgressChecks;

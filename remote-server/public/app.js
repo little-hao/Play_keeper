@@ -1308,6 +1308,8 @@ function renderDevices() {
     const warehouseItem = card.querySelector(".warehouse-item");
     const dungeonItemsInput = card.querySelector(".dungeon-items");
     const dungeonSkillInput = card.querySelector(".dungeon-skill");
+    const dungeonCompleteTasks = card.querySelector(".dungeon-complete-tasks");
+    const captureMapInput = card.querySelector(".capture-map");
     const prestigeEnabled = card.querySelector(".prestige-enabled");
     const prestigeItemsInput = card.querySelector(".prestige-items");
     const inventoryItemsInput = card.querySelector(".inventory-items");
@@ -1358,6 +1360,9 @@ function renderDevices() {
       ? automation.dungeonItems.join(",") : "绘画小屋,伊苏王的神墓,火龙王的宫殿,史芬克斯密穴";
     dungeonSkillInput.value = typeof automation.dungeonSkill === "string"
       && automation.dungeonSkill.trim() ? automation.dungeonSkill.trim() : "auto";
+    dungeonCompleteTasks.checked = automation.dungeonCompleteTasks === true;
+    captureMapInput.value = typeof automation.captureMap === "string"
+      && automation.captureMap.trim() ? automation.captureMap.trim() : "圣诞小屋";
     prestigeEnabled.checked = automation.prestigeEnabled === true;
     prestigeItemsInput.value = Array.isArray(automation.prestigeItems)
       ? automation.prestigeItems.join(",") : "黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石";
@@ -1421,6 +1426,7 @@ function renderDevices() {
       const dungeonItems = dungeonItemsInput.value.split(/[,，\n]/)
         .map((item) => item.trim()).filter(Boolean);
       const dungeonSkill = dungeonSkillInput.value.trim() || "auto";
+      const captureMap = captureMapInput.value.trim() || "圣诞小屋";
       const prestigeItems = prestigeItemsInput.value.split(/[,，\n]/)
         .map((item) => item.trim()).filter(Boolean);
       const inventoryItems = inventoryItemsInput.value.split(/[,，\n]/)
@@ -1456,6 +1462,9 @@ function renderDevices() {
       }
       if (dungeonSkill.length > 30 || /[\r\n\t]/.test(dungeonSkill)) {
         return addLog("副本技能名称无效");
+      }
+      if (captureMap.length > 30 || /[\r\n\t]/.test(captureMap)) {
+        return addLog("自动捕捉地图名称无效");
       }
       if (!prestigeItems.length || prestigeItems.length > 10
           || prestigeItems.some((item) => item.length > 30)) {
@@ -1497,7 +1506,12 @@ function renderDevices() {
       sendCommand(device.deviceId, "configure_dungeon_sequence", {
         accountIndex: activeAccountIndex,
         items: dungeonItems,
-        skill: dungeonSkill
+        skill: dungeonSkill,
+        completeTasks: dungeonCompleteTasks.checked
+      });
+      sendCommand(device.deviceId, "configure_adventure", {
+        accountIndex: activeAccountIndex,
+        map: captureMap
       });
       sendCommand(device.deviceId, "configure_prestige_items", {
         accountIndex: activeAccountIndex,
@@ -1538,6 +1552,12 @@ function renderDevices() {
     });
     card.querySelector(".run-dungeons").addEventListener("click", () => {
       if (saveAutomation()) sendCommand(device.deviceId, "run_dungeon_sequence", { accountIndex: activeAccountIndex });
+    });
+    card.querySelector(".run-auto-capture").addEventListener("click", () => {
+      if (saveAutomation()) sendCommand(device.deviceId, "run_auto_capture", { accountIndex: activeAccountIndex });
+    });
+    card.querySelector(".run-tower-battle").addEventListener("click", () => {
+      if (saveAutomation()) sendCommand(device.deviceId, "run_tower_battle", { accountIndex: activeAccountIndex });
     });
     card.querySelector(".run-daily-tasks").addEventListener("click", () => {
       sendCommand(device.deviceId, "run_daily_tasks", { accountIndex: activeAccountIndex });

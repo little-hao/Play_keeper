@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css?v=2.0.5-rc2">
+  <link rel="stylesheet" href="/styles.css?v=2.0.6-rc1">
 </head>
 <body>
   <main class="shell">
@@ -336,6 +336,8 @@
             <label class="span-2">存仓道具组合<input class="warehouse-item" type="text" value="护宠仙石"></label>
             <label class="span-2">副本挂机组合<input class="dungeon-items" type="text" value="绘画小屋,伊苏王的神墓,火龙王的宫殿,史芬克斯密穴"></label>
             <label class="span-2">副本技能<input class="dungeon-skill" type="text" maxlength="30" value="auto" placeholder="auto：自动选择第二个攻击/伤害技能；也可填写技能名"></label>
+            <label class="toggle-row span-2"><input class="dungeon-complete-tasks" type="checkbox"> 副本结束后自动完成已接受列表中的可完成任务</label>
+            <label class="span-2">自动捕捉地图<input class="capture-map" type="text" maxlength="30" value="圣诞小屋"></label>
             <label class="span-2">流程结束返回挂机副本<input class="return-hang-map" type="text" value="圣兽云殿" maxlength="30"></label>
             <label class="span-2">威望道具组合<input class="prestige-items" type="text" value="黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石"></label>
             <label class="span-2">每日背包监控道具<input class="inventory-items" type="text" value="进化宝石,曙光印记,强化丹A,强化丹B,天仙玉露"></label>
@@ -344,6 +346,8 @@
             <button class="run-temple secondary">恢复圣兽云殿</button>
             <button class="run-warehouse secondary">立即检查存仓</button>
             <button class="run-dungeons secondary">执行副本组合</button>
+            <button class="run-auto-capture secondary">启动自动捕捉</button>
+            <button class="run-tower-battle secondary">通天塔自动战斗</button>
             <button class="run-daily-tasks secondary">一键接受日常任务</button>
             <button class="run-prestige secondary">检查威望道具</button>
             <button class="run-inventory secondary">刷新背包监控</button>
@@ -364,6 +368,6 @@
       <div id="selectOptions" class="select-options" role="radiogroup"></div>
     </section>
   </div>
-  <script type="module" src="/app.js?v=2.0.5-rc2"></script>
+  <script type="module" src="/app.js?v=2.0.6-rc1"></script>
 </body>
 </html>
