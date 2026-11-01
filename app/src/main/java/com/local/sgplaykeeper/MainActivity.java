@@ -533,7 +533,7 @@ public final class MainActivity extends Activity {
         batteryMonitor.start();
 
         remoteConfigStore = new RemoteConfigStore(this);
-        remoteConnectionManager = new RemoteConnectionManager(
+        remoteConnectionManager = new RemoteConnectionManager(this,
                 new RemoteConnectionManager.Listener() {
                     @Override
                     public void onRemoteStateChanged(RemoteConnectionManager.State state,
@@ -548,7 +548,7 @@ public final class MainActivity extends Activity {
                     }
 
                     @Override
-                    public void onRemoteCommand(String commandId, String command,
+                    public void onRemoteCommand(String commandId, String stepId, String command,
                                                 JSONObject parameters) {
                         executeRemoteCommand(commandId, command, parameters);
                     }
@@ -741,6 +741,26 @@ public final class MainActivity extends Activity {
                         AutomationCoordinator.DEFAULT_DUNGEON_SEQUENCE)));
         form.addView(defaultDungeons, automationActionParams());
 
+        form.addView(formLabel("副本攻击技能（auto 自动选择第二个攻击技能）"));
+        EditText dungeonSkill = new EditText(this);
+        dungeonSkill.setSingleLine(true);
+        dungeonSkill.setText(automationCoordinator.dungeonSkill(accountIndex));
+        dungeonSkill.setHint("auto 或技能名称");
+        form.addView(dungeonSkill, formFieldParams());
+
+        CheckBox dungeonCompleteTasks = new CheckBox(this);
+        dungeonCompleteTasks.setText("副本全部结束后自动完成当前可完成的任务");
+        dungeonCompleteTasks.setChecked(
+                automationCoordinator.isDungeonTaskCompletionEnabled(accountIndex));
+        form.addView(dungeonCompleteTasks);
+
+        form.addView(formLabel("自动捕捉地图（默认圣诞小屋）"));
+        EditText captureMap = new EditText(this);
+        captureMap.setSingleLine(true);
+        captureMap.setText(automationCoordinator.captureMap(accountIndex));
+        captureMap.setHint("圣诞小屋");
+        form.addView(captureMap, formFieldParams());
+
         CheckBox prestigeEnabled = new CheckBox(this);
         prestigeEnabled.setText("圣兽云殿挂机时定时使用威望道具（每1小时）");
         prestigeEnabled.setChecked(automationCoordinator.isPrestigeEnabled(accountIndex));
@@ -787,7 +807,8 @@ public final class MainActivity extends Activity {
                 accountIndex, auctionEnabled, auctionKeepOne, auctionItems, buyer, auctionPrice, hours,
                 storeEnabled, templeEnabled, warehouseEnabled, warehouseItem,
                 warehouseStoreAll,
-                dungeonItems, prestigeEnabled, prestigeItems, equipmentItems,
+                dungeonItems, dungeonSkill, dungeonCompleteTasks, captureMap,
+                prestigeEnabled, prestigeItems, equipmentItems,
                 equipmentPrice, equipmentBuyer);
 
         Button auctionNow = makeButton("保存并立即拍卖", view -> {
@@ -826,6 +847,16 @@ public final class MainActivity extends Activity {
             if (saveAll.getAsBoolean()) automationCoordinator.runDungeonNow(accountIndex);
         });
         form.addView(dungeonNow, automationActionParams());
+
+        Button autoCaptureNow = makeButton("保存并启动自动捕捉", view -> {
+            if (saveAll.getAsBoolean()) automationCoordinator.runAutoCaptureNow(accountIndex);
+        });
+        form.addView(autoCaptureNow, automationActionParams());
+
+        Button towerNow = makeButton("保存并启动通天塔自动战斗", view -> {
+            if (saveAll.getAsBoolean()) automationCoordinator.runTowerNow(accountIndex);
+        });
+        form.addView(towerNow, automationActionParams());
 
         Button prestigeNow = makeButton("保存并立即检查威望道具", view -> {
             if (saveAll.getAsBoolean()) automationCoordinator.runPrestigeNow(accountIndex);
@@ -872,7 +903,9 @@ public final class MainActivity extends Activity {
                                        CheckBox storeEnabled, CheckBox templeEnabled,
                                        CheckBox warehouseEnabled, EditText warehouseItem,
                                        CheckBox warehouseStoreAll,
-                                       EditText dungeonItems, CheckBox prestigeEnabled,
+                                       EditText dungeonItems, EditText dungeonSkill,
+                                       CheckBox dungeonCompleteTasks, EditText captureMap,
+                                       CheckBox prestigeEnabled,
                                        EditText prestigeItems,
                                        EditText equipmentItems, EditText equipmentPrice,
                                        EditText equipmentBuyer) {
@@ -892,7 +925,10 @@ public final class MainActivity extends Activity {
                     warehouseEnabled.isChecked(), warehouseItem.getText().toString(),
                     warehouseStoreAll.isChecked());
             automationCoordinator.configureDungeonSequence(accountIndex,
-                    dungeonItems.getText().toString());
+                    dungeonItems.getText().toString(),
+                    dungeonSkill.getText().toString(), dungeonCompleteTasks.isChecked());
+            automationCoordinator.configureAdventure(accountIndex,
+                    captureMap.getText().toString());
             automationCoordinator.configurePrestige(accountIndex,
                     prestigeEnabled.isChecked(), prestigeItems.getText().toString());
             int transferPrice = Integer.parseInt(equipmentPrice.getText().toString().trim());
@@ -1180,6 +1216,13 @@ public final class MainActivity extends Activity {
                     success = true;
                     resultMessage = "状态已更新";
                     break;
+                case "capture_diagnostic_snapshot": {
+                    int index = requiredAccountIndex(parameters);
+                    captureDiagnosticSnapshot(index, parameters.optString("diagnosticId", ""));
+                    success = true;
+                    resultMessage = "已采集只读诊断截图";
+                    break;
+                }
                 case "preview_start": {
                     int index = requiredAccountIndex(parameters);
                     int maxWidth = parameters.optInt("maxWidth", PREVIEW_DEFAULT_WIDTH);
@@ -1310,7 +1353,12 @@ public final class MainActivity extends Activity {
                         if (i > 0) itemText.append(',');
                         itemText.append(itemArray.optString(i));
                     }
-                    automationCoordinator.configureDungeonSequence(index, itemText.toString());
+                    automationCoordinator.configureDungeonSequence(index, itemText.toString(),
+                            parameters.has("skill") ? parameters.optString("skill", "auto")
+                                    : automationCoordinator.dungeonSkill(index),
+                            parameters.has("completeTasks")
+                                    ? parameters.optBoolean("completeTasks", false)
+                                    : automationCoordinator.isDungeonTaskCompletionEnabled(index));
                     success = true;
                     resultMessage = "副本组合已更新";
                     break;
@@ -1321,6 +1369,30 @@ public final class MainActivity extends Activity {
                     automationCoordinator.runDungeonNow(index);
                     success = true;
                     resultMessage = "已启动副本组合";
+                    break;
+                }
+                case "configure_adventure": {
+                    int index = requiredAccountIndex(parameters);
+                    automationCoordinator.configureAdventure(index,
+                            parameters.optString("map", "圣诞小屋"));
+                    success = true;
+                    resultMessage = "自动捕捉地图已更新";
+                    break;
+                }
+                case "run_auto_capture": {
+                    int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
+                    automationCoordinator.runAutoCaptureNow(index);
+                    success = true;
+                    resultMessage = "已启动自动捕捉";
+                    break;
+                }
+                case "run_tower_battle": {
+                    int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
+                    automationCoordinator.runTowerNow(index);
+                    success = true;
+                    resultMessage = "已启动通天塔自动战斗";
                     break;
                 }
                 case "configure_prestige_items": {
@@ -1583,6 +1655,42 @@ public final class MainActivity extends Activity {
             if (bitmap != null) {
                 bitmap.recycle();
             }
+        }
+    }
+
+    private void captureDiagnosticSnapshot(int accountIndex, String diagnosticId) {
+        Session session = getOrCreateSession(accountIndex);
+        WebView view = session.webView;
+        if (view.getWidth() <= 0 || view.getHeight() <= 0) return;
+        int sourceWidth = view.getWidth();
+        int sourceHeight = view.getHeight();
+        int targetWidth = Math.min(1_280, sourceWidth);
+        int targetHeight = Math.max(1, Math.round(sourceHeight * targetWidth / (float) sourceWidth));
+        Bitmap bitmap = null;
+        try {
+            bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.RGB_565);
+            Canvas canvas = new Canvas(bitmap);
+            canvas.drawColor(Color.WHITE);
+            canvas.scale(targetWidth / (float) sourceWidth, targetHeight / (float) sourceHeight);
+            view.draw(canvas);
+            byte[] encoded = compressPreview(bitmap, 64);
+            if (encoded.length > PREVIEW_MAX_ENCODED_BYTES) encoded = compressPreview(bitmap, 42);
+            if (encoded.length > PREVIEW_MAX_ENCODED_BYTES) return;
+            JSONObject frame = new JSONObject();
+            frame.put("diagnosticId", diagnosticId);
+            frame.put("accountIndex", accountIndex);
+            frame.put("accountLabel", accountDisplayName(accountIndex));
+            frame.put("sequence", ++previewSequence);
+            frame.put("width", targetWidth);
+            frame.put("height", targetHeight);
+            frame.put("mime", "image/jpeg");
+            frame.put("blackOverlay", blackMode);
+            frame.put("imageBase64", Base64.encodeToString(encoded, Base64.NO_WRAP));
+            remoteConnectionManager.sendDiagnosticSnapshot(frame);
+        } catch (RuntimeException | JSONException ignored) {
+            // GPT diagnostics are suggestion-only and must not affect the workflow.
+        } finally {
+            if (bitmap != null) bitmap.recycle();
         }
     }
 
@@ -1972,6 +2080,9 @@ public final class MainActivity extends Activity {
                 accounts.put(account);
             }
             telemetry.put("accounts", accounts);
+            if (remoteConnectionManager != null) {
+                telemetry.put("executionLedger", remoteConnectionManager.executionLedgerTelemetry());
+            }
         } catch (JSONException ignored) {
             // All telemetry values are controlled by the app.
         }

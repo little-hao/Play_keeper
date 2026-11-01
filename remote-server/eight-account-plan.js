@@ -14,7 +14,25 @@ const REQUIRED_ROUTE = Object.freeze([
 ]);
 
 const MAIN_BUY_TIMEOUT_MS = 60_000;
-const DEVICE_RECONNECT_GRACE_MS = 90_000;
+export const DEFAULT_DISCONNECT_GRACE_MS = 120_000;
+export const DEFAULT_PHASE_TIMEOUTS = Object.freeze({
+  starting_leg: 120_000,
+  seller_running: 240_000,
+  buyer_running: 720_000,
+  resource_auction_running: 240_000,
+  standalone_main_running: 900_000,
+  main_buy_running: 90_000
+});
+
+function normalizedTimeouts(value = {}) {
+  const result = { ...DEFAULT_PHASE_TIMEOUTS };
+  for (const [phase, fallback] of Object.entries(DEFAULT_PHASE_TIMEOUTS)) {
+    const candidate = Number(value?.[phase]);
+    result[phase] = Number.isFinite(candidate) && candidate >= 30_000 && candidate <= 3_600_000
+      ? Math.round(candidate) : fallback;
+  }
+  return result;
+}
 
 function shanghaiDateKey(timestamp) {
   if (!Number.isFinite(Number(timestamp)) || Number(timestamp) <= 0) return "";
@@ -68,16 +86,21 @@ export class EightAccountPlan {
       phaseStartedAt: 0, legIndex: -1, phase: "idle", mode: "daily", resumePhase: "",
       buyerStarted: false, buyerWorkflowCompleted: false,
       sellerReleased: false, sellerCleaned: false, mainBuySeen: false,
-      mainBuyTimedOut: false, mainBuySkipReason: "",
+      mainBuyTimedOut: false,
       sellerCleanupDueAt: 0, equipmentHolderLabel: "hao", mainAccountLabel: "hao",
       route: [], fullRoute: [], skippedDungeonAccounts: [], items: [...EQUIPMENT_ITEMS],
       resourceItems: [...RESOURCE_ITEMS], inventoryItems: [...RESOURCE_ITEMS],
       resourceReserveCount: 1, price: 920, resourcePrice: 920,
       returnMap: "圣兽云殿", returnMaps: {},
+      disconnectGraceMs: DEFAULT_DISCONNECT_GRACE_MS, disconnectedDevices: {},
+      phaseTimeouts: { ...DEFAULT_PHASE_TIMEOUTS }, lastProgressAt: 0,
+      lastProgressSignature: "", currentStepId: "", stepSequence: 0,
+      stepLedger: [], eventLedger: [], diagnosticRequested: false,
+      diagnosticReason: "", gptSuggestion: null, recoveryPending: false,
       dungeonItems: ["绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"],
       reportEmail: "", ownerUsername: "", error: "", errorAccount: "",
-      interventionDeadlineAt: 0, reconnectDeadlineAt: 0, offlineDeviceId: "",
-      commandEpoch: 0, emailStatus: "pending", inventoryByAccount: {}, history: [], warnings: [] };
+      interventionDeadlineAt: 0, emailStatus: "pending", inventoryByAccount: {},
+      history: [], warnings: [] };
   }
 
   snapshot() { return JSON.parse(JSON.stringify(this.state)); }
@@ -108,16 +131,28 @@ export class EightAccountPlan {
         ? savedState.resourcePrice : (Number.isInteger(savedState.price) ? savedState.price : 920),
       returnMaps: savedState.returnMaps && typeof savedState.returnMaps === "object"
         && !Array.isArray(savedState.returnMaps) ? { ...savedState.returnMaps } : {},
+      phaseTimeouts: normalizedTimeouts(savedState.phaseTimeouts),
+      disconnectedDevices: savedState.disconnectedDevices
+        && typeof savedState.disconnectedDevices === "object"
+        ? { ...savedState.disconnectedDevices } : {},
+      stepLedger: Array.isArray(savedState.stepLedger) ? savedState.stepLedger.slice(-200) : [],
+      eventLedger: Array.isArray(savedState.eventLedger) ? savedState.eventLedger.slice(-300) : [],
       history: Array.isArray(savedState.history) ? [...savedState.history] : [],
       warnings: Array.isArray(savedState.warnings) ? [...savedState.warnings] : [],
       inventoryByAccount: savedState.inventoryByAccount
         && typeof savedState.inventoryByAccount === "object"
         ? { ...savedState.inventoryByAccount } : {} };
     if (this.state.status === "running") {
-      this.state.resumePhase = this.state.phase;
-      this.state.status = "intervention";
-      this.state.error = `服务恢复后已暂停；请人工确认目标套装所在账号`;
-      this.state.errorAccount = this.state.equipmentHolderLabel || "当前账号";
+      this.state.recoveryPending = true;
+      const offlineAt = this.now();
+      for (const account of this.#currentAccounts()) {
+        this.state.disconnectedDevices[account.deviceId] = {
+          offlineAt, deadlineAt: offlineAt + this.state.disconnectGraceMs,
+          accountLabel: account.accountLabel
+        };
+      }
+      this.#event("vps_recovery_started", { outstandingSteps:
+        this.state.stepLedger.filter((entry) => entry.status === "dispatched").length });
     }
     if (this.state.status === "intervention") this.state.interventionDeadlineAt = 0;
     this.state.updatedAt = this.now();
@@ -125,9 +160,7 @@ export class EightAccountPlan {
   }
 
   start(route, options = {}) {
-    if (["running", "reconnecting", "intervention"].includes(this.state.status)) {
-      throw new Error("多用户挂机已在运行");
-    }
+    if (["running", "intervention"].includes(this.state.status)) throw new Error("多用户挂机已在运行");
     this.#validateRoute(route);
     if (route.length < 3) throw new Error("新计划至少需要主号、一个中转账号并返回主号");
     const price = options.equipmentPrice ?? options.price ?? 920;
@@ -142,6 +175,8 @@ export class EightAccountPlan {
     const returnMaps = options.returnMaps && typeof options.returnMaps === "object"
       && !Array.isArray(options.returnMaps) ? options.returnMaps : {};
     const reportEmail = options.reportEmail ?? "";
+    const disconnectGraceMs = Number(options.disconnectGraceMs ?? DEFAULT_DISCONNECT_GRACE_MS);
+    const phaseTimeouts = normalizedTimeouts(options.phaseTimeouts);
     if (!Number.isInteger(price) || price < 1 || price > 9_999_999) throw new Error("交易单价无效");
     if (!Number.isInteger(resourcePrice) || resourcePrice < 1 || resourcePrice > 9_999_999) {
       throw new Error("道具交易单价无效");
@@ -175,6 +210,8 @@ export class EightAccountPlan {
         || (reportEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail.trim()))) {
       throw new Error("报告邮箱格式无效");
     }
+    if (!Number.isFinite(disconnectGraceMs) || disconnectGraceMs < 30_000
+        || disconnectGraceMs > 600_000) throw new Error("断线宽限期需为30–600秒");
     const now = this.now();
     const fullRoute = route.map((entry) => ({ ...entry,
       dungeonCompletedToday: completedToday(entry, now) }));
@@ -195,8 +232,10 @@ export class EightAccountPlan {
       resourceReserveCount,
       dungeonItems: [...new Set(dungeonItems.map((item) => String(item).trim()).filter(Boolean))],
       price, resourcePrice, returnMap: returnMap.trim(), returnMaps: normalizedReturnMaps,
+      disconnectGraceMs: Math.round(disconnectGraceMs), phaseTimeouts,
+      lastProgressAt: now,
       reportEmail: reportEmail.trim(),
-      ownerUsername: String(options.ownerUsername ?? "").trim(), commandEpoch: 1 };
+      ownerUsername: String(options.ownerUsername ?? "").trim() };
     if (this.state.route.length === 2) {
       if (completedToday(this.state.route[0], now)) this.#startMainBuy(this.state.route[0]);
       else this.#startStandaloneMain(this.state.route[0]);
@@ -207,9 +246,7 @@ export class EightAccountPlan {
   }
 
   startResourceSweep(route, options = {}) {
-    if (["running", "reconnecting", "intervention"].includes(this.state.status)) {
-      throw new Error("已有多用户任务正在运行");
-    }
+    if (["running", "intervention"].includes(this.state.status)) throw new Error("已有多用户任务正在运行");
     if (!Array.isArray(route) || route.length < 2 || route.length > 9) {
       throw new Error("资源归集至少需要一个卖方账号和一个主号");
     }
@@ -248,16 +285,17 @@ export class EightAccountPlan {
       resourceItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
       inventoryItems: [...new Set(resourceItems.map((item) => String(item).trim()).filter(Boolean))],
       resourceReserveCount, price: 920, resourcePrice, returnMap,
+      disconnectGraceMs: Math.round(Number(options.disconnectGraceMs)
+        || DEFAULT_DISCONNECT_GRACE_MS), phaseTimeouts: normalizedTimeouts(options.phaseTimeouts),
+      lastProgressAt: now,
       returnMaps: normalizedReturnMaps,
-      ownerUsername: String(options.ownerUsername ?? "").trim(), commandEpoch: 1 };
+      ownerUsername: String(options.ownerUsername ?? "").trim() };
     this.#startResourceAuction(this.state.route[0]);
     return this.snapshot();
   }
 
   cancel(reason = "用户中断") {
-    if (!["running", "reconnecting", "intervention"].includes(this.state.status)) {
-      return this.snapshot();
-    }
+    if (!["running", "intervention"].includes(this.state.status)) return this.snapshot();
     const leg = this.#currentLeg();
     for (const account of [leg?.seller, leg?.buyer]) {
       if (account) this.#command(account, "cancel_automation", { accountIndex: account.accountIndex });
@@ -266,8 +304,7 @@ export class EightAccountPlan {
       ? this.state.resumePhase : this.state.phase;
     Object.assign(this.state, { status: "cancelled", phase: "cancelled", resumePhase,
       error: reason,
-      interventionDeadlineAt: 0, reconnectDeadlineAt: 0, offlineDeviceId: "",
-      commandEpoch: this.state.commandEpoch + 1, updatedAt: this.now() });
+      interventionDeadlineAt: 0, updatedAt: this.now() });
     return this.snapshot();
   }
 
@@ -275,8 +312,7 @@ export class EightAccountPlan {
     if (this.state.status !== "intervention") throw new Error("当前没有等待人工处理的错误");
     const phase = this.state.resumePhase;
     Object.assign(this.state, { status: "running", error: "", errorAccount: "",
-      interventionDeadlineAt: 0, reconnectDeadlineAt: 0, offlineDeviceId: "",
-      commandEpoch: this.state.commandEpoch + 1, phaseStartedAt: this.now() });
+      interventionDeadlineAt: 0, phaseStartedAt: this.now() });
     if (this.state.mode === "resource_sweep") {
       this.#startResourceAuction(this.state.route[this.state.legIndex]);
       return this.snapshot();
@@ -300,10 +336,6 @@ export class EightAccountPlan {
       throw new Error("当前计划不需要恢复");
     }
     const interruptedLeg = this.#currentLeg();
-    const resumeSellerInPlace = this.state.mode === "daily"
-      && ["seller_running", "buyer_running"].includes(this.state.resumePhase)
-      && interruptedLeg?.seller?.accountLabel === confirmedHolderLabel
-      && this.state.equipmentHolderLabel === confirmedHolderLabel;
     const resumeBuyerInPlace = this.state.mode === "daily"
       && this.state.resumePhase === "buyer_running"
       && interruptedLeg?.buyer?.accountLabel === confirmedHolderLabel
@@ -318,7 +350,7 @@ export class EightAccountPlan {
         index < liveRoute.length - 1 && entry.accountLabel === confirmedHolderLabel);
       if (holderIndex < 0) throw new Error(`确认的套装账号 ${confirmedHolderLabel} 不在当前路线中`);
       this.state.equipmentHolderLabel = confirmedHolderLabel;
-      if (!resumeBuyerInPlace && !resumeSellerInPlace) {
+      if (!resumeBuyerInPlace) {
         const now = this.now();
         const fullRoute = liveRoute.map((entry) => ({ ...entry,
           dungeonCompletedToday: completedToday(entry, now) }));
@@ -338,9 +370,6 @@ export class EightAccountPlan {
         this.state.mainBuySeen = false;
       }
     }
-    this.state.commandEpoch += 1;
-    this.state.reconnectDeadlineAt = 0;
-    this.state.offlineDeviceId = "";
     if (this.state.status !== "intervention") {
       const phase = this.state.resumePhase;
       if (!phase || ["idle", "complete", "cancelled", "error"].includes(phase)) {
@@ -359,14 +388,6 @@ export class EightAccountPlan {
       else this.#startStandaloneMain(this.state.route[0]);
       return this.snapshot();
     }
-    if (this.state.mode === "daily" && resumeSellerInPlace) {
-      Object.assign(this.state, { status: "running", error: "", errorAccount: "",
-        interventionDeadlineAt: 0, phaseStartedAt: this.now(),
-        buyerStarted: false, buyerWorkflowCompleted: false,
-        sellerReleased: false, sellerCleaned: false, sellerCleanupDueAt: 0 });
-      this.#startCurrentLeg({ recoverPartialTransfer: true });
-      return this.snapshot();
-    }
     if (this.state.mode === "daily" && !resumeBuyerInPlace
         && this.state.resumePhase === "seller_running") {
       Object.assign(this.state, { status: "running", error: "", errorAccount: "",
@@ -378,21 +399,38 @@ export class EightAccountPlan {
   }
 
   tick() {
-    if (this.state.status === "reconnecting" && this.state.reconnectDeadlineAt > 0
-        && this.now() >= this.state.reconnectDeadlineAt) {
-      this.state.status = "intervention";
-      this.state.error = `设备 ${this.state.offlineDeviceId} 在90秒内未恢复；原交接段已保留，请确认套装所在账号`;
-      this.state.errorAccount = this.state.equipmentHolderLabel || "当前账号";
-      this.state.reconnectDeadlineAt = 0;
-      this.state.updatedAt = this.now();
-      return this.snapshot();
+    if (this.state.status === "running") {
+      for (const [deviceId, offline] of Object.entries(this.state.disconnectedDevices || {})) {
+        if (this.now() < Number(offline?.deadlineAt || 0)) continue;
+        const account = this.#currentAccounts().find((entry) => entry?.deviceId === deviceId);
+        if (account) return this.#intervene(
+          `设备 ${deviceId} 超过${Math.round(this.state.disconnectGraceMs / 1000)}秒未重连`,
+          account.accountLabel);
+        delete this.state.disconnectedDevices[deviceId];
+      }
+      const timeout = Number(this.state.phaseTimeouts?.[this.state.phase] || 0);
+      const waitingForReconnect = Object.keys(this.state.disconnectedDevices || {}).length > 0;
+      if (!waitingForReconnect && timeout > 0 && this.state.lastProgressAt > 0
+          && this.now() - this.state.lastProgressAt >= timeout) {
+        return this.#intervene(
+          `阶段 ${this.state.phase} 已连续${Math.round(timeout / 1000)}秒无可验证进展`,
+          this.#currentLeg()?.buyer?.accountLabel || this.state.equipmentHolderLabel || "当前账号");
+      }
     }
     if (this.state.status === "running" && this.state.phase === "main_buy_running"
         && !this.state.mainBuyTimedOut
         && this.now() - this.state.phaseStartedAt >= MAIN_BUY_TIMEOUT_MS) {
       const account = this.state.mode === "resource_sweep"
         ? this.state.route[this.state.legIndex] : this.#currentLeg()?.buyer;
-      if (account) this.#skipMainBuyAndReturn(account, "道具购买60秒未完成，已跳过");
+      if (account) {
+        this.state.mainBuyTimedOut = true;
+        this.state.mainBuySeen = true;
+        this.state.updatedAt = this.now();
+        this.#command(account, "cancel_automation", { accountIndex: account.accountIndex });
+        this.#command(account, "configure_return_hang", {
+          accountIndex: account.accountIndex, map: this.#returnMapFor(account) });
+        this.#command(account, "run_temple_guard", { accountIndex: account.accountIndex });
+      }
     }
     if (this.state.status === "running" && this.state.mode === "daily"
         && this.state.sellerCleanupDueAt > 0
@@ -410,63 +448,46 @@ export class EightAccountPlan {
 
   onDeviceOffline(deviceId) {
     if (this.state.status !== "running") return this.snapshot();
-    const leg = this.#currentLeg();
-    const activeAccounts = this.state.mode === "resource_sweep"
-      ? [this.state.route[this.state.legIndex]]
-      : this.state.phase === "standalone_main_running"
-        ? [this.state.route[0]]
-        : ["main_buy_running", "resource_auction_running"].includes(this.state.phase)
-          ? [leg?.buyer] : [leg?.seller, leg?.buyer];
-    if (activeAccounts.some((account) => account?.deviceId === deviceId)) {
-      this.state.resumePhase = this.state.phase;
-      Object.assign(this.state, { status: "reconnecting", offlineDeviceId: deviceId,
-        reconnectDeadlineAt: this.now() + DEVICE_RECONNECT_GRACE_MS,
-        error: `设备 ${deviceId} 短暂离线，正在等待自动恢复原交接段`,
-        errorAccount: this.state.equipmentHolderLabel || "当前账号", updatedAt: this.now() });
+    const account = this.#currentAccounts().find((entry) => entry?.deviceId === deviceId);
+    if (account) {
+      const offlineAt = this.now();
+      this.state.disconnectedDevices[deviceId] = {
+        offlineAt, deadlineAt: offlineAt + this.state.disconnectGraceMs,
+        accountLabel: account.accountLabel
+      };
+      this.#event("device_offline", { deviceId, accountLabel: account.accountLabel,
+        deadlineAt: offlineAt + this.state.disconnectGraceMs });
+      this.state.updatedAt = offlineAt;
     }
     return this.snapshot();
   }
 
   onDeviceOnline(deviceId) {
-    if (this.state.status !== "reconnecting" || this.state.offlineDeviceId !== deviceId) {
-      return this.snapshot();
-    }
-    Object.assign(this.state, { status: "running", error: "", errorAccount: "",
-      offlineDeviceId: "", reconnectDeadlineAt: 0,
-      commandEpoch: this.state.commandEpoch + 1, phaseStartedAt: this.now() });
-    if (this.state.mode !== "daily") {
-      this.#startResourceAuction(this.state.route[this.state.legIndex]);
-      return this.snapshot();
-    }
-    if (this.state.resumePhase === "standalone_main_running") {
-      this.#startStandaloneMain(this.state.route[0]);
-      return this.snapshot();
-    }
-    const leg = this.#currentLeg();
-    if (!leg) return this.#intervene("重连后未找到原交接段", "系统");
-    if (this.state.resumePhase === "main_buy_running") {
-      this.#startMainBuy(leg.buyer);
-      return this.snapshot();
-    }
-    if (this.state.resumePhase === "resource_auction_running") {
-      this.#startResourceAuction(leg.buyer);
-      return this.snapshot();
-    }
-    if (this.state.equipmentHolderLabel === leg.buyer.accountLabel) {
-      this.#resumeEquipmentLeg();
-    } else {
-      this.state.buyerStarted = false;
-      this.state.buyerWorkflowCompleted = false;
-      this.state.sellerReleased = false;
-      this.state.sellerCleaned = false;
-      this.state.sellerCleanupDueAt = 0;
-      this.#startCurrentLeg({ recoverPartialTransfer: true });
-    }
+    if (!this.state.disconnectedDevices?.[deviceId]) return this.snapshot();
+    const offlineAt = Number(this.state.disconnectedDevices[deviceId].offlineAt || 0);
+    delete this.state.disconnectedDevices[deviceId];
+    this.state.recoveryPending = Object.keys(this.state.disconnectedDevices).length > 0;
+    this.#event("device_reconnected", { deviceId,
+      outageMs: Math.max(0, this.now() - offlineAt) });
+    this.state.lastProgressAt = this.now();
+    this.state.updatedAt = this.now();
     return this.snapshot();
+  }
+
+  isDeviceInGrace(deviceId) {
+    const entry = this.state.disconnectedDevices?.[deviceId];
+    return Boolean(entry && this.now() < Number(entry.deadlineAt || 0));
   }
 
   onTelemetry(deviceId, telemetry) {
     if (this.state.status !== "running") return this.snapshot();
+    this.onDeviceOnline(deviceId);
+    const signature = this.#progressSignature(deviceId, telemetry);
+    if (signature && signature !== this.state.lastProgressSignature) {
+      this.state.lastProgressSignature = signature;
+      this.state.lastProgressAt = this.now();
+      this.#event("progress", { deviceId, phase: this.state.phase });
+    }
     if (this.state.mode === "resource_sweep") {
       return this.#onResourceSweepTelemetry(deviceId, telemetry);
     }
@@ -488,8 +509,7 @@ export class EightAccountPlan {
     if (["seller_running", "buyer_running"].includes(this.state.phase)) {
       if (buyer) {
         this.#scheduleSellerAfterTransfer(leg, buyer);
-        if (this.state.sellerCleanupDueAt > 0
-            && this.now() >= this.state.sellerCleanupDueAt) this.#releaseScheduledSeller();
+        if (this.state.sellerCleanupDueAt > 0) this.#releaseScheduledSeller();
       }
       if (!this.state.sellerReleased
           && seller?.task === "equipment_sell" && seller.status === "error") {
@@ -525,6 +545,7 @@ export class EightAccountPlan {
       }
       // The buyer and seller can report from different devices. Keep both
       // completion facts so whichever report arrives last advances the plan.
+      // Seller cleanup is best effort once the buyer has audited the set.
       this.#advanceCompletedWorkflows();
       return this.snapshot();
     }
@@ -542,9 +563,8 @@ export class EightAccountPlan {
     if (this.state.phase === "main_buy_running" && buyer) {
       if (buyer.task === "auction_buy" && buyer.status === "running") this.state.mainBuySeen = true;
       if (buyer.status === "error" && !this.state.mainBuyTimedOut) {
-        this.#skipMainBuyAndReturn(leg.buyer,
-          `${this.state.mainAccountLabel} 按设置价格 ${this.state.resourcePrice} 金币购买失败：${buyer.lastMessage || "未知错误"}`);
-        return this.snapshot();
+        return this.#intervene(`${this.state.mainAccountLabel} 道具购买失败：${buyer.lastMessage || "未知错误"}`,
+          this.state.mainAccountLabel);
       }
       const returned = this.state.mainBuySeen && buyer.task === "temple" && buyer.status === "ok"
         && this.#freshValue(leg.buyer, buyer, "updatedAt");
@@ -584,8 +604,7 @@ export class EightAccountPlan {
       }
       this.state.history.push({ account: this.state.mainAccountLabel,
         completedAt: this.now(), result: this.state.mainBuyTimedOut
-          ? "success_purchase_skipped" : "success",
-        ...(this.state.mainBuySkipReason ? { message: this.state.mainBuySkipReason } : {}) });
+          ? "success_purchase_skipped" : "success" });
       Object.assign(this.state, { status: "success", phase: "complete", updatedAt: this.now() });
     }
     return this.snapshot();
@@ -620,7 +639,9 @@ export class EightAccountPlan {
     // have been purchased and audited.  At that point the seller no longer needs
     // to poll the exchange, so release it immediately before stale page controls
     // can turn a completed transfer into a false listing error.
-    this.state.sellerCleanupDueAt = this.now();
+    // Zero is the "not scheduled" sentinel, while tests and fresh processes can
+    // legitimately start with a zero clock.
+    this.state.sellerCleanupDueAt = Math.max(1, this.now());
     this.state.updatedAt = this.now();
   }
 
@@ -646,7 +667,6 @@ export class EightAccountPlan {
     if (sellerCleanup) {
       this.state.sellerCleaned = true;
       this.state.updatedAt = this.now();
-      this.#advanceCompletedWorkflows();
       return this.snapshot();
     }
     const leg = this.#currentLeg();
@@ -664,7 +684,6 @@ export class EightAccountPlan {
       this.state.sellerCleanupDueAt = 0;
       this.state.mainBuySeen = false;
       this.state.mainBuyTimedOut = false;
-      this.state.mainBuySkipReason = "";
       if (this.state.route.length <= this.state.legIndex + 1) {
         return this.#intervene("跳过异常账号后已无下一账号", account.accountLabel);
       }
@@ -700,13 +719,7 @@ export class EightAccountPlan {
 
   #refreshRouteBindings(liveRoute) {
     this.#validateRoute(liveRoute);
-    const byLabel = new Map();
-    for (const entry of liveRoute) {
-      // Closed routes repeat the main account at the end. Keep the first live
-      // binding so a seller-in-place resume does not accidentally bind it to a
-      // stale duplicate route entry.
-      if (!byLabel.has(entry.accountLabel)) byLabel.set(entry.accountLabel, entry);
-    }
+    const byLabel = new Map(liveRoute.map((entry) => [entry.accountLabel, entry]));
     this.state.route = this.state.route.map((entry) => {
       const live = byLabel.get(entry.accountLabel);
       if (!live) throw new Error(`账号 ${entry.accountLabel} 当前不在线`);
@@ -745,7 +758,6 @@ export class EightAccountPlan {
     if (account.accountLabel === this.state.mainAccountLabel) {
       this.state.mainBuySeen = false;
       this.state.mainBuyTimedOut = false;
-      this.state.mainBuySkipReason = "";
       this.state.phase = "main_buy_running";
       this.#command(account, "run_auction_buy", { accountIndex: account.accountIndex });
     } else {
@@ -755,8 +767,7 @@ export class EightAccountPlan {
 
   #startMainBuy(account) {
     Object.assign(this.state, { phase: "main_buy_running", phaseStartedAt: this.now(),
-      updatedAt: this.now(), mainBuySeen: false, mainBuyTimedOut: false,
-      mainBuySkipReason: "" });
+      updatedAt: this.now(), mainBuySeen: false, mainBuyTimedOut: false });
     this.#configureResourcesAndReturn(account);
     this.#command(account, "run_auction_buy", { accountIndex: account.accountIndex });
   }
@@ -810,8 +821,7 @@ export class EightAccountPlan {
     const leg = this.#currentLeg();
     this.state.history.push({ legIndex: this.state.legIndex, seller: leg.seller.accountLabel,
       buyer: leg.buyer.accountLabel, completedAt: this.now(),
-      result: this.state.mainBuyTimedOut ? "success_purchase_skipped" : "success",
-      ...(this.state.mainBuySkipReason ? { message: this.state.mainBuySkipReason } : {}) });
+      result: this.state.mainBuyTimedOut ? "success_purchase_skipped" : "success" });
     if (this.state.legIndex >= this.state.route.length - 2) {
       Object.assign(this.state, { status: "success", phase: "complete", updatedAt: this.now() });
       Promise.resolve(this.onComplete(this.snapshot())).catch(() => {});
@@ -825,7 +835,6 @@ export class EightAccountPlan {
     this.state.sellerCleanupDueAt = 0;
     this.state.mainBuySeen = false;
     this.state.mainBuyTimedOut = false;
-    this.state.mainBuySkipReason = "";
     this.state.phase = "starting_leg";
     this.#startCurrentLeg();
   }
@@ -885,9 +894,19 @@ export class EightAccountPlan {
   }
 
   #command(account, command, parameters) {
+    const stepId = `${this.state.runId}:${this.state.legIndex}:${++this.state.stepSequence}`;
+    const step = { stepId, deviceId: account.deviceId, accountLabel: account.accountLabel,
+      command, accountIndex: parameters?.accountIndex, legIndex: this.state.legIndex,
+      phase: this.state.phase, parameters: JSON.parse(JSON.stringify(parameters || {})),
+      status: "dispatched", createdAt: this.now(), updatedAt: this.now() };
+    this.state.currentStepId = stepId;
+    this.state.stepLedger.push(step);
+    if (this.state.stepLedger.length > 200) this.state.stepLedger.splice(0,
+      this.state.stepLedger.length - 200);
+    this.#event("step_dispatched", { stepId, command, accountLabel: account.accountLabel });
     this.emitAction({ deviceId: account.deviceId, accountLabel: account.accountLabel,
       command, parameters, runId: this.state.runId, legIndex: this.state.legIndex,
-      phase: this.state.phase, commandEpoch: this.state.commandEpoch });
+      phase: this.state.phase, stepId });
   }
 
   #returnMapFor(account) {
@@ -899,11 +918,16 @@ export class EightAccountPlan {
   }
 
   onCommandResult(action, success, message = "") {
+    const step = action?.stepId
+      ? this.state.stepLedger.find((entry) => entry.stepId === action.stepId) : null;
+    if (step) Object.assign(step, { status: success ? "acknowledged" : "failed",
+      success: Boolean(success), message: String(message || "").slice(0, 240), updatedAt: this.now() });
+    if (action?.stepId) this.#event(success ? "step_acknowledged" : "step_failed",
+      { stepId: action.stepId, command: action.command, message: String(message || "").slice(0, 160) });
     if (!action || action.runId !== this.state.runId || this.state.status !== "running") {
       return this.snapshot();
     }
     if (action.legIndex !== this.state.legIndex) return this.snapshot();
-    if (Number(action.commandEpoch) !== Number(this.state.commandEpoch)) return this.snapshot();
     if (!success) {
       const leg = this.#currentLeg();
       const postTransferCleanup = ["cancel_automation", "configure_return_hang",
@@ -936,8 +960,60 @@ export class EightAccountPlan {
   #intervene(message, accountLabel) {
     this.state.resumePhase = this.state.phase;
     Object.assign(this.state, { status: "intervention", error: message, errorAccount: accountLabel,
-      interventionDeadlineAt: 0, updatedAt: this.now() });
+      interventionDeadlineAt: 0, diagnosticRequested: true,
+      diagnosticReason: String(message || "").slice(0, 240), updatedAt: this.now() });
+    this.#event("intervention", { accountLabel, message: String(message || "").slice(0, 240) });
     return this.snapshot();
+  }
+
+  applyGptSuggestion(suggestion) {
+    this.state.gptSuggestion = suggestion && typeof suggestion === "object"
+      ? JSON.parse(JSON.stringify(suggestion)) : null;
+    this.state.diagnosticRequested = false;
+    this.state.updatedAt = this.now();
+    return this.snapshot();
+  }
+
+  outstandingActionsForDevice(deviceId) {
+    if (this.state.status !== "running") return [];
+    return this.state.stepLedger.filter((entry) => entry.deviceId === deviceId
+      && entry.status === "dispatched").map((entry) => ({
+      deviceId: entry.deviceId, accountLabel: entry.accountLabel, command: entry.command,
+      parameters: JSON.parse(JSON.stringify(entry.parameters || {})),
+      runId: this.state.runId, legIndex: entry.legIndex, phase: entry.phase,
+      stepId: entry.stepId
+    }));
+  }
+
+  #currentAccounts() {
+    if (this.state.mode === "resource_sweep") {
+      const entry = this.state.route[this.state.legIndex];
+      return entry ? [entry] : [];
+    }
+    const leg = this.#currentLeg();
+    return [leg?.seller, leg?.buyer].filter(Boolean);
+  }
+
+  #progressSignature(deviceId, telemetry) {
+    const accounts = Array.isArray(telemetry?.accounts) ? telemetry.accounts : [];
+    const relevant = this.#currentAccounts().filter((entry) => entry.deviceId === deviceId);
+    const values = relevant.map((entry) => {
+      const account = accounts.find((candidate) => candidate?.index === entry.accountIndex);
+      const automation = account?.automation || {};
+      return [entry.accountLabel, automation.task, automation.status, automation.lastMessage,
+        automation.updatedAt, automation.equipmentListedInBatch,
+        automation.equipmentTransferLastRunAt, automation.dungeonLastRunAt,
+        automation.finalEquipLastRunAt, automation.auctionLastRunAt].join("|");
+    });
+    return values.length ? `${this.state.phase}:${values.join(";")}` : "";
+  }
+
+  #event(type, details = {}) {
+    this.state.eventLedger.push({ eventId: crypto.randomUUID(), type,
+      runId: this.state.runId, legIndex: this.state.legIndex, phase: this.state.phase,
+      timestamp: this.now(), ...details });
+    if (this.state.eventLedger.length > 300) this.state.eventLedger.splice(0,
+      this.state.eventLedger.length - 300);
   }
 
   #validateRoute(route) {

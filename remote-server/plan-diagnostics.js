@@ -37,6 +37,10 @@ export class PlanDiagnosticsStore {
     return path.join(this.directory, `multi-user-${userKey(username)}.md`);
   }
 
+  #bundleFile(username) {
+    return path.join(this.directory, `multi-user-${userKey(username)}-latest.json`);
+  }
+
   append(plan) {
     const username = oneLine(plan?.ownerUsername, "");
     if (!username || !["intervention", "error"].includes(plan?.status) || !plan?.error) return false;
@@ -79,5 +83,42 @@ export class PlanDiagnosticsStore {
       this.logger.warn?.("Unable to read plan diagnostic", error.message);
     }
     return `# ${name} 多用户挂机报错说明\n\n目前尚未记录多用户挂机报错。\n`;
+  }
+
+  writeBundle(plan, { devices = [], screenshot = null, gptSuggestion = null } = {}) {
+    const username = oneLine(plan?.ownerUsername, "");
+    if (!username) return false;
+    try {
+      fs.mkdirSync(this.directory, { recursive: true });
+      const bundle = {
+        format: "play-keeper-stall-diagnostic/v1",
+        createdAt: Date.now(),
+        runId: oneLine(plan?.runId),
+        plan: { ...plan, gptSuggestion },
+        devices,
+        screenshot: screenshot ? { accountIndex: screenshot.accountIndex,
+          accountLabel: screenshot.accountLabel, width: screenshot.width,
+          height: screenshot.height, mime: screenshot.mime,
+          imageBase64: screenshot.imageBase64 } : null,
+        notice: "GPT内容仅为诊断建议，未触发任何APP或交易操作。"
+      };
+      fs.writeFileSync(this.#bundleFile(username), JSON.stringify(bundle, null, 2),
+        { encoding: "utf8", mode: 0o600 });
+      return true;
+    } catch (error) {
+      this.logger.warn?.("Unable to save diagnostic bundle", error.message);
+      return false;
+    }
+  }
+
+  readBundle(username) {
+    try {
+      const file = this.#bundleFile(oneLine(username, "用户"));
+      if (fs.existsSync(file)) return fs.readFileSync(file, "utf8");
+    } catch (error) {
+      this.logger.warn?.("Unable to read diagnostic bundle", error.message);
+    }
+    return JSON.stringify({ format: "play-keeper-stall-diagnostic/v1",
+      createdAt: Date.now(), notice: "目前尚未生成卡顿诊断包。" }, null, 2);
   }
 }

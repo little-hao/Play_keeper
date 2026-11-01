@@ -120,6 +120,16 @@ public class EquipmentTransferAuditTest {
     }
 
     @Test
+    public void commonPageFormattingDoesNotHideConfiguredEquipment() {
+        assertTrue(EquipmentTransferAudit.matchesEquipmentName(
+                "柔情方巾·改", " 柔情方巾・改 （＋12） "));
+        assertTrue(EquipmentTransferAudit.matchesEquipmentName(
+                "龙神印记·庆", "龙神印记•庆 已装备"));
+        assertFalse(EquipmentTransferAudit.matchesEquipmentName(
+                "柔情方巾·改", "柔情方巾§恋§"));
+    }
+
+    @Test
     public void ninePieceLoverRomanceSetCanBeAudited() {
         List<String> expected = List.of("柔情方巾§恋§", "轻罗流萤衫§恋§", "逢羡履§恋§",
                 "君我剑§恋§", "佳人之恋§恋§", "三生戒§恋§", "比翼§恋§",
@@ -133,6 +143,22 @@ public class EquipmentTransferAuditTest {
                 EquipmentTransferAudit.PetScope.MAIN, expected, actual, Collections.emptySet());
         assertTrue(result.allTransferred());
         assertEquals(9, result.items().size());
+    }
+
+    @Test
+    public void tenPieceLegacyLoverSetRemainsASelectableTransferTarget() {
+        List<String> expected = List.of("柔情方巾·改", "轻罗流萤衫·改", "逢羡履·改",
+                "君我剑·改", "佳人之恋·改", "三生戒·改", "比翼·改",
+                "相望镯·改", "尾生之泪·改", "龙神印记·庆");
+        String[] slots = {"头部", "身体", "脚部", "武器", "项链", "戒指", "翅膀", "手镯", "宝石", "道具"};
+        Map<String, String> actual = new LinkedHashMap<>();
+        for (int index = 0; index < expected.size(); index++) actual.put(slots[index], expected.get(index));
+
+        EquipmentTransferAudit.Result result = EquipmentTransferAudit.evaluate(
+                EquipmentTransferAudit.PetScope.MAIN, expected, actual, Collections.emptySet());
+
+        assertTrue(result.allTransferred());
+        assertEquals(expected, result.items().stream().map(item -> item.expectedName).toList());
     }
 
     private static Map<String, String> completeTargetSet() {

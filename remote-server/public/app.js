@@ -48,6 +48,10 @@ const elements = {
   planReturnMap: document.querySelector("#planReturnMap"),
   planReturnMaps: document.querySelector("#planReturnMaps"),
   planReportEmail: document.querySelector("#planReportEmail"),
+  planDisconnectGrace: document.querySelector("#planDisconnectGrace"),
+  planSellerTimeout: document.querySelector("#planSellerTimeout"),
+  planBuyerTimeout: document.querySelector("#planBuyerTimeout"),
+  planResourceTimeout: document.querySelector("#planResourceTimeout"),
   planScheduleEnabled: document.querySelector("#planScheduleEnabled"),
   planScheduleTime: document.querySelector("#planScheduleTime"),
   savePlanSchedule: document.querySelector("#savePlanSchedule"),
@@ -64,6 +68,7 @@ const elements = {
   quickHangMap: document.querySelector("#quickHangMap"),
   quickStartHang: document.querySelector("#quickStartHang"),
   downloadPlanDiagnostics: document.querySelector("#downloadPlanDiagnostics"),
+  downloadDiagnosticBundle: document.querySelector("#downloadDiagnosticBundle"),
   keepPlayerDevice: document.querySelector("#keepPlayerDevice"),
   startKeepPlayer: document.querySelector("#startKeepPlayer"),
   exitKeepPlayer: document.querySelector("#exitKeepPlayer"),
@@ -86,6 +91,10 @@ const devices = new Map();
 const previewFrames = new Map();
 const activePreviews = new Set();
 const previewSettings = new Map();
+// Device telemetry can refresh while the operator is editing the advanced form.
+// Keep equipment fields outside the replaced DOM until the APP reports the same
+// configuration, otherwise a preset selection can silently revert to defaults.
+const equipmentDrafts = new Map();
 const previewProfiles = {
   "720": { maxWidth: 720, fps: 1, label: "流畅" },
   "1280": { maxWidth: 1280, fps: 0.33, label: "高清" },
@@ -273,6 +282,10 @@ elements.savePlanSchedule.addEventListener("click", () => {
 elements.downloadPlanDiagnostics.addEventListener("click", () => {
   if (socket?.readyState !== WebSocket.OPEN) return addLog("控制台尚未连接");
   socket.send(JSON.stringify({ type: "plan.diagnostics.request" }));
+});
+elements.downloadDiagnosticBundle.addEventListener("click", () => {
+  if (socket?.readyState !== WebSocket.OPEN) return addLog("控制台尚未连接");
+  socket.send(JSON.stringify({ type: "plan.diagnostics.bundle.request" }));
 });
 elements.planResourcePreset.addEventListener("change", () => {
   if (auctionPresets[elements.planResourcePreset.value]) {
@@ -602,6 +615,18 @@ function handleMessage(message) {
       addLog("本用户多用户挂机报错说明已下载");
       break;
     }
+    case "plan.diagnostics.bundle": {
+      const content = typeof message.content === "string" ? message.content : "{}";
+      const filename = message.filename || "PlayKeeper-卡顿诊断包.json";
+      const url = URL.createObjectURL(new Blob([content], { type: "application/json;charset=utf-8" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1_000);
+      addLog("最新卡顿诊断包已下载");
+      break;
+    }
     case "admin.snapshot":
       adminSnapshot = message.payload ?? adminSnapshot;
       renderAdminPanel();
@@ -658,9 +683,13 @@ function renderDailyPlan() {
     ? dailyPlan.skippedDungeonAccounts.filter(Boolean) : [];
   const routeSummary = skipped.length
     ? ` · 本轮路线：${effectiveRoute}（已跳过今日副本完成：${skipped.join("、")}）` : "";
+  const offlineEntries = Object.values(dailyPlan.disconnectedDevices || {});
+  const reconnectSummary = offlineEntries.length
+    ? ` · 等待设备重连：${offlineEntries.map((entry) => entry.accountLabel || "设备").join("、")}` : "";
   elements.dailyPlanDetail.textContent = (dailyPlan.error
     ? `装备所在：${holder} · ${dailyPlan.error}`
-    : `当前：${current} · 装备所在：${holder} · 已完成 ${completed}/${total}${email}`) + routeSummary;
+    : `当前：${current} · 装备所在：${holder} · 已完成 ${completed}/${total}${email}`)
+    + routeSummary + reconnectSummary;
   elements.dailyPlanProgress.style.width = `${Math.min(100, completed * 100 / total)}%`;
   elements.startDailyPlan.disabled = ["running", "reconnecting", "intervention"].includes(dailyPlan.status);
   elements.retryDailyPlan.disabled = !["intervention", "error", "cancelled"].includes(dailyPlan.status);
@@ -690,7 +719,9 @@ function renderDailyPlan() {
     ? "确认套装账号并继续" : "重试当前步骤";
   elements.cancelDailyPlan.disabled = !["running", "intervention"].includes(dailyPlan.status);
   if (["intervention", "error", "cancelled"].includes(dailyPlan.status)) {
-    elements.planIntervention.textContent = `报错账号：${dailyPlan.errorAccount || "当前账号"}；装备所在：${holder}；${dailyPlan.error || "任务已中断"}。现场会持续保留，人工处理后可从装备所在账号继续。`;
+    const advice = dailyPlan.gptSuggestion?.summary
+      ? ` GPT诊断建议（只读）：${dailyPlan.gptSuggestion.summary}；${dailyPlan.gptSuggestion.recommendation || ""}` : "";
+    elements.planIntervention.textContent = `报错账号：${dailyPlan.errorAccount || "当前账号"}；装备所在：${holder}；${dailyPlan.error || "任务已中断"}。现场会持续保留，人工处理后可从装备所在账号继续。${advice}`;
     elements.planIntervention.classList.remove("hidden");
   } else {
     elements.planIntervention.classList.add("hidden");
@@ -776,6 +807,15 @@ function readPlanOptions() {
     .map((item) => item.trim()).filter(Boolean);
   const equipmentPrice = Number(elements.planEquipmentPrice.value || defaultTransferPrice);
   const resourcePrice = Number(elements.planResourcePrice.value || defaultTransferPrice);
+  const disconnectGraceSeconds = Number(elements.planDisconnectGrace.value || 120);
+  const phaseTimeoutSeconds = {
+    starting_leg: 120,
+    seller_running: Number(elements.planSellerTimeout.value || 240),
+    buyer_running: Number(elements.planBuyerTimeout.value || 720),
+    resource_auction_running: Number(elements.planResourceTimeout.value || 240),
+    standalone_main_running: Number(elements.planBuyerTimeout.value || 720),
+    main_buy_running: 90
+  };
   if (!resourceItems.length || resourceItems.length > 10) {
     addLog("道具组合需填写1–10项"); return null;
   }
@@ -801,6 +841,12 @@ function readPlanOptions() {
   if (!Number.isInteger(resourcePrice) || resourcePrice < 1 || resourcePrice > 9_999_999) {
     addLog("道具拍卖/购买单价无效"); return null;
   }
+  if (!Number.isInteger(disconnectGraceSeconds) || disconnectGraceSeconds < 30
+      || disconnectGraceSeconds > 600
+      || Object.values(phaseTimeoutSeconds).some((value) => !Number.isInteger(value)
+        || value < 30 || value > 3600)) {
+    addLog("断线宽限期需为30–600秒，阶段超时需为30–3600秒"); return null;
+  }
   const returnMaps = {};
   for (const input of elements.planReturnMaps.querySelectorAll("input[data-account-label]")) {
     returnMaps[input.dataset.accountLabel] = input.value.trim() || returnMap;
@@ -809,7 +855,8 @@ function readPlanOptions() {
     addLog("完成报告邮箱格式无效"); return null;
   }
   return { resourceItems, resourceReserveCount, dungeonItems, inventoryItems,
-    routeLabels, equipmentItems, equipmentPrice, resourcePrice, returnMap, returnMaps, reportEmail };
+    routeLabels, equipmentItems, equipmentPrice, resourcePrice, returnMap, returnMaps, reportEmail,
+    disconnectGraceSeconds, phaseTimeoutSeconds };
 }
 
 function renderPlanReturnMaps(savedMaps = null) {
@@ -860,6 +907,14 @@ function renderPlanSchedule() {
   if (typeof options.returnMap === "string") elements.planReturnMap.value = options.returnMap;
   renderPlanReturnMaps(options.returnMaps);
   if (typeof options.reportEmail === "string") elements.planReportEmail.value = options.reportEmail;
+  elements.planDisconnectGrace.value = String(Number.isInteger(options.disconnectGraceSeconds)
+    ? options.disconnectGraceSeconds : 120);
+  elements.planSellerTimeout.value = String(Number.isInteger(options.phaseTimeoutSeconds?.seller_running)
+    ? options.phaseTimeoutSeconds.seller_running : 240);
+  elements.planBuyerTimeout.value = String(Number.isInteger(options.phaseTimeoutSeconds?.buyer_running)
+    ? options.phaseTimeoutSeconds.buyer_running : 720);
+  elements.planResourceTimeout.value = String(Number.isInteger(options.phaseTimeoutSeconds?.resource_auction_running)
+    ? options.phaseTimeoutSeconds.resource_auction_running : 240);
   elements.planResourcePreset.value = Object.entries(auctionPresets)
     .find(([, value]) => value === elements.planResourceItems.value.trim())?.[0] ?? "custom";
   const last = planSchedule.lastRunDate ? ` · 上次运行 ${planSchedule.lastRunDate}` : "";
@@ -1252,6 +1307,9 @@ function renderDevices() {
     const warehouseStoreAll = card.querySelector(".warehouse-store-all");
     const warehouseItem = card.querySelector(".warehouse-item");
     const dungeonItemsInput = card.querySelector(".dungeon-items");
+    const dungeonSkillInput = card.querySelector(".dungeon-skill");
+    const dungeonCompleteTasks = card.querySelector(".dungeon-complete-tasks");
+    const captureMapInput = card.querySelector(".capture-map");
     const prestigeEnabled = card.querySelector(".prestige-enabled");
     const prestigeItemsInput = card.querySelector(".prestige-items");
     const inventoryItemsInput = card.querySelector(".inventory-items");
@@ -1260,6 +1318,15 @@ function renderDevices() {
     const equipmentPriceInput = card.querySelector(".equipment-price");
     const equipmentSellerInput = card.querySelector(".equipment-seller");
     const equipmentBuyerInput = card.querySelector(".equipment-buyer");
+    const equipmentDraftKey = `${device.deviceId}:${activeAccountIndex}`;
+    let equipmentDraft = equipmentDrafts.get(equipmentDraftKey);
+    if (equipmentDraft && Array.isArray(automation.equipmentItems)
+        && automation.equipmentItems.join(",") === equipmentDraft.items
+        && Number(automation.equipmentPrice) === equipmentDraft.price
+        && String(automation.equipmentBuyer || "") === equipmentDraft.buyer) {
+      equipmentDrafts.delete(equipmentDraftKey);
+      equipmentDraft = null;
+    }
     const auctionItems = Array.isArray(automation.auctionItems)
       ? automation.auctionItems : (automation.sellItems ?? ["进化宝石", "曙光印记"]);
     auctionEnabled.checked = automation.auctionEnabled === true || automation.sellEnabled === true;
@@ -1291,29 +1358,47 @@ function renderDevices() {
       && automation.warehouseItem.trim() ? automation.warehouseItem.trim() : "护宠仙石";
     dungeonItemsInput.value = Array.isArray(automation.dungeonItems)
       ? automation.dungeonItems.join(",") : "绘画小屋,伊苏王的神墓,火龙王的宫殿,史芬克斯密穴";
+    dungeonSkillInput.value = typeof automation.dungeonSkill === "string"
+      && automation.dungeonSkill.trim() ? automation.dungeonSkill.trim() : "auto";
+    dungeonCompleteTasks.checked = automation.dungeonCompleteTasks === true;
+    captureMapInput.value = typeof automation.captureMap === "string"
+      && automation.captureMap.trim() ? automation.captureMap.trim() : "圣诞小屋";
     prestigeEnabled.checked = automation.prestigeEnabled === true;
     prestigeItemsInput.value = Array.isArray(automation.prestigeItems)
       ? automation.prestigeItems.join(",") : "黑暗徽章,黑暗结晶,黑暗首领的勋章,黑暗宝石";
     inventoryItemsInput.value = Array.isArray(automation.inventoryItems)
       ? automation.inventoryItems.join(",") : "进化宝石,曙光印记,强化丹A,强化丹B,天仙玉露";
-    equipmentItemsInput.value = Array.isArray(automation.equipmentItems)
-      ? automation.equipmentItems.join(",") : defaultEquipmentItems;
+    equipmentItemsInput.value = equipmentDraft?.items ?? (Array.isArray(automation.equipmentItems)
+      ? automation.equipmentItems.join(",") : defaultEquipmentItems);
     equipmentPreset.value = Object.entries(equipmentPresets)
       .find(([, value]) => value === equipmentItemsInput.value.trim())?.[0] ?? "custom";
     equipmentPreset.addEventListener("change", () => {
       if (equipmentPreset.value !== "custom") {
         equipmentItemsInput.value = equipmentPresets[equipmentPreset.value];
       }
+      persistEquipmentDraft();
     });
     equipmentItemsInput.addEventListener("input", () => {
       equipmentPreset.value = Object.entries(equipmentPresets)
         .find(([, value]) => value === equipmentItemsInput.value.trim())?.[0] ?? "custom";
+      persistEquipmentDraft();
     });
-    equipmentPriceInput.value = String(Number.isInteger(automation.equipmentPrice)
-      ? automation.equipmentPrice : 920);
-    equipmentSellerInput.value = accountLabel(accounts, activeAccountIndex);
-    equipmentBuyerInput.value = typeof automation.equipmentBuyer === "string"
-      ? automation.equipmentBuyer : "";
+    equipmentPriceInput.value = String(equipmentDraft?.price ?? (Number.isInteger(automation.equipmentPrice)
+      ? automation.equipmentPrice : 920));
+    equipmentSellerInput.value = equipmentDraft?.seller ?? accountLabel(accounts, activeAccountIndex);
+    equipmentBuyerInput.value = equipmentDraft?.buyer ?? (typeof automation.equipmentBuyer === "string"
+      ? automation.equipmentBuyer : "");
+    function persistEquipmentDraft() {
+      equipmentDrafts.set(equipmentDraftKey, {
+        items: equipmentItemsInput.value.trim(),
+        price: Number.parseInt(equipmentPriceInput.value, 10),
+        seller: equipmentSellerInput.value.trim(),
+        buyer: equipmentBuyerInput.value.trim()
+      });
+    }
+    equipmentPriceInput.addEventListener("input", persistEquipmentDraft);
+    equipmentSellerInput.addEventListener("input", persistEquipmentDraft);
+    equipmentBuyerInput.addEventListener("input", persistEquipmentDraft);
     card.querySelector(".automation-status").textContent = automation.busy
       ? `运行中 · ${automation.lastMessage || "正在执行"}`
       : (automation.lastMessage || "尚未运行");
@@ -1340,6 +1425,8 @@ function renderDevices() {
         .map((item) => item.trim()).filter(Boolean);
       const dungeonItems = dungeonItemsInput.value.split(/[,，\n]/)
         .map((item) => item.trim()).filter(Boolean);
+      const dungeonSkill = dungeonSkillInput.value.trim() || "auto";
+      const captureMap = captureMapInput.value.trim() || "圣诞小屋";
       const prestigeItems = prestigeItemsInput.value.split(/[,，\n]/)
         .map((item) => item.trim()).filter(Boolean);
       const inventoryItems = inventoryItemsInput.value.split(/[,，\n]/)
@@ -1372,6 +1459,12 @@ function renderDevices() {
       if (!dungeonItems.length || dungeonItems.length > 20
           || dungeonItems.some((item) => item.length > 30)) {
         return addLog("副本组合需填写1–20项，每项不超过30字");
+      }
+      if (dungeonSkill.length > 30 || /[\r\n\t]/.test(dungeonSkill)) {
+        return addLog("副本技能名称无效");
+      }
+      if (captureMap.length > 30 || /[\r\n\t]/.test(captureMap)) {
+        return addLog("自动捕捉地图名称无效");
       }
       if (!prestigeItems.length || prestigeItems.length > 10
           || prestigeItems.some((item) => item.length > 30)) {
@@ -1412,7 +1505,13 @@ function renderDevices() {
       });
       sendCommand(device.deviceId, "configure_dungeon_sequence", {
         accountIndex: activeAccountIndex,
-        items: dungeonItems
+        items: dungeonItems,
+        skill: dungeonSkill,
+        completeTasks: dungeonCompleteTasks.checked
+      });
+      sendCommand(device.deviceId, "configure_adventure", {
+        accountIndex: activeAccountIndex,
+        map: captureMap
       });
       sendCommand(device.deviceId, "configure_prestige_items", {
         accountIndex: activeAccountIndex,
@@ -1453,6 +1552,12 @@ function renderDevices() {
     });
     card.querySelector(".run-dungeons").addEventListener("click", () => {
       if (saveAutomation()) sendCommand(device.deviceId, "run_dungeon_sequence", { accountIndex: activeAccountIndex });
+    });
+    card.querySelector(".run-auto-capture").addEventListener("click", () => {
+      if (saveAutomation()) sendCommand(device.deviceId, "run_auto_capture", { accountIndex: activeAccountIndex });
+    });
+    card.querySelector(".run-tower-battle").addEventListener("click", () => {
+      if (saveAutomation()) sendCommand(device.deviceId, "run_tower_battle", { accountIndex: activeAccountIndex });
     });
     card.querySelector(".run-daily-tasks").addEventListener("click", () => {
       sendCommand(device.deviceId, "run_daily_tasks", { accountIndex: activeAccountIndex });

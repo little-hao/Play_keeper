@@ -283,10 +283,34 @@ test("device telemetry and browser command complete a round trip", async (contex
     type: "command.send",
     deviceId: "PK-ABCDEF123456",
     command: "configure_dungeon_sequence",
-    parameters: { accountIndex: 2, items: ["绘画小屋", "伊苏王的神墓"] }
+    parameters: { accountIndex: 2, items: ["绘画小屋", "伊苏王的神墓"],
+      skill: "毒咬 · 伤害", completeTasks: true }
   }));
   const dungeon = await dungeonPromise;
   assert.deepEqual(dungeon.parameters.items, ["绘画小屋", "伊苏王的神墓"]);
+  assert.equal(dungeon.parameters.skill, "毒咬 · 伤害");
+  assert.equal(dungeon.parameters.completeTasks, true);
+
+  const adventurePromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "configure_adventure",
+    parameters: { accountIndex: 2, map: "圣诞小屋" }
+  }));
+  const adventure = await adventurePromise;
+  assert.equal(adventure.parameters.map, "圣诞小屋");
+
+  for (const command of ["run_auto_capture", "run_tower_battle"]) {
+    const runPromise = nextJson(device, "command.request");
+    control.send(JSON.stringify({
+      type: "command.send",
+      deviceId: "PK-ABCDEF123456",
+      command,
+      parameters: { accountIndex: 2 }
+    }));
+    assert.equal((await runPromise).command, command);
+  }
 
   const prestigePromise = nextJson(device, "command.request");
   control.send(JSON.stringify({
@@ -460,7 +484,7 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    ok: true, service: "play-keeper-relay", version: "2.0.4"
+    ok: true, service: "play-keeper-relay", version: "2.0.6"
   });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);

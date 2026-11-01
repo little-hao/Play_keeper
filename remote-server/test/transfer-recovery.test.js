@@ -10,6 +10,8 @@ function fixture(extra = {}) {
   const coordinator = new EquipmentTransferCoordinator({ now: () => clock,
     emitAction: a => actions.push(a), ...extra });
   coordinator.start(options);
+  const configurationActions = actions.filter(a => a.command === "configure_equipment_transfer");
+  for (const action of configurationActions) coordinator.onCommandResult(action, true, "ok");
   const report = (device, data) => coordinator.onTelemetry(device, { accounts: [{ index: 0,
     automation: { updatedAt: clock, ...data } }] });
   return { coordinator, actions, options, report, advance: ms => { clock += ms; } };

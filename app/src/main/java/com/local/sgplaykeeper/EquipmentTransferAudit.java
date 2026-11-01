@@ -7,6 +7,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.text.Normalizer;
 
 /**
  * Pure final-state check for the ten-item equipment relay.
@@ -180,7 +181,10 @@ final class EquipmentTransferAudit {
 
     private static String normalizeEquipmentName(String value) {
         if (value == null) return "";
-        return value.replaceAll("\\s+", "")
-                .replaceFirst("[（(][+＋](?:[1-9]|1[0-5])[）)]$", "");
+        return Normalizer.normalize(value, Normalizer.Form.NFKC)
+                .replaceAll("\\s+", "")
+                .replaceAll("[•・．]", "·")
+                .replaceFirst("(?:已装备|主宠|装备)$", "")
+                .replaceFirst("[（(]\\+(?:[1-9]|1[0-5])[）)]$", "");
     }
 }

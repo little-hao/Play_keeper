@@ -10,6 +10,7 @@ import { sendCompletionReport } from "./email-report.js";
 import { AuthStore } from "./auth-store.js";
 import { PlanDiagnosticsStore } from "./plan-diagnostics.js";
 import { EquipmentTransferCoordinator } from "./equipment-transfer-coordinator.js";
+import { GptDiagnosticAdvisor } from "./gpt-diagnostics.js";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const publicDirectory = path.join(currentDirectory, "public");
@@ -38,6 +39,11 @@ const commandValidators = {
   keep_player_start: emptyParameters,
   keep_player_exit: emptyParameters,
   request_status: emptyParameters,
+  capture_diagnostic_snapshot(parameters) {
+    return accountParameters(parameters)
+      && (parameters.diagnosticId === undefined
+        || (typeof parameters.diagnosticId === "string" && parameters.diagnosticId.length <= 160));
+  },
   preview_start(parameters) {
     return accountParameters(parameters)
       && Number.isInteger(parameters.maxWidth)
@@ -115,9 +121,23 @@ const commandValidators = {
   },
   run_warehouse_sync: accountParameters,
   configure_dungeon_sequence(parameters) {
-    return accountParameters(parameters) && validItemList(parameters.items, 20);
+    return accountParameters(parameters) && validItemList(parameters.items, 20)
+      && (parameters.completeTasks === undefined
+        || typeof parameters.completeTasks === "boolean")
+      && (parameters.skill === undefined
+        || (typeof parameters.skill === "string" && parameters.skill.length <= 30
+          && !/[\r\n\t]/.test(parameters.skill)));
   },
   run_dungeon_sequence: accountParameters,
+  configure_adventure(parameters) {
+    return accountParameters(parameters)
+      && typeof parameters.map === "string"
+      && parameters.map.trim().length >= 1
+      && parameters.map.trim().length <= 30
+      && !/[\r\n\t]/.test(parameters.map);
+  },
+  run_auto_capture: accountParameters,
+  run_tower_battle: accountParameters,
   run_daily_tasks: accountParameters,
   configure_prestige_items(parameters) {
     return accountParameters(parameters)
@@ -257,7 +277,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.4" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.6" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -302,6 +322,20 @@ function normalizePlanOptions(value) {
     ? source.equipmentItems.map((item) => String(item).trim()).filter(Boolean) : undefined;
   const equipmentPrice = source.equipmentPrice === undefined ? 920 : Number(source.equipmentPrice);
   const resourcePrice = source.resourcePrice === undefined ? 920 : Number(source.resourcePrice);
+  const disconnectGraceSeconds = source.disconnectGraceSeconds === undefined
+    ? 120 : Number(source.disconnectGraceSeconds);
+  const timeoutSource = source.phaseTimeoutSeconds && typeof source.phaseTimeoutSeconds === "object"
+    ? source.phaseTimeoutSeconds : {};
+  const timeoutDefaults = { starting_leg: 120, seller_running: 240, buyer_running: 720,
+    resource_auction_running: 240, standalone_main_running: 900, main_buy_running: 90 };
+  const phaseTimeouts = {};
+  for (const [phase, fallback] of Object.entries(timeoutDefaults)) {
+    const seconds = timeoutSource[phase] === undefined ? fallback : Number(timeoutSource[phase]);
+    if (!Number.isInteger(seconds) || seconds < 30 || seconds > 3600) {
+      throw new Error("阶段超时需为30–3600秒");
+    }
+    phaseTimeouts[phase] = seconds * 1000;
+  }
   if (resourceItems !== undefined && !validItemList(resourceItems, 10)) {
     throw new Error("道具组合无效");
   }
@@ -328,6 +362,8 @@ function normalizePlanOptions(value) {
   if (!Number.isInteger(resourcePrice) || resourcePrice < 1 || resourcePrice > 9_999_999) {
     throw new Error("道具拍卖/购买单价无效");
   }
+  if (!Number.isInteger(disconnectGraceSeconds) || disconnectGraceSeconds < 30
+      || disconnectGraceSeconds > 600) throw new Error("断线宽限期需为30–600秒");
   const returnMap = typeof source.returnMap === "string" ? source.returnMap.trim() : "圣兽云殿";
   if (!returnMap || returnMap.length > 30) throw new Error("返回挂机副本无效");
   const sourceReturnMaps = source.returnMaps && typeof source.returnMaps === "object"
@@ -346,7 +382,11 @@ function normalizePlanOptions(value) {
   if (reportEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) throw new Error("报告邮箱格式无效");
   return { resourceItems, resourceReserveCount, inventoryItems,
     dungeonItems, routeLabels, equipmentItems, equipmentPrice, resourcePrice,
-    returnMap, returnMaps, reportEmail };
+    returnMap, returnMaps, reportEmail,
+    disconnectGraceSeconds, disconnectGraceMs: disconnectGraceSeconds * 1000,
+    phaseTimeoutSeconds: Object.fromEntries(Object.entries(phaseTimeouts)
+      .map(([phase, milliseconds]) => [phase, milliseconds / 1000])),
+    phaseTimeouts };
 }
 
 function defaultPlanSchedule() {
@@ -463,18 +503,23 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   const controllers = new Set();
   const pendingPlanCommands = new Map();
   const pendingTransferCommands = new Map();
+  const latestDiagnosticFrames = new Map();
+  const pendingDiagnostics = new Map();
+  const diagnosticsInFlight = new Set();
+  const diagnosticsQueued = new Set();
   const authStoreFile = authFile || process.env.AUTH_STORE_FILE
     || path.join(currentDirectory, "data", "users.json");
   const authStore = new AuthStore(authStoreFile, adminToken);
   const planDiagnostics = new PlanDiagnosticsStore(
     process.env.PLAN_DIAGNOSTICS_DIR || path.join(path.dirname(authStoreFile), "diagnostics"), logger);
+  const gptDiagnostics = new GptDiagnosticAdvisor({ logger });
   const scheduleFile = planScheduleFile || process.env.PLAN_SETTINGS_FILE
     || path.join(currentDirectory, "data", "plan-schedule.json");
   const stateFile = planStateFile || process.env.PLAN_STATE_FILE
     || (planScheduleFile ? `${scheduleFile}.state` : path.join(currentDirectory, "data", "plan-state.json"));
   let planSchedule = loadPlanSchedule(scheduleFile, logger);
 
-  function dispatchDeviceCommand(deviceId, command, parameters) {
+  function dispatchDeviceCommand(deviceId, command, parameters, options = {}) {
     const validator = commandValidators[command];
     if (!validator || !validator(parameters)) throw new Error("计划生成了无效命令");
     const target = devices.get(deviceId);
@@ -484,10 +529,11 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
     sendJson(target.socket, {
       type: "command.request",
       commandId,
+      stepId: typeof options.stepId === "string" ? options.stepId : commandId,
       command,
       parameters,
       issuedAt: now,
-      expiresAt: now + 30_000
+      expiresAt: now + Math.max(30_000, Number(options.expiresInMs) || 300_000)
     });
     return commandId;
   }
@@ -495,9 +541,10 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   const eightAccountPlan = new EightAccountPlan({
     emitAction(action) {
       const commandId = dispatchDeviceCommand(
-        action.deviceId, action.command, action.parameters);
+        action.deviceId, action.command, action.parameters,
+        { stepId: action.stepId, expiresInMs: 300_000 });
       pendingPlanCommands.set(commandId, { action: structuredClone(action),
-        sentAt: Date.now() });
+        sentAt: Date.now(), retryCount: 0 });
       broadcast({
         type: "plan.command",
         plan: "eight_account_daily",
@@ -543,6 +590,8 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
       deviceId: entry.deviceId,
       connectedAt: entry.connectedAt,
       appVersion: entry.appVersion,
+      connectionSessionId: entry.connectionSessionId || "",
+      telemetrySequence: Number(entry.telemetrySequence || 0),
       telemetry: entry.telemetry ?? null
     };
   }
@@ -569,6 +618,117 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         sendJson(controller, { type: "plan.update", plan: "eight_account_daily", payload });
       }
     }
+    if (payload?.diagnosticRequested) queuePlanDiagnostic(payload);
+  }
+
+  function diagnosticTarget(plan) {
+    const label = plan?.errorAccount || plan?.equipmentHolderLabel;
+    return (plan?.route || []).find((entry) => entry?.accountLabel === label)
+      || plan?.route?.[Math.max(0, Number(plan?.legIndex || 0) + 1)]
+      || plan?.route?.[0] || null;
+  }
+
+  async function completePlanDiagnostic(plan, screenshot = null) {
+    const key = `${plan.runId}:${plan.diagnosticReason || plan.error}`;
+    diagnosticsQueued.delete(key);
+    if (diagnosticsInFlight.has(key)) return;
+    diagnosticsInFlight.add(key);
+    try {
+      const deviceIds = [...new Set((plan.route || []).map((entry) => entry.deviceId).filter(Boolean))];
+      const summaries = deviceIds.map((deviceId) => devices.get(deviceId)).filter(Boolean)
+        .map(deviceSummary);
+      const suggestion = await gptDiagnostics.analyze({ plan, devices: summaries, screenshot });
+      planDiagnostics.writeBundle(plan, { devices: summaries, screenshot, gptSuggestion: suggestion });
+      if (eightAccountPlan.snapshot().runId === plan.runId) {
+        publishPlan(eightAccountPlan.applyGptSuggestion(suggestion));
+      }
+    } finally {
+      diagnosticsInFlight.delete(key);
+    }
+  }
+
+  function queuePlanDiagnostic(plan) {
+    const key = `${plan.runId}:${plan.diagnosticReason || plan.error}`;
+    if (diagnosticsQueued.has(key) || diagnosticsInFlight.has(key)) return;
+    diagnosticsQueued.add(key);
+    const target = diagnosticTarget(plan);
+    const cached = target ? latestDiagnosticFrames.get(target.deviceId) : null;
+    if (cached && Date.now() - cached.timestamp < 60_000) {
+      completePlanDiagnostic(structuredClone(plan), cached.payload);
+      return;
+    }
+    if (!target || !devices.has(target.deviceId)) {
+      completePlanDiagnostic(structuredClone(plan), null);
+      return;
+    }
+    const diagnosticId = `${plan.runId}:${plan.legIndex}:${Date.now()}`;
+    pendingDiagnostics.set(diagnosticId, { plan: structuredClone(plan), deviceId: target.deviceId,
+      createdAt: Date.now() });
+    try {
+      dispatchDeviceCommand(target.deviceId, "capture_diagnostic_snapshot",
+        { accountIndex: target.accountIndex, diagnosticId },
+        { stepId: `diagnostic:${diagnosticId}`, expiresInMs: 60_000 });
+    } catch {
+      pendingDiagnostics.delete(diagnosticId);
+      completePlanDiagnostic(structuredClone(plan), null);
+      return;
+    }
+    const fallback = setTimeout(() => {
+      const pending = pendingDiagnostics.get(diagnosticId);
+      if (!pending) return;
+      pendingDiagnostics.delete(diagnosticId);
+      completePlanDiagnostic(pending.plan, null);
+    }, 5_000);
+    fallback.unref();
+  }
+
+  function replayPendingForDevice(deviceId) {
+    for (const [oldCommandId, pending] of [...pendingPlanCommands]) {
+      if (pending.action.deviceId !== deviceId) continue;
+      try {
+        const commandId = dispatchDeviceCommand(deviceId, pending.action.command,
+          pending.action.parameters, { stepId: pending.action.stepId, expiresInMs: 300_000 });
+        pendingPlanCommands.delete(oldCommandId);
+        pendingPlanCommands.set(commandId, { ...pending, sentAt: Date.now(),
+          retryCount: Number(pending.retryCount || 0) + 1 });
+      } catch {
+        // Device may disappear again between authentication and replay. The grace
+        // period keeps the plan safe until its next reconnect attempt.
+      }
+    }
+    const alreadyPending = new Set([...pendingPlanCommands.values()]
+      .map((pending) => pending.action.stepId));
+    for (const action of eightAccountPlan.outstandingActionsForDevice(deviceId)) {
+      if (alreadyPending.has(action.stepId)) continue;
+      try {
+        const commandId = dispatchDeviceCommand(deviceId, action.command, action.parameters,
+          { stepId: action.stepId, expiresInMs: 300_000 });
+        pendingPlanCommands.set(commandId, { action: structuredClone(action),
+          sentAt: Date.now(), retryCount: 0 });
+      } catch {
+        // The normal reconnect grace period remains authoritative.
+      }
+    }
+  }
+
+  function reconcilePendingSteps(deviceId, telemetry) {
+    const entries = Array.isArray(telemetry?.executionLedger) ? telemetry.executionLedger : [];
+    if (entries.length === 0) return false;
+    const byStep = new Map(entries.filter((entry) => typeof entry?.stepId === "string")
+      .map((entry) => [entry.stepId, entry]));
+    let changed = false;
+    for (const [commandId, pending] of [...pendingPlanCommands]) {
+      if (pending.action.deviceId !== deviceId) continue;
+      const local = byStep.get(pending.action.stepId);
+      if (!local || !["running", "completed", "failed"].includes(local.status)) continue;
+      pendingPlanCommands.delete(commandId);
+      const accepted = local.status === "running"
+        || (local.status === "completed" && local.success !== false);
+      eightAccountPlan.onCommandResult(pending.action, accepted,
+        local.message || `APP本地账本对账：${local.status}`);
+      changed = true;
+    }
+    return changed;
   }
 
   function broadcastSnapshot(controller) {
@@ -624,26 +784,10 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
       authStore.canAccess(user, entry.deviceId));
   }
 
-  function planUsesAnyDevice(deviceIds) {
-    const snapshot = eightAccountPlan.snapshot();
-    if (!["running", "reconnecting", "intervention"].includes(snapshot.status)) return false;
-    const activeIds = new Set((snapshot.route || []).map((entry) => entry.deviceId).filter(Boolean));
-    return deviceIds.some((deviceId) => activeIds.has(deviceId));
-  }
-
-  function transferUsesAnyDevice(deviceIds) {
-    if (!equipmentTransfer.isActive()) return false;
-    const snapshot = equipmentTransfer.snapshot();
-    const activeIds = new Set([snapshot.seller?.deviceId, snapshot.buyer?.deviceId].filter(Boolean));
-    return deviceIds.some((deviceId) => activeIds.has(deviceId));
-  }
-
   function startConfiguredPlan(options, user = { role: "admin" }) {
+    if (equipmentTransfer.isActive()) throw new Error("单次转移正在运行或等待处理，请先检查并中断该任务");
     const summaries = accessibleSummaries(user);
     const route = resolveAccountRoute(summaries, options.routeLabels);
-    if (transferUsesAnyDevice(route.map((entry) => entry.deviceId))) {
-      throw new Error("本计划使用的设备正在执行单次转移，请完成或中断该任务后重试");
-    }
     return eightAccountPlan.start(route, {
       items: Array.isArray(options.equipmentItems) ? options.equipmentItems : undefined,
       resourceItems: Array.isArray(options.resourceItems) ? options.resourceItems : undefined,
@@ -660,13 +804,11 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   }
 
   function startResourceSweep(options, user = { role: "admin" }) {
+    if (equipmentTransfer.isActive()) throw new Error("单次转移正在运行或等待处理，请先检查并中断该任务");
     const summaries = accessibleSummaries(user);
     const mainAccount = options.routeLabels[0];
     const routeLabels = [...options.routeLabels.slice(1, -1), mainAccount];
     const route = resolveAccountRoute(summaries, routeLabels);
-    if (transferUsesAnyDevice(route.map((entry) => entry.deviceId))) {
-      throw new Error("本计划使用的设备正在执行单次转移，请完成或中断该任务后重试");
-    }
     return eightAccountPlan.startResourceSweep(route, {
       resourceItems: Array.isArray(options.resourceItems) ? options.resourceItems : undefined,
       resourceReserveCount: options.resourceReserveCount,
@@ -708,38 +850,34 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
           appVersion: String(message.appVersion ?? "unknown").slice(0, 40),
           connectedAt: Date.now(),
           socket,
+          connectionSessionId: previous?.connectionSessionId || "",
+          telemetrySequence: Number(previous?.telemetrySequence || 0),
           telemetry: previous?.telemetry ?? null
         };
         devices.set(entry.deviceId, entry);
         sendJson(socket, { type: "device.accepted", serverTime: Date.now() });
         broadcast({ type: "device.online", device: deviceSummary(entry) });
-        try {
-          const before = JSON.stringify(eightAccountPlan.snapshot());
-          const reconnecting = eightAccountPlan.snapshot();
-          const currentAccounts = reconnecting.mode === "resource_sweep"
-            || reconnecting.phase === "standalone_main_running"
-            ? [reconnecting.route?.[reconnecting.legIndex < 0 ? 0 : reconnecting.legIndex]]
-            : ["main_buy_running", "resource_auction_running"].includes(reconnecting.phase)
-              ? [reconnecting.route?.[reconnecting.legIndex + 1]]
-              : [reconnecting.route?.[reconnecting.legIndex],
-                reconnecting.route?.[reconnecting.legIndex + 1]];
-          const currentDeviceIds = [...new Set(currentAccounts
-            .map((account) => account?.deviceId).filter(Boolean))];
-          const currentDevicesOnline = currentDeviceIds.every((deviceId) => devices.has(deviceId));
-          const after = currentDevicesOnline
-            ? eightAccountPlan.onDeviceOnline(reconnecting.offlineDeviceId || entry.deviceId)
-            : reconnecting;
-          if (JSON.stringify(after) !== before) publishPlan(after);
-        } catch (error) {
-          logger.warn?.("Plan reconnect recovery failed", error.message);
-        }
+        const beforeOnline = JSON.stringify(eightAccountPlan.snapshot());
+        const afterOnline = eightAccountPlan.onDeviceOnline(entry.deviceId);
+        if (JSON.stringify(afterOnline) !== beforeOnline) publishPlan(afterOnline);
+        replayPendingForDevice(entry.deviceId);
         return;
       }
 
       const entry = devices.get(socket.deviceId);
       if (!entry || entry.socket !== socket) return;
       if (message.type === "telemetry.update" && message.payload && typeof message.payload === "object") {
+        const incomingSession = typeof message.connectionSessionId === "string"
+          ? message.connectionSessionId.slice(0, 80) : "";
+        const incomingSequence = Number(message.telemetrySequence || 0);
+        if (incomingSession && entry.connectionSessionId === incomingSession
+            && Number.isSafeInteger(incomingSequence)
+            && incomingSequence <= Number(entry.telemetrySequence || 0)) return;
+        entry.connectionSessionId = incomingSession;
+        entry.telemetrySequence = Number.isSafeInteger(incomingSequence) && incomingSequence > 0
+          ? incomingSequence : Number(entry.telemetrySequence || 0) + 1;
         entry.telemetry = message.payload;
+        const reconciled = reconcilePendingSteps(entry.deviceId, entry.telemetry);
         syncReportedAccounts(entry.deviceId);
         broadcast({
           type: "telemetry.update",
@@ -749,7 +887,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         });
         const before = JSON.stringify(eightAccountPlan.snapshot());
         const after = eightAccountPlan.onTelemetry(entry.deviceId, entry.telemetry);
-        if (JSON.stringify(after) !== before) {
+        if (reconciled || JSON.stringify(after) !== before) {
           publishPlan(after);
         }
         equipmentTransfer.onTelemetry(entry.deviceId, entry.telemetry);
@@ -772,11 +910,13 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
           type: "command.result",
           deviceId: entry.deviceId,
           commandId: message.commandId.slice(0, 80),
+          stepId: typeof message.stepId === "string" ? message.stepId.slice(0, 120) : "",
           success: message.success === true,
           message: String(message.message ?? "").slice(0, 200),
           timestamp: Number(message.timestamp) || Date.now()
         });
       } else if (message.type === "preview.frame" && validPreviewFrame(message.payload)) {
+        latestDiagnosticFrames.set(entry.deviceId, { timestamp: Date.now(), payload: message.payload });
         for (const controller of controllers) {
           if (controller.previewDevices?.has(entry.deviceId)
               && authStore.canAccess(controller.user, entry.deviceId)) {
@@ -787,6 +927,14 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
               payload: message.payload
             });
           }
+        }
+      } else if (message.type === "diagnostic.snapshot" && validPreviewFrame(message.payload)) {
+        latestDiagnosticFrames.set(entry.deviceId, { timestamp: Date.now(), payload: message.payload });
+        const diagnosticId = String(message.payload.diagnosticId || "");
+        const pending = pendingDiagnostics.get(diagnosticId);
+        if (pending && pending.deviceId === entry.deviceId) {
+          pendingDiagnostics.delete(diagnosticId);
+          completePlanDiagnostic(pending.plan, message.payload);
         }
       } else if (message.type === "interaction.select") {
         const interaction = sanitizeSelectInteraction(message.payload);
@@ -941,8 +1089,18 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
           content: planDiagnostics.read(username) });
         return;
       }
+      if (message.type === "plan.diagnostics.bundle.request") {
+        const username = String(socket.user?.username || "用户");
+        sendJson(socket, { type: "plan.diagnostics.bundle",
+          filename: `PlayKeeper-卡顿诊断包-${username}.json`,
+          content: planDiagnostics.readBundle(username) });
+        return;
+      }
       if (message.type === "equipment.transfer.start") {
         try {
+          if (eightAccountPlan.snapshot().status === "running") {
+            throw new Error("多用户挂机正在运行，请先中断计划后再使用单次定向转移");
+          }
           const sellerLabel = String(message.sellerLabel || "").trim();
           const buyerLabel = String(message.buyerLabel || "").trim();
           const items = Array.isArray(message.items)
@@ -956,9 +1114,6 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
           }
           const [seller, buyer] = resolveAccountRoute(
             accessibleSummaries(socket.user), [sellerLabel, buyerLabel]);
-          if (planUsesAnyDevice([seller.deviceId, buyer.deviceId])) {
-            throw new Error("所选账号设备正在执行多用户挂机，请改用其他设备或等待当前交接完成");
-          }
           equipmentTransfer.start({ ownerId: socket.user?.id, seller, buyer,
             items, price, returnMap });
         } catch (error) {
@@ -1103,10 +1258,24 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
     equipmentTransfer.tick();
     for (const [commandId, pending] of pendingPlanCommands) {
       if (now - pending.sentAt < 30_000) continue;
+      if (eightAccountPlan.isDeviceInGrace(pending.action.deviceId)) continue;
+      if (devices.has(pending.action.deviceId) && Number(pending.retryCount || 0) < 2) {
+        try {
+          const replacementId = dispatchDeviceCommand(pending.action.deviceId,
+            pending.action.command, pending.action.parameters,
+            { stepId: pending.action.stepId, expiresInMs: 300_000 });
+          pendingPlanCommands.delete(commandId);
+          pendingPlanCommands.set(replacementId, { ...pending, sentAt: now,
+            retryCount: Number(pending.retryCount || 0) + 1 });
+          continue;
+        } catch {
+          // Fall through to the normal safe failure path.
+        }
+      }
       pendingPlanCommands.delete(commandId);
       const beforeTimeout = JSON.stringify(eightAccountPlan.snapshot());
       const afterTimeout = eightAccountPlan.onCommandResult(
-        pending.action, false, "30秒内未收到APP确认");
+        pending.action, false, "重放两次后仍未收到APP执行账本确认");
       if (JSON.stringify(afterTimeout) !== beforeTimeout) publishPlan(afterTimeout);
     }
     const before = JSON.stringify(eightAccountPlan.snapshot());
@@ -1118,7 +1287,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   planTicker.unref();
   const scheduleTicker = setInterval(() => {
     if (equipmentTransfer.isActive()) return;
-    if (["running", "reconnecting", "intervention"].includes(eightAccountPlan.snapshot().status)) return;
+    if (["running", "intervention"].includes(eightAccountPlan.snapshot().status)) return;
     for (const user of authStore.scheduledUsers()) {
       const settings = authStore.getSettings(user);
       let schedule;
