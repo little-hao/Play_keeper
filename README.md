@@ -2,7 +2,7 @@
 
 Play Keeper 是面向 Android 10 及以上设备的多账号网页挂机与远程自动化工具。它把多个相互隔离的游戏账号、Android 执行端、VPS 调度服务和浏览器控制台组合在一起，用于完成日常任务、副本、仓库整理、装备接力和道具拍卖等重复流程。
 
-当前正式版：**v2.0.4** · [下载 APK 与 VPS 包](https://github.com/little-hao/Play_keeper/releases/latest) · [更新记录](CHANGELOG.md)
+当前正式版：**v2.0.6** · [下载 APK 与 VPS 包](https://github.com/little-hao/Play_keeper/releases/latest) · [更新记录](CHANGELOG.md)
 
 > 本项目操作真实游戏账号与物品。首次使用请先用低价值道具、小范围账号路线验证设置；涉及交易时应核对卖方、买方、名称和价格。
 
