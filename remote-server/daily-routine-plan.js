@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-const TERMINAL = new Set(["ok", "error", "cancelled"]);
+const TERMINAL = new Set(["ok", "error", "unverified", "cancelled"]);
 
 export class DailyRoutinePlan {
   constructor({ emitAction, onUpdate, onAuctionReady, now = () => Date.now() } = {}) {
@@ -30,7 +30,8 @@ export class DailyRoutinePlan {
       auctionDecision: "pending", auctionDecisionDeadlineAt: now + 30_000,
       auctionHandoff: false, options: structuredClone(options), message: "账号每日任务并行执行中",
       accounts: route.map((account) => ({ ...account, status: "queued", task: "daily_routine",
-        message: "等待 APP 接收", updatedAt: now })) };
+        message: "等待 APP 接收", updatedAt: now, evidence: {}, inventoryCounts: {},
+        inventoryRequested: false, returnRequested: false, history: [] })) };
     this.#publish();
     for (const account of this.state.accounts) {
       const returnMap = String(options.returnMaps?.[account.accountLabel]
@@ -74,12 +75,67 @@ export class DailyRoutinePlan {
       account.task = automation.task || account.task;
       account.message = automation.lastMessage || automation.message || account.message;
       account.updatedAt = Number(automation.updatedAt) || this.now();
-      if (automation.task === "daily_routine" && TERMINAL.has(automation.status)) {
-        account.status = automation.status;
-      } else if (automation.status === "running") account.status = "running";
+      account.evidence = {
+        dailyTaskPageLoaded: automation.dailyTaskPageLoaded === true,
+        dailyTaskAcceptVerified: automation.dailyTaskAcceptVerified === true,
+        dailyTaskCandidateCount: Number(automation.dailyTaskCandidateCount),
+        dailyTaskAcceptedCount: Number(automation.dailyTaskAcceptedCount),
+        completableScanVerified: automation.completableScanVerified === true,
+        completableFoundCount: Number(automation.completableFoundCount),
+        completableCompletedCount: Number(automation.completableCompletedCount),
+        completableRemainingCount: Number(automation.completableRemainingCount),
+        failureStep: automation.dailyRoutineFailureStep || "",
+        failureReason: automation.dailyRoutineFailureReason || ""
+      };
+      if (automation.task === "daily_routine" && automation.status === "error") {
+        account.status = "error";
+      } else if (automation.task === "daily_routine" && automation.status === "ok") {
+        const proof = account.evidence;
+        if (!proof.dailyTaskPageLoaded || !proof.dailyTaskAcceptVerified
+            || !proof.completableScanVerified || proof.completableRemainingCount !== 0
+            || proof.completableCompletedCount < proof.completableFoundCount) {
+          account.status = "unverified";
+          account.message = "APP已结束，但领取/完成任务证据不足";
+        } else if (!account.inventoryRequested) {
+          account.inventoryRequested = true;
+          account.status = "inventory_pending";
+          account.history.push({ step: "daily_routine", status: "verified", at: this.now() });
+          this.#emitFollowUp(account, "run_inventory_snapshot", "inventory");
+        }
+      } else if (account.status === "inventory_pending" && automation.task === "inventory_snapshot"
+          && automation.status === "ok") {
+        if (Number(automation.inventoryLastRunAt) < this.state.startedAt) {
+          account.status = "unverified";
+          account.message = "背包快照不是本轮新数据";
+        } else {
+          account.inventoryCounts = automation.inventoryCounts && typeof automation.inventoryCounts === "object"
+            ? structuredClone(automation.inventoryCounts) : {};
+          account.returnRequested = true;
+          account.status = "return_pending";
+          account.history.push({ step: "inventory_snapshot", status: "verified", at: this.now() });
+          this.#emitFollowUp(account, "run_temple_guard", "return_hang");
+        }
+      } else if (account.status === "return_pending" && automation.task === "temple"
+          && automation.status === "ok") {
+        account.status = "ok";
+        account.history.push({ step: "return_hang", status: "verified", at: this.now() });
+      } else if (automation.status === "running"
+          && ["queued", "running"].includes(account.status)) account.status = "running";
     }
     this.#settle();
     return this.snapshot();
+  }
+
+  #emitFollowUp(account, command, suffix) {
+    try {
+      this.emitAction({ deviceId: account.deviceId, accountIndex: account.accountIndex,
+        accountLabel: account.accountLabel, command,
+        stepId: `${this.state.runId}:${suffix}:${account.deviceId}:${account.accountIndex}`,
+        parameters: { accountIndex: account.accountIndex, runId: this.state.runId } });
+    } catch (error) {
+      account.status = "error";
+      account.message = String(error?.message || error);
+    }
   }
 
   decideAuction(enabled) {
@@ -124,7 +180,7 @@ export class DailyRoutinePlan {
       const failed = this.state.accounts.filter((entry) => entry.status !== "ok");
       if (failed.length) {
         this.state.status = "error";
-        this.state.message = `${failed.length} 个账号未成功，已停止后续拍卖`;
+        this.state.message = `${failed.length} 个账号失败或未验证，已停止后续拍卖`;
       } else if (this.state.auctionDecision === "yes" && !this.state.auctionHandoff) {
         this.state.status = "awaiting_auction";
         this.state.message = "每日任务完成，正在移交串行拍卖";
@@ -144,6 +200,13 @@ export class DailyRoutinePlan {
     this.state.status = "success";
     this.state.message = "全部账号每日任务已完成，拍卖已移交串行流程";
     this.#publish();
+  }
+
+  completionReport() {
+    const inventoryByAccount = Object.fromEntries(this.state.accounts
+      .map((account) => [account.accountLabel, account.inventoryCounts || {}]));
+    return { ...this.snapshot(), inventoryByAccount,
+      reportEmail: this.state.options.reportEmail || "" };
   }
 
   #publish() { this.onUpdate?.(this.snapshot()); }

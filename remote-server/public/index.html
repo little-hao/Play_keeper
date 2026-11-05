@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
   <title>Play Keeper 远程控制</title>
-  <link rel="stylesheet" href="/styles.css?v=2.0.7-rc1">
+  <link rel="stylesheet" href="/styles.css?v=2.0.7-rc2">
 </head>
 <body>
   <main class="shell">
@@ -196,11 +196,11 @@
         <p class="automation-help">启动前可调整循环、两类价格、副本与道具组合及每个账号的挂机副本；留空时自动使用页面标注的默认组合。</p>
         <div id="planIntervention" class="plan-intervention hidden" role="alert"></div>
       </details>
-      <section class="panel account-daily-routine-panel">
-        <div class="section-title">
+      <details class="panel account-daily-routine-panel">
+        <summary class="section-title">
           <div><p class="eyebrow">DAILY ROUTINE</p><h2>各账号每日任务</h2></div>
           <strong id="accountDailyStatus" class="state offline">未运行</strong>
-        </div>
+        </summary>
         <p class="automation-help">各账号并行完成签到、领取日常任务、指定副本及挂机辅助页可完成任务；完成后分别返回指定副本挂机。同账号其他脚本运行时不会强行启动。</p>
         <div class="plan-settings">
           <fieldset class="span-2"><legend>参与账号</legend><div id="accountDailyAccounts" class="account-choice-grid"></div></fieldset>
@@ -211,6 +211,8 @@
           <label class="span-2">可选拍卖道具<input id="accountDailyResourceItems" value="曙光印记,进化宝石,强化丹A,强化丹B,天仙玉露"></label>
           <label>拍卖单价（金币）<input id="accountDailyResourcePrice" type="number" min="1" max="9999999" value="920"></label>
           <label>卖方保留数量<select id="accountDailyResourceReserve"><option value="1">保留1个</option><option value="0">保留0个</option></select></label>
+          <label class="toggle-row"><input id="accountDailyEmailEnabled" type="checkbox"> 完成后发送邮件通知</label>
+          <label>通知邮箱<input id="accountDailyEmail" type="email" placeholder="填写接收完成情况与背包合计的邮箱"></label>
         </div>
         <div id="accountDailyProgress" class="daily-routine-progress"></div>
         <div id="accountDailyAuction" class="auction-decision hidden">
@@ -222,8 +224,10 @@
         <div class="automation-actions action-grid">
           <button id="startAccountDaily" class="primary">开始各账号每日任务</button>
           <button id="cancelAccountDaily" class="secondary" disabled>中断每日任务</button>
+          <button id="saveAccountDailySettings" class="secondary">保存本用户每日任务设定</button>
         </div>
-      </section>
+        <small id="accountDailySaveState">设置按当前登录用户保存</small>
+      </details>
       <div id="deviceList" class="device-list"></div>
       <details class="panel global-control-panel">
         <summary>高级操作 · KeepPlayer 进程控制</summary>
@@ -396,6 +400,6 @@
       <div id="selectOptions" class="select-options" role="radiogroup"></div>
     </section>
   </div>
-  <script type="module" src="/app.js?v=2.0.7-rc1"></script>
+  <script type="module" src="/app.js?v=2.0.7-rc2"></script>
 </body>
 </html>

@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
 import { EightAccountPlan, resolveAccountRoute } from "./eight-account-plan.js";
-import { sendCompletionReport } from "./email-report.js";
+import { sendCompletionReport, sendDailyRoutineReport } from "./email-report.js";
 import { AuthStore } from "./auth-store.js";
 import { PlanDiagnosticsStore } from "./plan-diagnostics.js";
 import { EquipmentTransferCoordinator } from "./equipment-transfer-coordinator.js";
@@ -289,7 +289,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.7-rc1" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.7-rc2" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -436,8 +436,11 @@ function normalizeDailyRoutineOptions(value) {
     throw new Error("拍卖价格无效");
   }
   if (![0, 1].includes(resourceReserveCount)) throw new Error("道具保留数量无效");
+  const emailNotify = source.emailNotify === true;
+  const reportEmail = typeof source.reportEmail === "string" ? source.reportEmail.trim() : "";
+  if (emailNotify && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) throw new Error("通知邮箱格式无效");
   return { accountLabels, dungeonItems, returnMap, returnMaps, skill,
-    resourceItems, resourcePrice, resourceReserveCount };
+    resourceItems, resourcePrice, resourceReserveCount, emailNotify, reportEmail };
 }
 
 function defaultPlanSchedule() {
@@ -554,6 +557,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   const controllers = new Set();
   const pendingPlanCommands = new Map();
   const pendingDailyRoutineCommands = new Map();
+  const dailyRoutineReportsSent = new Set();
   const pendingTransferCommands = new Map();
   const latestDiagnosticFrames = new Map();
   const pendingDiagnostics = new Map();
@@ -645,6 +649,14 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         authStore.canAccess(controller.user, deviceId))) {
         sendJson(controller, { type: "daily.routine.update", payload });
       }
+    }
+    if (["success", "error"].includes(payload.status) && payload.options?.emailNotify
+        && payload.options?.reportEmail && !dailyRoutineReportsSent.has(payload.runId)) {
+      dailyRoutineReportsSent.add(payload.runId);
+      sendDailyRoutineReport(dailyRoutinePlan.completionReport()).then((result) => {
+        broadcast({ type: "daily.routine.email", message: result.status });
+      }).catch((error) => broadcast({ type: "daily.routine.email",
+        message: `发送失败：${String(error?.message || error).slice(0, 120)}` }));
     }
   }
 
@@ -1167,6 +1179,17 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         try {
           const options = normalizeDailyRoutineOptions(message.options);
           publishDailyRoutine(startDailyRoutine(options, socket.user));
+        } catch (error) {
+          sendJson(socket, { type: "daily.routine.error", message: String(error?.message || error) });
+        }
+        return;
+      }
+      if (message.type === "daily.routine.settings.update") {
+        try {
+          const options = normalizeDailyRoutineOptions(message.options);
+          const settings = authStore.updateSettings(socket.user, { dailyRoutineOptions: options });
+          sendJson(socket, { type: "user.settings", payload: settings });
+          sendJson(socket, { type: "daily.routine.settings.saved" });
         } catch (error) {
           sendJson(socket, { type: "daily.routine.error", message: String(error?.message || error) });
         }

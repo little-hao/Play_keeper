@@ -491,6 +491,8 @@ function resetUserWorkspace() {
   planSchedule = { enabled: false, time: "04:00", options: {} };
   adminSnapshot = { users: [], deviceOwners: {} };
   singleTransfer = { status: "idle" };
+  const accountDailyAccounts = document.querySelector("#accountDailyAccounts");
+  if (accountDailyAccounts) delete accountDailyAccounts.dataset.loaded;
   pendingPlanSave = false;
   clearTimeout(feedbackTimer);
   renderSingleTransfer();
@@ -606,6 +608,13 @@ function handleMessage(message) {
     case "daily.routine.error":
       addLog(`各账号每日任务失败：${message.message}`);
       showFeedback(message.message || "各账号每日任务未启动", "error");
+      break;
+    case "daily.routine.settings.saved":
+      document.querySelector("#accountDailySaveState").textContent = "已保存本用户每日任务设定";
+      showFeedback("本用户每日任务设定已保存");
+      break;
+    case "daily.routine.email":
+      addLog(`每日任务邮件：${message.message}`);
       break;
     case "equipment.transfer.update":
       singleTransfer = message.payload || { status: "idle" };
@@ -828,6 +837,22 @@ function renderAccountDailyConfig() {
     input.maxLength = 30; input.placeholder = "使用默认值"; input.value = maps[label] || "";
     mapLabel.append(input); mapBox.append(mapLabel);
   }
+  const saved = userSettings.dailyRoutineOptions;
+  if (saved && !accountBox.dataset.loaded) {
+    accountBox.dataset.loaded = "true";
+    for (const checkbox of accountBox.querySelectorAll("input[type=checkbox]")) {
+      checkbox.checked = saved.accountLabels?.includes(checkbox.value) ?? true;
+    }
+    if (Array.isArray(saved.dungeonItems)) document.querySelector("#accountDailyDungeons").value = saved.dungeonItems.join(",");
+    document.querySelector("#accountDailySkill").value = saved.skill === "auto" ? "" : (saved.skill || "");
+    document.querySelector("#accountDailyReturnMap").value = saved.returnMap || "圣诞小屋";
+    for (const input of mapBox.querySelectorAll("input[data-account-label]")) input.value = saved.returnMaps?.[input.dataset.accountLabel] || "";
+    if (Array.isArray(saved.resourceItems)) document.querySelector("#accountDailyResourceItems").value = saved.resourceItems.join(",");
+    document.querySelector("#accountDailyResourcePrice").value = saved.resourcePrice || 920;
+    document.querySelector("#accountDailyResourceReserve").value = String(saved.resourceReserveCount ?? 1);
+    document.querySelector("#accountDailyEmailEnabled").checked = saved.emailNotify === true;
+    document.querySelector("#accountDailyEmail").value = saved.reportEmail || "";
+  }
 }
 
 function readAccountDailyOptions() {
@@ -846,10 +871,16 @@ function readAccountDailyOptions() {
   }
   const resourceItems = document.querySelector("#accountDailyResourceItems").value
     .split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
+  const emailNotify = document.querySelector("#accountDailyEmailEnabled").checked;
+  const reportEmail = document.querySelector("#accountDailyEmail").value.trim();
+  if (emailNotify && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) {
+    addLog("启用邮件通知时必须填写有效邮箱"); return null;
+  }
   return { accountLabels, dungeonItems, returnMap, returnMaps,
     skill: document.querySelector("#accountDailySkill").value.trim() || "auto",
     resourceItems, resourcePrice: Number(document.querySelector("#accountDailyResourcePrice").value || 920),
-    resourceReserveCount: Number(document.querySelector("#accountDailyResourceReserve").value) };
+    resourceReserveCount: Number(document.querySelector("#accountDailyResourceReserve").value),
+    emailNotify, reportEmail };
 }
 
 function renderAccountDailyRoutine() {
@@ -861,6 +892,7 @@ function renderAccountDailyRoutine() {
     success: "已完成", error: "有错误", cancelled: "已中断" };
   status.textContent = labels[accountDaily.status] || accountDaily.status;
   status.className = `state ${["running", "awaiting_auction"].includes(accountDaily.status) ? "online" : "offline"}`;
+  document.querySelector(".account-daily-routine-panel").open = ["running", "awaiting_auction", "error"].includes(accountDaily.status);
   progress.replaceChildren();
   for (const account of accountDaily.accounts || []) {
     const row = document.createElement("div"); row.className = `routine-account ${account.status || "queued"}`;
@@ -890,6 +922,12 @@ document.querySelector("#accountDailyAuctionYes").addEventListener("click", () =
   socket?.send(JSON.stringify({ type: "daily.routine.auction", enabled: true })));
 document.querySelector("#accountDailyAuctionNo").addEventListener("click", () =>
   socket?.send(JSON.stringify({ type: "daily.routine.auction", enabled: false })));
+document.querySelector("#saveAccountDailySettings").addEventListener("click", () => {
+  if (socket?.readyState !== WebSocket.OPEN) return addLog("控制台尚未连接");
+  const options = readAccountDailyOptions(); if (!options) return;
+  socket.send(JSON.stringify({ type: "daily.routine.settings.update", options }));
+  document.querySelector("#accountDailySaveState").textContent = "正在保存…";
+});
 setInterval(renderAccountDailyRoutine, 1_000);
 
 function readPlanOptions() {

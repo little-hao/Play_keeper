@@ -630,6 +630,16 @@ final class AutomationCoordinator {
         configureReturnHang(accountIndex, returnMap);
         state.dailyRoutineMode = true;
         state.dailyRoutineRunId = runId == null ? "" : runId.trim();
+        state.dailyTaskPageLoaded = false;
+        state.dailyTaskAcceptVerified = false;
+        state.dailyTaskCandidateCount = -1;
+        state.dailyTaskAcceptedCount = 0;
+        state.completableScanVerified = false;
+        state.completableFoundCount = 0;
+        state.completableCompletedCount = 0;
+        state.completableRemainingCount = -1;
+        state.dailyRoutineFailureStep = "";
+        state.dailyRoutineFailureReason = "";
         runDungeonQueue(accountIndex, false, false);
     }
 
@@ -857,6 +867,16 @@ final class AutomationCoordinator {
                 PREF_DAILY_ROUTINE_LAST + accountIndex, 0L));
         automation.put("dailyRoutineRunId", state.dailyRoutineRunId);
         automation.put("dailyRoutineMode", state.dailyRoutineMode);
+        automation.put("dailyTaskPageLoaded", state.dailyTaskPageLoaded);
+        automation.put("dailyTaskAcceptVerified", state.dailyTaskAcceptVerified);
+        automation.put("dailyTaskCandidateCount", state.dailyTaskCandidateCount);
+        automation.put("dailyTaskAcceptedCount", state.dailyTaskAcceptedCount);
+        automation.put("completableScanVerified", state.completableScanVerified);
+        automation.put("completableFoundCount", state.completableFoundCount);
+        automation.put("completableCompletedCount", state.completableCompletedCount);
+        automation.put("completableRemainingCount", state.completableRemainingCount);
+        automation.put("dailyRoutineFailureStep", state.dailyRoutineFailureStep);
+        automation.put("dailyRoutineFailureReason", state.dailyRoutineFailureReason);
         automation.put("inventoryItems", new JSONArray(parseAutomationItems(
                 inventoryItemsText(accountIndex), 20, "监控道具")));
         automation.put("inventoryLastRunAt", preferences.getLong(
@@ -3074,27 +3094,42 @@ final class AutomationCoordinator {
                 + "const daily=Array.from(modal.querySelectorAll('button,[role=tab],view,div,span'))"
                 + ".filter(visible).find(e=>clean(e).startsWith('日常任务'));"
                 + "if(daily&&!/active|selected/.test(daily.className||'')){daily.click();return 'daily_clicked';}"
+                + "const loading=modal.querySelector('.task-tabs-hint');if(loading&&visible(loading))return 'loading';"
+                + "const items=modal.querySelectorAll('.task-items .task-item').length;"
                 + "const accept=Array.from(modal.querySelectorAll('button,[role=button],uni-button,view'))"
                 + ".filter(visible).find(e=>clean(e)==='一键接受');"
-                + "if(accept&&!accept.disabled){accept.click();return 'accepted';}"
-                + "const close=modal.querySelector('.task-close');if(close)close.click();return 'done';})()";
+                + "if(accept&&!accept.disabled){accept.click();return 'accepted|'+items;}"
+                + "if(daily&&/active|selected/.test(daily.className||''))return 'verified_none|'+items;"
+                + "return 'loading';})()";
         evaluateTask(accountIndex, view, script, encoded -> {
             String result = decodeString(encoded);
-            if ("accepted".equals(result)) {
+            if (result.startsWith("accepted|")) {
+                RuntimeState state = states[accountIndex];
+                state.dailyTaskPageLoaded = true;
+                state.dailyTaskCandidateCount = parseResultCount(result);
                 updateState(accountIndex, "已确认一键接受，正在等待页面更新");
                 postTask(accountIndex, () -> verifyDailyTasksAccepted(
                     accountIndex, view, continuation, 0), 2_000L);
-            } else if ("done".equals(result)) {
+            } else if (result.startsWith("verified_none|")) {
+                RuntimeState state = states[accountIndex];
+                state.dailyTaskPageLoaded = true;
+                state.dailyTaskAcceptVerified = true;
+                state.dailyTaskCandidateCount = parseResultCount(result);
                 preferences.edit().putLong(PREF_DAILY_TASK_LAST + accountIndex,
                         System.currentTimeMillis()).apply();
-                postTask(accountIndex, continuation, 400L);
+                closeTaskModalAndContinue(accountIndex, view, continuation);
             } else if (("opened".equals(result) || "daily_clicked".equals(result)
-                    || "missing".equals(result)) && attempt < 12) {
+                    || "missing".equals(result) || "loading".equals(result)) && attempt < 20) {
                 postTask(accountIndex, () -> acceptDailyTasksBeforeDungeons(
-                        accountIndex, view, continuation, attempt + 1), 1_200L);
+                        accountIndex, view, continuation, attempt + 1), 2_000L);
             } else {
-                updateState(accountIndex, "未找到可接受的日常任务，已继续副本流程");
-                postTask(accountIndex, continuation, 400L);
+                if (states[accountIndex].dailyRoutineMode) {
+                    failDailyRoutine(accountIndex, "daily_task_accept",
+                            "日常任务页面或一键接受按钮在等待期内未能验证");
+                } else {
+                    updateState(accountIndex, "未找到可接受的日常任务，已继续副本流程");
+                    postTask(accountIndex, continuation, 400L);
+                }
             }
         });
     }
@@ -3106,34 +3141,59 @@ final class AutomationCoordinator {
                 + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'').trim();"
                 + "const modal=Array.from(document.querySelectorAll('.task-modal,[role=dialog],.uni-popup__wrapper'))"
                 + ".find(e=>visible(e)&&clean(e).includes('任务列表'));"
-                + "if(!modal)return 'done';"
+                + "if(!modal)return 'missing';"
                 + "const daily=Array.from(modal.querySelectorAll('button,[role=tab],view,div,span'))"
                 + ".filter(visible).find(e=>clean(e).startsWith('日常任务'));"
                 + "if(daily&&!/active|selected/.test(daily.className||'')){daily.click();return 'daily_clicked';}"
+                + "const loading=modal.querySelector('.task-tabs-hint');if(loading&&visible(loading))return 'loading';"
+                + "const items=modal.querySelectorAll('.task-items .task-item').length;"
                 + "const accept=Array.from(modal.querySelectorAll('button,[role=button],uni-button,view'))"
                 + ".filter(visible).find(e=>clean(e)==='一键接受');"
                 + "if(accept&&!accept.disabled){accept.click();return 'retry';}"
-                + "return 'done';})()";
+                + "return 'verified|'+items;})()";
         evaluateTask(accountIndex, view, script, encoded -> {
             String result = decodeString(encoded);
-            if ("retry".equals(result) && attempt < 4) {
+            if ("retry".equals(result) && attempt < 8) {
                 updateState(accountIndex, "日常任务页仍有待接受项，正在重试");
                 postTask(accountIndex, () -> verifyDailyTasksAccepted(
                         accountIndex, view, continuation, attempt + 1), 2_000L);
-            } else if ("daily_clicked".equals(result) && attempt < 5) {
+            } else if (("daily_clicked".equals(result) || "missing".equals(result)
+                    || "loading".equals(result)) && attempt < 20) {
                 postTask(accountIndex, () -> verifyDailyTasksAccepted(
-                        accountIndex, view, continuation, attempt + 1), 1_200L);
+                        accountIndex, view, continuation, attempt + 1), 2_000L);
             } else {
-                if ("done".equals(result)) {
+                if (result.startsWith("verified|")) {
+                    RuntimeState state = states[accountIndex];
+                    state.dailyTaskPageLoaded = true;
+                    state.dailyTaskAcceptVerified = true;
+                    state.dailyTaskAcceptedCount = Math.max(0, state.dailyTaskCandidateCount);
                     preferences.edit().putLong(PREF_DAILY_TASK_LAST + accountIndex,
                             System.currentTimeMillis()).apply();
+                    updateState(accountIndex, "日常任务一键接受已验证");
+                    closeTaskModalAndContinue(accountIndex, view, continuation);
+                } else if (states[accountIndex].dailyRoutineMode) {
+                    failDailyRoutine(accountIndex, "daily_task_accept",
+                            "点击一键接受后页面状态未能验证");
+                } else {
+                    updateState(accountIndex, "日常任务页未及时更新，已跳过并继续副本");
+                    closeTaskModalAndContinue(accountIndex, view, continuation);
                 }
-                updateState(accountIndex, "done".equals(result)
-                        ? "日常任务一键接受已完成"
-                        : "日常任务页未及时更新，已跳过并继续副本");
-                closeTaskModalAndContinue(accountIndex, view, continuation);
             }
         });
+    }
+
+    private int parseResultCount(String result) {
+        int separator = result.lastIndexOf('|');
+        if (separator < 0) return 0;
+        try { return Integer.parseInt(result.substring(separator + 1)); }
+        catch (NumberFormatException ignored) { return 0; }
+    }
+
+    private void failDailyRoutine(int accountIndex, String step, String reason) {
+        RuntimeState state = states[accountIndex];
+        state.dailyRoutineFailureStep = step;
+        state.dailyRoutineFailureReason = reason;
+        finish(accountIndex, "daily_routine", "error", reason, state.manualRun);
     }
 
     private void closeTaskModalAndContinue(int accountIndex, WebView view, Runnable continuation) {
@@ -3346,6 +3406,7 @@ final class AutomationCoordinator {
         evaluateTask(accountIndex, view, script, encoded -> {
             String result = decodeString(encoded);
             if (result.startsWith("clicked|")) {
+                states[accountIndex].completableCompletedCount++;
                 updateState(accountIndex, "已处理可完成任务："
                         + result.substring("clicked|".length()));
                 if (attempt < maxAttempts) {
@@ -3356,6 +3417,7 @@ final class AutomationCoordinator {
                     postTask(accountIndex, continuation, 400L);
                 }
             } else if (result.startsWith("task_selected|")) {
+                states[accountIndex].completableFoundCount++;
                 updateState(accountIndex, "已选择可完成任务："
                         + result.substring("task_selected|".length()));
                 postTask(accountIndex, () -> completeAvailableTasksAfterDungeons(
@@ -3367,6 +3429,14 @@ final class AutomationCoordinator {
                 postTask(accountIndex, () -> completeAvailableTasksAfterDungeons(
                         accountIndex, view, continuation, attempt + 1,
                         maxAttempts), 800L);
+            } else if ("done".equals(result)) {
+                RuntimeState state = states[accountIndex];
+                state.completableScanVerified = true;
+                state.completableRemainingCount = 0;
+                postTask(accountIndex, continuation, 400L);
+            } else if (states[accountIndex].dailyRoutineMode) {
+                failDailyRoutine(accountIndex, "completable_task_finish",
+                        "挂机辅助页可完成任务在等待期内未能完成验证");
             } else {
                 postTask(accountIndex, continuation, 400L);
             }
@@ -4533,6 +4603,16 @@ final class AutomationCoordinator {
         boolean dungeonCompletionTasksPrepared;
         boolean dailyRoutineMode;
         String dailyRoutineRunId = "";
+        boolean dailyTaskPageLoaded;
+        boolean dailyTaskAcceptVerified;
+        int dailyTaskCandidateCount = -1;
+        int dailyTaskAcceptedCount;
+        boolean completableScanVerified;
+        int completableFoundCount;
+        int completableCompletedCount;
+        int completableRemainingCount = -1;
+        String dailyRoutineFailureStep = "";
+        String dailyRoutineFailureReason = "";
         boolean captureAutoAttackEnabled;
         boolean captureAttemptedThisBattle;
         int captureRounds;
