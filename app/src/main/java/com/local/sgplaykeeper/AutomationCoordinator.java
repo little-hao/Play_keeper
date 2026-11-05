@@ -133,6 +133,7 @@ final class AutomationCoordinator {
     private static final String PREF_DUNGEON_LAST = "automation_dungeon_last_";
     private static final String PREF_SIGN_IN_LAST = "automation_sign_in_last_";
     private static final String PREF_DAILY_TASK_LAST = "automation_daily_task_last_";
+    private static final String PREF_DAILY_ROUTINE_LAST = "automation_daily_routine_last_";
     private static final String PREF_INVENTORY_ITEMS = "automation_inventory_items_";
     private static final String PREF_INVENTORY_LAST = "automation_inventory_last_";
     private static final String PREF_INVENTORY_STATUS = "automation_inventory_status_";
@@ -612,7 +613,24 @@ final class AutomationCoordinator {
 
     void runDungeonNow(int accountIndex) {
         requireAccount(accountIndex);
+        states[accountIndex].dailyRoutineMode = false;
+        states[accountIndex].dailyRoutineRunId = "";
         runDungeonQueue(accountIndex, true, false);
+    }
+
+    void runDailyRoutineNow(int accountIndex, String runId, String itemText,
+                            String skill, String returnMap) {
+        requireAccount(accountIndex);
+        RuntimeState state = states[accountIndex];
+        if (state.busy) {
+            host.showMessage(accountName(accountIndex) + "脚本正在执行");
+            return;
+        }
+        configureDungeonSequence(accountIndex, itemText, skill, true);
+        configureReturnHang(accountIndex, returnMap);
+        state.dailyRoutineMode = true;
+        state.dailyRoutineRunId = runId == null ? "" : runId.trim();
+        runDungeonQueue(accountIndex, false, false);
     }
 
     void runAutoCaptureNow(int accountIndex) {
@@ -835,6 +853,10 @@ final class AutomationCoordinator {
                 PREF_SIGN_IN_LAST + accountIndex, 0L));
         automation.put("dailyTaskLastRunAt", preferences.getLong(
                 PREF_DAILY_TASK_LAST + accountIndex, 0L));
+        automation.put("dailyRoutineLastRunAt", preferences.getLong(
+                PREF_DAILY_ROUTINE_LAST + accountIndex, 0L));
+        automation.put("dailyRoutineRunId", state.dailyRoutineRunId);
+        automation.put("dailyRoutineMode", state.dailyRoutineMode);
         automation.put("inventoryItems", new JSONArray(parseAutomationItems(
                 inventoryItemsText(accountIndex), 20, "监控道具")));
         automation.put("inventoryLastRunAt", preferences.getLong(
@@ -2769,6 +2791,8 @@ final class AutomationCoordinator {
 
     private void returnToAfkForDungeons(int accountIndex, WebView view, boolean manual) {
         updateState(accountIndex, "正在返回挂机辅助并准备副本队列");
+        states[accountIndex].dailyRoutineMode = false;
+        states[accountIndex].dailyRoutineRunId = "";
         host.prepareAutomation(accountIndex, false);
         host.openAfk(accountIndex);
         if (isToday(preferences.getLong(PREF_DUNGEON_LAST + accountIndex, 0L))) {
@@ -2811,6 +2835,28 @@ final class AutomationCoordinator {
             String skipped = state.skippedDungeons.isEmpty() ? ""
                     : "；未解锁已跳过：" + String.join("、", state.skippedDungeons);
             String completedMessage = "副本队列已完成" + skipped;
+            if (state.dailyRoutineMode) {
+                if (isDungeonTaskCompletionEnabled(accountIndex)
+                        && !state.dungeonCompletionTasksPrepared) {
+                    updateState(accountIndex, completedMessage
+                            + "，正在挂机辅助页完成可完成任务");
+                    host.prepareAutomation(accountIndex, false);
+                    host.openAfk(accountIndex);
+                    postTask(accountIndex, () -> completeAvailableTasksAfterDungeons(
+                            accountIndex, view, () -> {
+                                state.dungeonCompletionTasksPrepared = true;
+                                preferences.edit().putLong(PREF_DUNGEON_LAST + accountIndex,
+                                        System.currentTimeMillis()).apply();
+                                restoreAfkAndRunTemple(accountIndex, manual,
+                                        completedMessage + "；挂机辅助可完成任务已处理");
+                            }, 0, 75), 2_000L);
+                    return;
+                }
+                preferences.edit().putLong(PREF_DUNGEON_LAST + accountIndex,
+                        System.currentTimeMillis()).apply();
+                restoreAfkAndRunTemple(accountIndex, manual, completedMessage);
+                return;
+            }
             if (isDungeonTaskCompletionEnabled(accountIndex)
                     && !state.dungeonCompletionTasksPrepared) {
                 updateState(accountIndex, completedMessage + "，正在完成可领取任务");
@@ -2823,7 +2869,7 @@ final class AutomationCoordinator {
                                     System.currentTimeMillis()).apply();
                             startFinalEquipmentAndInventory(accountIndex, manual,
                                     completedMessage + "；可完成任务已处理");
-                        }, 0), 2_000L);
+                        }, 0, 15), 2_000L);
                 return;
             }
             preferences.edit().putLong(PREF_DUNGEON_LAST + accountIndex,
@@ -3274,10 +3320,11 @@ final class AutomationCoordinator {
     }
 
     private void completeAvailableTasksAfterDungeons(int accountIndex, WebView view,
-                                                      Runnable continuation, int attempt) {
+                                                      Runnable continuation, int attempt,
+                                                      int maxAttempts) {
         String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
                 + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'').trim();"
-                + "const content=document.querySelector('.task-content');"
+                + "const content=document.querySelector('.task-modal,.task-content');"
                 + "if(!content||!visible(content)){const entry=Array.from(document.querySelectorAll('[name=\"任务\"],button,uni-button,[role=button]'))"
                 + ".filter(visible).find(e=>(e.getAttribute('name')||'')==='任务'||clean(e)==='任务');"
                 + "if(!entry)return 'missing';entry.click();return 'opened';}"
@@ -3285,24 +3332,26 @@ final class AutomationCoordinator {
                 + "const action=actions.find(e=>/^(完成|领取|领取奖励|提交)$/.test(clean(e))&&!e.disabled);"
                 + "if(action&&window.__pkAcceptedTaskSelection){const label=clean(action);"
                 + "window.__pkAcceptedTaskSelection='';action.click();return 'clicked|'+label;}"
+                + "const acceptedTab=Array.from(content.querySelectorAll('.task-tab')).find(e=>clean(e).startsWith('已接受的任务'));"
+                + "if(acceptedTab&&!acceptedTab.classList.contains('active')){acceptedTab.click();return 'loading';}"
                 + "const accepted=Array.from(content.querySelectorAll('.task-section')).find(e=>"
-                + "clean(e.querySelector('.task-section-title'))==='已接受的任务');"
-                + "if(!accepted)return 'loading';"
-                + "const completed=Array.from(accepted.querySelectorAll('.task-item')).find(e=>{"
+                + "clean(e.querySelector('.task-section-title'))==='已接受的任务')||content;"
+                + "const completed=Array.from(accepted.querySelectorAll('.task-item.ok,.task-item')).find(e=>{"
                 + "const icon=e.querySelector('img');const src=icon?.getAttribute('src')||'';"
-                + "return /task_ico_ok(?:\\.|_)/.test(src)||!!e.querySelector('.ok');});"
+                + "return e.classList.contains('ok')||/task_ico_ok(?:\\.|_)/.test(src)||!!e.querySelector('.dot.ok,.ok');});"
                 + "if(completed){const name=clean(completed);window.__pkAcceptedTaskSelection=name;"
                 + "completed.scrollIntoView({block:'center'});completed.click();return 'task_selected|'+name;}"
-                + "const close=content.querySelector('.close-btn,[class*=close],[aria-label*=关闭]')"
+                + "const close=content.querySelector('.task-close,.close-btn,[class*=close],[aria-label*=关闭]')"
                 + "||document.querySelector('.close-btn');if(close)close.click();return 'done';})()";
         evaluateTask(accountIndex, view, script, encoded -> {
             String result = decodeString(encoded);
             if (result.startsWith("clicked|")) {
                 updateState(accountIndex, "已处理可完成任务："
                         + result.substring("clicked|".length()));
-                if (attempt < 30) {
+                if (attempt < maxAttempts) {
                     postTask(accountIndex, () -> completeAvailableTasksAfterDungeons(
-                            accountIndex, view, continuation, attempt + 1), 900L);
+                            accountIndex, view, continuation, attempt + 1,
+                            maxAttempts), 1_500L);
                 } else {
                     postTask(accountIndex, continuation, 400L);
                 }
@@ -3310,12 +3359,14 @@ final class AutomationCoordinator {
                 updateState(accountIndex, "已选择可完成任务："
                         + result.substring("task_selected|".length()));
                 postTask(accountIndex, () -> completeAvailableTasksAfterDungeons(
-                        accountIndex, view, continuation, attempt + 1), 600L);
+                        accountIndex, view, continuation, attempt + 1,
+                        maxAttempts), 900L);
             } else if (("opened".equals(result) || "missing".equals(result)
                     || "loading".equals(result))
-                    && attempt < 15) {
+                    && attempt < maxAttempts) {
                 postTask(accountIndex, () -> completeAvailableTasksAfterDungeons(
-                        accountIndex, view, continuation, attempt + 1), 800L);
+                        accountIndex, view, continuation, attempt + 1,
+                        maxAttempts), 800L);
             } else {
                 postTask(accountIndex, continuation, 400L);
             }
@@ -3488,9 +3539,10 @@ final class AutomationCoordinator {
             }
             state.epoch.advance();
             state.busy = true;
-            state.task = "dungeon_queue";
+            state.task = state.dailyRoutineMode ? "daily_routine" : "dungeon_queue";
             state.status = "running";
-            state.lastMessage = "正在进入指定副本组合";
+            state.lastMessage = state.dailyRoutineMode
+                    ? "正在挂机辅助页执行每日任务" : "正在进入指定副本组合";
             state.startedAt = System.currentTimeMillis();
             state.updatedAt = state.startedAt;
             state.manualRun = manual;
@@ -3512,7 +3564,7 @@ final class AutomationCoordinator {
         try {
             view = host.requireWebView(accountIndex);
         } catch (RuntimeException error) {
-            finish(accountIndex, "dungeon_queue", "error", "账号页面未就绪", manual);
+            finish(accountIndex, state.task, "error", "账号页面未就绪", manual);
             return;
         }
         String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
@@ -3536,7 +3588,7 @@ final class AutomationCoordinator {
                 postTask(accountIndex, () -> runDungeonQueue(
                         accountIndex, manual, true), 4_000L);
             } else {
-                finish(accountIndex, "dungeon_queue", "error",
+                finish(accountIndex, state.task, "error",
                         "未找到挂机辅助副本控件", manual);
             }
         });
@@ -4267,6 +4319,16 @@ final class AutomationCoordinator {
     private void finish(int accountIndex, String task, String status,
                         String message, boolean manual) {
         RuntimeState state = states[accountIndex];
+        boolean dailyRoutine = state.dailyRoutineMode;
+        if (dailyRoutine && ("daily_routine".equals(task)
+                || "dungeon_queue".equals(task) || "temple".equals(task))) {
+            task = "daily_routine";
+            if ("ok".equals(status)) {
+                preferences.edit().putLong(PREF_DAILY_ROUTINE_LAST + accountIndex,
+                        System.currentTimeMillis()).apply();
+            }
+            state.dailyRoutineMode = false;
+        }
         state.epoch.advance();
         state.busy = false;
         state.equipmentVerificationToken = "";
@@ -4469,6 +4531,8 @@ final class AutomationCoordinator {
         boolean dungeonDailySignInPrepared;
         boolean dungeonDailyTasksPrepared;
         boolean dungeonCompletionTasksPrepared;
+        boolean dailyRoutineMode;
+        String dailyRoutineRunId = "";
         boolean captureAutoAttackEnabled;
         boolean captureAttemptedThisBattle;
         int captureRounds;

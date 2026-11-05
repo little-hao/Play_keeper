@@ -1371,6 +1371,37 @@ public final class MainActivity extends Activity {
                     resultMessage = "已启动副本组合";
                     break;
                 }
+                case "run_daily_routine": {
+                    int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
+                    String runId = parameters.optString("runId", "").trim();
+                    if (!runId.matches("[A-Za-z0-9._:-]{1,120}")) {
+                        throw new IllegalArgumentException("每日任务批次编号无效");
+                    }
+                    JSONArray itemArray = parameters.optJSONArray("items");
+                    if (itemArray == null || itemArray.length() < 1 || itemArray.length() > 20) {
+                        throw new IllegalArgumentException("每日任务副本列表无效");
+                    }
+                    StringBuilder itemText = new StringBuilder();
+                    for (int i = 0; i < itemArray.length(); i++) {
+                        String item = itemArray.optString(i, "").trim();
+                        if (item.isEmpty() || item.length() > 30) {
+                            throw new IllegalArgumentException("每日任务副本名称无效");
+                        }
+                        if (i > 0) itemText.append(',');
+                        itemText.append(item);
+                    }
+                    String returnMap = parameters.optString("returnMap", "圣诞小屋").trim();
+                    if (returnMap.isEmpty() || returnMap.length() > 30) {
+                        throw new IllegalArgumentException("完成后挂机副本无效");
+                    }
+                    automationCoordinator.runDailyRoutineNow(index, runId,
+                            itemText.toString(), parameters.optString("skill", "auto"),
+                            returnMap);
+                    success = true;
+                    resultMessage = "已启动账号每日任务，完成后返回" + returnMap + "挂机";
+                    break;
+                }
                 case "configure_adventure": {
                     int index = requiredAccountIndex(parameters);
                     automationCoordinator.configureAdventure(index,

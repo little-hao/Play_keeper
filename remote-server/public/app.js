@@ -123,6 +123,7 @@ let reconnectTimer;
 let connectionGeneration = 0;
 let pendingSelect;
 let dailyPlan = { status: "idle", legIndex: -1, phase: "idle", history: [] };
+let accountDaily = { status: "idle", accounts: [], auctionDecision: "pending" };
 let planSchedule = { enabled: false, time: "04:00", options: {} };
 let signedInUser = null;
 let userSettings = { accountLabels: [], mainAccount: "", quickAuctionAccount: "",
@@ -486,6 +487,7 @@ function resetUserWorkspace() {
     quickBuyPrice: 920, quickHangAccount: "", quickHangMap: "圣兽云殿",
     auctionBuyer: "", equipmentBuyer: "" };
   dailyPlan = { status: "idle", legIndex: -1, phase: "idle", history: [] };
+  accountDaily = { status: "idle", accounts: [], auctionDecision: "pending" };
   planSchedule = { enabled: false, time: "04:00", options: {} };
   adminSnapshot = { users: [], deviceOwners: {} };
   singleTransfer = { status: "idle" };
@@ -496,6 +498,7 @@ function resetUserWorkspace() {
   document.querySelector("#settingsSaveState").textContent = "设置按当前登录用户保存";
   showFeedback("请选择任务。设备接受指令后，仍需等待实际执行结果。");
   renderDailyPlan();
+  renderAccountDailyRoutine();
   renderQuickAccountControls();
   renderSessionOverview();
 }
@@ -521,15 +524,18 @@ function handleMessage(message) {
       userSettings = message.payload ?? userSettings;
       applyUserSettings();
       renderQuickAccountControls();
+      renderAccountDailyConfig();
       break;
     case "devices.snapshot":
       devices.clear();
       for (const device of message.devices ?? []) devices.set(device.deviceId, device);
       renderDevices();
+      renderAccountDailyConfig();
       break;
     case "device.online":
       devices.set(message.device.deviceId, message.device);
       renderDevices();
+      renderAccountDailyConfig();
       addLog(`${message.device.deviceId} 已上线`);
       break;
     case "device.offline":
@@ -592,6 +598,14 @@ function handleMessage(message) {
       pendingPlanSave = false;
       document.querySelector("#settingsSaveState").textContent = "操作未完成，请检查提示；修改仍保留在页面";
       addLog(`每日计划操作失败：${message.message}`);
+      break;
+    case "daily.routine.update":
+      accountDaily = message.payload || accountDaily;
+      renderAccountDailyRoutine();
+      break;
+    case "daily.routine.error":
+      addLog(`各账号每日任务失败：${message.message}`);
+      showFeedback(message.message || "各账号每日任务未启动", "error");
       break;
     case "equipment.transfer.update":
       singleTransfer = message.payload || { status: "idle" };
@@ -756,6 +770,10 @@ function activeDeviceScript() {
 }
 
 function activeScriptSummary() {
+  if (["running", "awaiting_auction"].includes(accountDaily.status)) {
+    return { label: `各账号每日任务 · ${accountDaily.message || "运行中"}`,
+      startedAt: Number(accountDaily.startedAt) || 0, running: true };
+  }
   const planActive = ["running", "reconnecting", "intervention"].includes(dailyPlan.status);
   if (planActive) {
     const labels = { running: "运行中", reconnecting: "等待设备重连",
@@ -790,6 +808,89 @@ function renderSessionOverview() {
   elements.sessionRuntime.textContent = script.startedAt
     ? formatDuration(end - script.startedAt) : "00:00:00";
 }
+
+function renderAccountDailyConfig() {
+  const accountBox = document.querySelector("#accountDailyAccounts");
+  const mapBox = document.querySelector("#accountDailyReturnMaps");
+  if (!accountBox || !mapBox) return;
+  const checked = new Set([...accountBox.querySelectorAll("input:checked")].map((input) => input.value));
+  const maps = Object.fromEntries([...mapBox.querySelectorAll("input[data-account-label]")]
+    .map((input) => [input.dataset.accountLabel, input.value]));
+  const labels = configuredAccountLabels();
+  accountBox.replaceChildren(); mapBox.replaceChildren();
+  for (const label of labels) {
+    const choice = document.createElement("label"); choice.className = "toggle-row";
+    const checkbox = document.createElement("input"); checkbox.type = "checkbox";
+    checkbox.value = label; checkbox.checked = checked.size ? checked.has(label) : true;
+    choice.append(checkbox, document.createTextNode(label)); accountBox.append(choice);
+    const mapLabel = document.createElement("label"); mapLabel.textContent = label;
+    const input = document.createElement("input"); input.dataset.accountLabel = label;
+    input.maxLength = 30; input.placeholder = "使用默认值"; input.value = maps[label] || "";
+    mapLabel.append(input); mapBox.append(mapLabel);
+  }
+}
+
+function readAccountDailyOptions() {
+  const accountLabels = [...document.querySelectorAll("#accountDailyAccounts input:checked")]
+    .map((input) => input.value);
+  const dungeonItems = document.querySelector("#accountDailyDungeons").value
+    .split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
+  const returnMap = document.querySelector("#accountDailyReturnMap").value.trim() || "圣诞小屋";
+  if (!accountLabels.length) { addLog("请至少选择一个每日任务账号"); return null; }
+  if (!dungeonItems.length || dungeonItems.length > 20) { addLog("指定副本需为1–20项"); return null; }
+  const returnMaps = {};
+  for (const input of document.querySelectorAll("#accountDailyReturnMaps input[data-account-label]")) {
+    if (accountLabels.includes(input.dataset.accountLabel)) {
+      returnMaps[input.dataset.accountLabel] = input.value.trim() || returnMap;
+    }
+  }
+  const resourceItems = document.querySelector("#accountDailyResourceItems").value
+    .split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
+  return { accountLabels, dungeonItems, returnMap, returnMaps,
+    skill: document.querySelector("#accountDailySkill").value.trim() || "auto",
+    resourceItems, resourcePrice: Number(document.querySelector("#accountDailyResourcePrice").value || 920),
+    resourceReserveCount: Number(document.querySelector("#accountDailyResourceReserve").value) };
+}
+
+function renderAccountDailyRoutine() {
+  const status = document.querySelector("#accountDailyStatus");
+  const progress = document.querySelector("#accountDailyProgress");
+  const decision = document.querySelector("#accountDailyAuction");
+  if (!status || !progress) return;
+  const labels = { idle: "未运行", running: "运行中", awaiting_auction: "拍卖移交中",
+    success: "已完成", error: "有错误", cancelled: "已中断" };
+  status.textContent = labels[accountDaily.status] || accountDaily.status;
+  status.className = `state ${["running", "awaiting_auction"].includes(accountDaily.status) ? "online" : "offline"}`;
+  progress.replaceChildren();
+  for (const account of accountDaily.accounts || []) {
+    const row = document.createElement("div"); row.className = `routine-account ${account.status || "queued"}`;
+    const strong = document.createElement("strong"); strong.textContent = account.accountLabel || "账号";
+    const text = document.createElement("span"); text.textContent = `${account.status || "queued"} · ${account.message || ""}`;
+    row.append(strong, text); progress.append(row);
+  }
+  const pending = ["running", "awaiting_auction"].includes(accountDaily.status)
+    && accountDaily.auctionDecision === "pending";
+  decision?.classList.toggle("hidden", !pending);
+  const remain = Math.max(0, Math.ceil((Number(accountDaily.auctionDecisionDeadlineAt) - Date.now()) / 1000));
+  const countdown = document.querySelector("#accountDailyCountdown");
+  if (countdown) countdown.textContent = `${remain} 秒后默认不拍卖`;
+  document.querySelector("#startAccountDaily").disabled = ["running", "awaiting_auction"].includes(accountDaily.status);
+  document.querySelector("#cancelAccountDaily").disabled = !["running", "awaiting_auction"].includes(accountDaily.status);
+}
+
+document.querySelector("#startAccountDaily").addEventListener("click", () => {
+  if (socket?.readyState !== WebSocket.OPEN) return addLog("控制台尚未连接");
+  const options = readAccountDailyOptions(); if (!options) return;
+  socket.send(JSON.stringify({ type: "daily.routine.start", options }));
+  showFeedback("各账号每日任务已提交；30秒内可选择是否拍卖", "pending");
+});
+document.querySelector("#cancelAccountDaily").addEventListener("click", () =>
+  socket?.send(JSON.stringify({ type: "daily.routine.cancel" })));
+document.querySelector("#accountDailyAuctionYes").addEventListener("click", () =>
+  socket?.send(JSON.stringify({ type: "daily.routine.auction", enabled: true })));
+document.querySelector("#accountDailyAuctionNo").addEventListener("click", () =>
+  socket?.send(JSON.stringify({ type: "daily.routine.auction", enabled: false })));
+setInterval(renderAccountDailyRoutine, 1_000);
 
 function readPlanOptions() {
   const resourceItems = (elements.planResourceItems.value.trim() || defaultResourceItems).split(/[,，\n]/)
