@@ -3382,27 +3382,36 @@ final class AutomationCoordinator {
     private void completeAvailableTasksAfterDungeons(int accountIndex, WebView view,
                                                       Runnable continuation, int attempt,
                                                       int maxAttempts) {
-        String script = "(function(){const visible=e=>e&&e.getClientRects().length>0;"
+        String script = "(function(){const visible=e=>{if(!e||e.getClientRects().length===0)return false;"
+                + "const r=e.getBoundingClientRect();return r.width>0&&r.height>0};"
                 + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'').trim();"
-                + "const content=document.querySelector('.task-modal,.task-content');"
-                + "if(!content||!visible(content)){const entry=Array.from(document.querySelectorAll('[name=\"任务\"],button,uni-button,[role=button]'))"
-                + ".filter(visible).find(e=>(e.getAttribute('name')||'')==='任务'||clean(e)==='任务');"
-                + "if(!entry)return 'missing';entry.click();return 'opened';}"
-                + "const actions=Array.from(content.querySelectorAll('button,uni-button,[role=button],view,uni-view,div,span')).filter(visible);"
-                + "const action=actions.find(e=>/^(完成|领取|领取奖励|提交)$/.test(clean(e))&&!e.disabled);"
+                + "const all=s=>Array.from(document.querySelectorAll(s)).filter(visible);"
+                + "const dialogs=all('.task-modal,.task-content,[role=dialog],.uni-popup__wrapper');"
+                + "const content=dialogs.find(e=>/(任务列表|已接受的任务|可完成任务)/.test(clean(e)))||dialogs[dialogs.length-1];"
+                + "if(!content){const entry=all('[name=\"任务\"],button,uni-button,[role=button],view,uni-view')"
+                + ".find(e=>(e.getAttribute('name')||'')==='任务'||clean(e)==='任务');"
+                + "if(!entry)return 'retry|missing_entry';entry.click();return 'retry|opened';}"
+                + "const confirm=all('button,uni-button,[role=button],view,uni-view,div,span')"
+                + ".find(e=>/^(确定|确认)$/.test(clean(e))&&!e.disabled);"
+                + "if(confirm&&window.__pkTaskActionPending){window.__pkTaskActionPending='';confirm.click();return 'retry|confirmed';}"
+                + "const action=all('button,uni-button,[role=button],view,uni-view,div,span')"
+                + ".find(e=>/^(完成|领取|领取奖励|提交)$/.test(clean(e))&&!e.disabled);"
                 + "if(action&&window.__pkAcceptedTaskSelection){const label=clean(action);"
-                + "window.__pkAcceptedTaskSelection='';action.click();return 'clicked|'+label;}"
-                + "const acceptedTab=Array.from(content.querySelectorAll('.task-tab')).find(e=>clean(e).startsWith('已接受的任务'));"
-                + "if(acceptedTab&&!acceptedTab.classList.contains('active')){acceptedTab.click();return 'loading';}"
-                + "const accepted=Array.from(content.querySelectorAll('.task-section')).find(e=>"
-                + "clean(e.querySelector('.task-section-title'))==='已接受的任务')||content;"
-                + "const completed=Array.from(accepted.querySelectorAll('.task-item.ok,.task-item')).find(e=>{"
-                + "const icon=e.querySelector('img');const src=icon?.getAttribute('src')||'';"
-                + "return e.classList.contains('ok')||/task_ico_ok(?:\\.|_)/.test(src)||!!e.querySelector('.dot.ok,.ok');});"
+                + "window.__pkAcceptedTaskSelection='';window.__pkTaskActionPending=label;action.click();return 'clicked|'+label;}"
+                + "const acceptedTab=all('.task-tab,[role=tab],.uni-tab-item,view,uni-view,button,uni-button')"
+                + ".find(e=>clean(e).startsWith('已接受的任务'));"
+                + "if(acceptedTab&&!acceptedTab.classList.contains('active')&&acceptedTab.getAttribute('aria-selected')!=='true')"
+                + "{acceptedTab.click();return 'retry|accepted_tab';}"
+                + "const sections=Array.from(content.querySelectorAll('.task-section,[class*=task-list],[class*=taskList]')).filter(visible);"
+                + "const accepted=sections.find(e=>clean(e).includes('已接受的任务'))||content;"
+                + "const tasks=Array.from(accepted.querySelectorAll('.task-item,[class*=task-item],[class*=taskItem],li')).filter(visible);"
+                + "const completed=tasks.find(e=>{const src=Array.from(e.querySelectorAll('img')).map(i=>i.getAttribute('src')||'').join(' ');"
+                + "return e.classList.contains('ok')||/task_ico_ok(?:\\.|_)/.test(src)||!!e.querySelector('.dot.ok,.ok,[class*=complete]');});"
                 + "if(completed){const name=clean(completed);window.__pkAcceptedTaskSelection=name;"
                 + "completed.scrollIntoView({block:'center'});completed.click();return 'task_selected|'+name;}"
-                + "const close=content.querySelector('.task-close,.close-btn,[class*=close],[aria-label*=关闭]')"
-                + "||document.querySelector('.close-btn');if(close)close.click();return 'done';})()";
+                + "if(acceptedTab||clean(content).includes('已接受的任务')){"
+                + "const close=Array.from(content.querySelectorAll('.task-close,.close-btn,[class*=close],[aria-label*=关闭]')).find(visible);"
+                + "if(close)close.click();return 'done';}return 'retry|missing_accepted_list';})()";
         evaluateTask(accountIndex, view, script, encoded -> {
             String result = decodeString(encoded);
             if (result.startsWith("clicked|")) {
@@ -3423,9 +3432,9 @@ final class AutomationCoordinator {
                 postTask(accountIndex, () -> completeAvailableTasksAfterDungeons(
                         accountIndex, view, continuation, attempt + 1,
                         maxAttempts), 900L);
-            } else if (("opened".equals(result) || "missing".equals(result)
-                    || "loading".equals(result))
-                    && attempt < maxAttempts) {
+            } else if (result.startsWith("retry|") && attempt < maxAttempts) {
+                updateState(accountIndex, "正在等待可完成任务页面："
+                        + result.substring("retry|".length()));
                 postTask(accountIndex, () -> completeAvailableTasksAfterDungeons(
                         accountIndex, view, continuation, attempt + 1,
                         maxAttempts), 800L);
@@ -3436,7 +3445,7 @@ final class AutomationCoordinator {
                 postTask(accountIndex, continuation, 400L);
             } else if (states[accountIndex].dailyRoutineMode) {
                 failDailyRoutine(accountIndex, "completable_task_finish",
-                        "挂机辅助页可完成任务在等待期内未能完成验证");
+                        "挂机辅助页可完成任务在等待期内未能完成验证：" + result);
             } else {
                 postTask(accountIndex, continuation, 400L);
             }
@@ -4466,8 +4475,8 @@ final class AutomationCoordinator {
                     throw new IllegalArgumentException("装备名称不能超过30个字符");
                 }
                 unique.add(safe);
-                if (unique.size() > 10) {
-                    throw new IllegalArgumentException("装备转移最多10件，将自动分两批处理");
+                if (unique.size() > 12) {
+                    throw new IllegalArgumentException("装备转移最多12件（10装备槽+2卡片槽），将每5件自动分批处理");
                 }
             }
         }
