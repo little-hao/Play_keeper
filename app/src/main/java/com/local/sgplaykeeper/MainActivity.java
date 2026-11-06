@@ -1533,6 +1533,14 @@ public final class MainActivity extends Activity {
                     resultMessage = "已启动一键接受日常任务";
                     break;
                 }
+                case "run_completed_tasks": {
+                    int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
+                    automationCoordinator.runCompletedTasksNow(index);
+                    success = true;
+                    resultMessage = "已启动完成任务奖励领取";
+                    break;
+                }
                 case "run_seller_cleanup": {
                     int index = requiredAccountIndex(parameters);
                     automationCoordinator.runSellerCleanupNow(index);

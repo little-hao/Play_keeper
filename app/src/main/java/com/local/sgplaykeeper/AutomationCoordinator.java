@@ -634,10 +634,12 @@ final class AutomationCoordinator {
         state.dailyTaskAcceptVerified = false;
         state.dailyTaskCandidateCount = -1;
         state.dailyTaskAcceptedCount = 0;
+        state.dailyTaskAcceptTimedOut = false;
         state.completableScanVerified = false;
         state.completableFoundCount = 0;
         state.completableCompletedCount = 0;
         state.completableRemainingCount = -1;
+        state.completableTimedOut = false;
         state.dailyRoutineFailureStep = "";
         state.dailyRoutineFailureReason = "";
         runDungeonQueue(accountIndex, false, false);
@@ -721,6 +723,7 @@ final class AutomationCoordinator {
         state.startedAt = System.currentTimeMillis();
         state.updatedAt = state.startedAt;
         state.manualRun = true;
+        state.dailyTaskAcceptTimedOut = false;
         host.onAutomationChanged();
         WebView view;
         try {
@@ -734,6 +737,44 @@ final class AutomationCoordinator {
         postTask(accountIndex, () -> acceptDailyTasksBeforeDungeons(accountIndex, view,
                 () -> finish(accountIndex, "daily_tasks", "ok",
                         "日常任务一键接受已完成", true), 0), 4_000L);
+    }
+
+    void runCompletedTasksNow(int accountIndex) {
+        requireAccount(accountIndex);
+        RuntimeState state = states[accountIndex];
+        if (state.busy) {
+            host.showMessage(accountName(accountIndex) + "脚本正在执行");
+            return;
+        }
+        state.epoch.advance();
+        state.busy = true;
+        state.task = "completed_tasks";
+        state.status = "running";
+        state.lastMessage = "正在打开任务页并识别绿色圆点";
+        state.startedAt = System.currentTimeMillis();
+        state.updatedAt = state.startedAt;
+        state.manualRun = true;
+        state.completableScanVerified = false;
+        state.completableFoundCount = 0;
+        state.completableCompletedCount = 0;
+        state.completableRemainingCount = -1;
+        state.completableTimedOut = false;
+        host.onAutomationChanged();
+        WebView view;
+        try {
+            view = host.requireWebView(accountIndex);
+        } catch (RuntimeException error) {
+            finish(accountIndex, state.task, "error", "账号页面未就绪", true);
+            return;
+        }
+        host.prepareAutomation(accountIndex, false);
+        host.openAfk(accountIndex);
+        postTask(accountIndex, () -> completeAvailableTasksAfterDungeons(accountIndex, view,
+                () -> finish(accountIndex, "completed_tasks", "ok",
+                        state.completableTimedOut
+                                ? "30秒内未完成识别，已跳过并保留警告"
+                                : "完成任务奖励领取已结束", true),
+                0, 30), 3_000L);
     }
 
     void runPrestigeNow(int accountIndex) {
@@ -871,10 +912,12 @@ final class AutomationCoordinator {
         automation.put("dailyTaskAcceptVerified", state.dailyTaskAcceptVerified);
         automation.put("dailyTaskCandidateCount", state.dailyTaskCandidateCount);
         automation.put("dailyTaskAcceptedCount", state.dailyTaskAcceptedCount);
+        automation.put("dailyTaskAcceptTimedOut", state.dailyTaskAcceptTimedOut);
         automation.put("completableScanVerified", state.completableScanVerified);
         automation.put("completableFoundCount", state.completableFoundCount);
         automation.put("completableCompletedCount", state.completableCompletedCount);
         automation.put("completableRemainingCount", state.completableRemainingCount);
+        automation.put("completableTimedOut", state.completableTimedOut);
         automation.put("dailyRoutineFailureStep", state.dailyRoutineFailureStep);
         automation.put("dailyRoutineFailureReason", state.dailyRoutineFailureReason);
         automation.put("inventoryItems", new JSONArray(parseAutomationItems(
@@ -2869,7 +2912,7 @@ final class AutomationCoordinator {
                                         System.currentTimeMillis()).apply();
                                 restoreAfkAndRunTemple(accountIndex, manual,
                                         completedMessage + "；挂机辅助可完成任务已处理");
-                            }, 0, 75), 2_000L);
+                            }, 0, 30), 2_000L);
                     return;
                 }
                 preferences.edit().putLong(PREF_DUNGEON_LAST + accountIndex,
@@ -3088,8 +3131,9 @@ final class AutomationCoordinator {
                 + "const clean=e=>(e?.textContent||'').replace(/\\s+/g,'').trim();"
                 + "const modal=Array.from(document.querySelectorAll('.task-modal,[role=dialog],.uni-popup__wrapper'))"
                 + ".find(e=>visible(e)&&clean(e).includes('任务列表'));"
-                + "if(!modal){const task=Array.from(document.querySelectorAll('button,[role=button],uni-button,view,a'))"
-                + ".filter(visible).find(e=>clean(e)==='📋任务'||clean(e)==='任务');"
+                + "if(!modal){const task=Array.from(document.querySelectorAll('[name=\"任务\"],button,[role=button],uni-button,view,uni-view,a,div,span'))"
+                + ".filter(visible).filter(e=>/^(?:📋)?任务$/.test(clean(e))||(e.getAttribute('name')||'')==='任务')"
+                + ".sort((a,b)=>a.getBoundingClientRect().width*a.getBoundingClientRect().height-b.getBoundingClientRect().width*b.getBoundingClientRect().height)[0];"
                 + "if(!task)return 'missing';task.click();return 'opened';}"
                 + "const daily=Array.from(modal.querySelectorAll('button,[role=tab],view,div,span'))"
                 + ".filter(visible).find(e=>clean(e).startsWith('日常任务'));"
@@ -3119,17 +3163,16 @@ final class AutomationCoordinator {
                         System.currentTimeMillis()).apply();
                 closeTaskModalAndContinue(accountIndex, view, continuation);
             } else if (("opened".equals(result) || "daily_clicked".equals(result)
-                    || "missing".equals(result) || "loading".equals(result)) && attempt < 20) {
+                    || "missing".equals(result) || "loading".equals(result)) && attempt < 12) {
                 postTask(accountIndex, () -> acceptDailyTasksBeforeDungeons(
                         accountIndex, view, continuation, attempt + 1), 2_000L);
             } else {
-                if (states[accountIndex].dailyRoutineMode) {
-                    failDailyRoutine(accountIndex, "daily_task_accept",
-                            "日常任务页面或一键接受按钮在等待期内未能验证");
-                } else {
-                    updateState(accountIndex, "未找到可接受的日常任务，已继续副本流程");
-                    postTask(accountIndex, continuation, 400L);
-                }
+                RuntimeState state = states[accountIndex];
+                state.dailyTaskAcceptTimedOut = true;
+                state.dailyRoutineFailureStep = "daily_task_accept_timeout";
+                state.dailyRoutineFailureReason = "一键接受日常任务30秒超时，已跳过并继续后续阶段";
+                updateState(accountIndex, state.dailyRoutineFailureReason);
+                closeTaskModalAndContinue(accountIndex, view, continuation);
             }
         });
     }
@@ -3158,7 +3201,7 @@ final class AutomationCoordinator {
                 postTask(accountIndex, () -> verifyDailyTasksAccepted(
                         accountIndex, view, continuation, attempt + 1), 2_000L);
             } else if (("daily_clicked".equals(result) || "missing".equals(result)
-                    || "loading".equals(result)) && attempt < 20) {
+                    || "loading".equals(result)) && attempt < 12) {
                 postTask(accountIndex, () -> verifyDailyTasksAccepted(
                         accountIndex, view, continuation, attempt + 1), 2_000L);
             } else {
@@ -3171,11 +3214,12 @@ final class AutomationCoordinator {
                             System.currentTimeMillis()).apply();
                     updateState(accountIndex, "日常任务一键接受已验证");
                     closeTaskModalAndContinue(accountIndex, view, continuation);
-                } else if (states[accountIndex].dailyRoutineMode) {
-                    failDailyRoutine(accountIndex, "daily_task_accept",
-                            "点击一键接受后页面状态未能验证");
                 } else {
-                    updateState(accountIndex, "日常任务页未及时更新，已跳过并继续副本");
+                    RuntimeState state = states[accountIndex];
+                    state.dailyTaskAcceptTimedOut = true;
+                    state.dailyRoutineFailureStep = "daily_task_accept_timeout";
+                    state.dailyRoutineFailureReason = "一键接受日常任务30秒超时，已跳过并继续后续阶段";
+                    updateState(accountIndex, state.dailyRoutineFailureReason);
                     closeTaskModalAndContinue(accountIndex, view, continuation);
                 }
             }
@@ -3388,9 +3432,10 @@ final class AutomationCoordinator {
                 + "const all=s=>Array.from(document.querySelectorAll(s)).filter(visible);"
                 + "const dialogs=all('.task-modal,.task-content,[role=dialog],.uni-popup__wrapper');"
                 + "const content=dialogs.find(e=>/(任务列表|已接受的任务|可完成任务)/.test(clean(e)))||dialogs[dialogs.length-1];"
-                + "if(!content){const entry=all('[name=\"任务\"],button,uni-button,[role=button],view,uni-view')"
-                + ".find(e=>(e.getAttribute('name')||'')==='任务'||clean(e)==='任务');"
-                + "if(!entry)return 'retry|missing_entry';entry.click();return 'retry|opened';}"
+                + "if(!content){const entry=all('[name=\"任务\"],button,uni-button,[role=button],view,uni-view,a,div,span')"
+                + ".filter(e=>(e.getAttribute('name')||'')==='任务'||/^(?:📋)?任务$/.test(clean(e)))"
+                + ".sort((a,b)=>a.getBoundingClientRect().width*a.getBoundingClientRect().height-b.getBoundingClientRect().width*b.getBoundingClientRect().height)[0];"
+                + "if(!entry)return 'retry|missing_entry';window.__pkAcceptedTabOpened=false;entry.click();return 'retry|opened';}"
                 + "const confirm=all('button,uni-button,[role=button],view,uni-view,div,span')"
                 + ".find(e=>/^(确定|确认)$/.test(clean(e))&&!e.disabled);"
                 + "if(confirm&&window.__pkTaskActionPending){window.__pkTaskActionPending='';confirm.click();return 'retry|confirmed';}"
@@ -3400,13 +3445,17 @@ final class AutomationCoordinator {
                 + "window.__pkAcceptedTaskSelection='';window.__pkTaskActionPending=label;action.click();return 'clicked|'+label;}"
                 + "const acceptedTab=all('.task-tab,[role=tab],.uni-tab-item,view,uni-view,button,uni-button')"
                 + ".find(e=>clean(e).startsWith('已接受的任务'));"
-                + "if(acceptedTab&&!acceptedTab.classList.contains('active')&&acceptedTab.getAttribute('aria-selected')!=='true')"
-                + "{acceptedTab.click();return 'retry|accepted_tab';}"
+                + "if(acceptedTab&&!window.__pkAcceptedTabOpened){window.__pkAcceptedTabOpened=true;acceptedTab.click();return 'retry|accepted_tab';}"
                 + "const sections=Array.from(content.querySelectorAll('.task-section,[class*=task-list],[class*=taskList]')).filter(visible);"
                 + "const accepted=sections.find(e=>clean(e).includes('已接受的任务'))||content;"
-                + "const tasks=Array.from(accepted.querySelectorAll('.task-item,[class*=task-item],[class*=taskItem],li')).filter(visible);"
-                + "const completed=tasks.find(e=>{const src=Array.from(e.querySelectorAll('img')).map(i=>i.getAttribute('src')||'').join(' ');"
-                + "return e.classList.contains('ok')||/task_ico_ok(?:\\.|_)/.test(src)||!!e.querySelector('.dot.ok,.ok,[class*=complete]');});"
+                + "const tasks=Array.from(accepted.querySelectorAll('.task-items>.task-item,.task-list>.task-item,.task-item,li')).filter(visible);"
+                + "const rgb=s=>{const m=(s||'').match(/rgba?\\((\\d+)[, ]+(\\d+)[, ]+(\\d+)/);return m?m.slice(1).map(Number):null};"
+                + "const green=n=>{if(!visible(n))return false;const r=n.getBoundingClientRect(),cs=getComputedStyle(n);"
+                + "const values=[rgb(cs.backgroundColor),rgb(cs.color),rgb(cs.borderColor)].filter(Boolean);"
+                + "const isGreen=values.some(c=>c[1]>80&&c[1]>c[0]*1.22&&c[1]>c[2]*1.08);"
+                + "const round=(r.width>=5&&r.width<=30&&r.height>=5&&r.height<=30&&Math.abs(r.width-r.height)<=5);"
+                + "return isGreen&&round&&(/dot|point|status|success|finish|complete|ok/i.test(n.className||'')||parseFloat(cs.borderRadius)>=r.width*.35)};"
+                + "const completed=tasks.find(e=>Array.from(e.querySelectorAll('i,span,div,view,uni-view')).some(green));"
                 + "if(completed){const name=clean(completed);window.__pkAcceptedTaskSelection=name;"
                 + "completed.scrollIntoView({block:'center'});completed.click();return 'task_selected|'+name;}"
                 + "if(acceptedTab||clean(content).includes('已接受的任务')){"
@@ -3443,10 +3492,12 @@ final class AutomationCoordinator {
                 state.completableScanVerified = true;
                 state.completableRemainingCount = 0;
                 postTask(accountIndex, continuation, 400L);
-            } else if (states[accountIndex].dailyRoutineMode) {
-                failDailyRoutine(accountIndex, "completable_task_finish",
-                        "挂机辅助页可完成任务在等待期内未能完成验证：" + result);
             } else {
+                RuntimeState state = states[accountIndex];
+                state.completableTimedOut = true;
+                state.dailyRoutineFailureStep = "completable_task_timeout";
+                state.dailyRoutineFailureReason = "领取完成任务奖励30秒超时，已跳过并继续后续阶段：" + result;
+                updateState(accountIndex, state.dailyRoutineFailureReason);
                 postTask(accountIndex, continuation, 400L);
             }
         });
@@ -4616,10 +4667,12 @@ final class AutomationCoordinator {
         boolean dailyTaskAcceptVerified;
         int dailyTaskCandidateCount = -1;
         int dailyTaskAcceptedCount;
+        boolean dailyTaskAcceptTimedOut;
         boolean completableScanVerified;
         int completableFoundCount;
         int completableCompletedCount;
         int completableRemainingCount = -1;
+        boolean completableTimedOut;
         String dailyRoutineFailureStep = "";
         String dailyRoutineFailureReason = "";
         boolean captureAutoAttackEnabled;

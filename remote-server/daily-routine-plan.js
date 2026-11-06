@@ -80,10 +80,12 @@ export class DailyRoutinePlan {
         dailyTaskAcceptVerified: automation.dailyTaskAcceptVerified === true,
         dailyTaskCandidateCount: Number(automation.dailyTaskCandidateCount),
         dailyTaskAcceptedCount: Number(automation.dailyTaskAcceptedCount),
+        dailyTaskAcceptTimedOut: automation.dailyTaskAcceptTimedOut === true,
         completableScanVerified: automation.completableScanVerified === true,
         completableFoundCount: Number(automation.completableFoundCount),
         completableCompletedCount: Number(automation.completableCompletedCount),
         completableRemainingCount: Number(automation.completableRemainingCount),
+        completableTimedOut: automation.completableTimedOut === true,
         failureStep: automation.dailyRoutineFailureStep || "",
         failureReason: automation.dailyRoutineFailureReason || ""
       };
@@ -91,9 +93,12 @@ export class DailyRoutinePlan {
         account.status = "error";
       } else if (automation.task === "daily_routine" && automation.status === "ok") {
         const proof = account.evidence;
-        if (!proof.dailyTaskPageLoaded || !proof.dailyTaskAcceptVerified
-            || !proof.completableScanVerified || proof.completableRemainingCount !== 0
-            || proof.completableCompletedCount < proof.completableFoundCount) {
+        const acceptSettled = proof.dailyTaskAcceptVerified || proof.dailyTaskAcceptTimedOut;
+        const completionSettled = proof.completableScanVerified || proof.completableTimedOut;
+        if (!acceptSettled || !completionSettled
+            || (!proof.completableTimedOut && proof.completableRemainingCount !== 0)
+            || (!proof.completableTimedOut
+              && proof.completableCompletedCount < proof.completableFoundCount)) {
           account.status = "unverified";
           account.message = "APP已结束，但领取/完成任务证据不足";
         } else if (!account.inventoryRequested) {

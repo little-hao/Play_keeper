@@ -61,3 +61,16 @@ test("marks an APP ok result unverified when task evidence is missing", () => {
   assert.equal(plan.snapshot().accounts[0].status, "unverified");
   assert.equal(plan.snapshot().status, "error");
 });
+
+test("thirty-second task UI timeouts are warnings and allow the next stage", () => {
+  const actions = [];
+  const plan = new DailyRoutinePlan({ emitAction: (action) => actions.push(action) });
+  const started = plan.start([route[0]], { dungeonItems: ["圣诞小屋"] }, {});
+  plan.onTelemetry(route[0].deviceId, { accounts: [{ index: 0, automation: {
+    dailyRoutineRunId: started.runId, task: "daily_routine", status: "ok",
+    dailyTaskAcceptTimedOut: true, completableTimedOut: true,
+    dailyRoutineFailureStep: "completable_task_timeout",
+    dailyRoutineFailureReason: "领取完成任务奖励30秒超时，已继续" } }] });
+  assert.equal(plan.snapshot().accounts[0].status, "inventory_pending");
+  assert.equal(actions.at(-1).command, "run_inventory_snapshot");
+});

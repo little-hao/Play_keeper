@@ -151,6 +151,7 @@ const commandValidators = {
   run_auto_capture: accountParameters,
   run_tower_battle: accountParameters,
   run_daily_tasks: accountParameters,
+  run_completed_tasks: accountParameters,
   configure_prestige_items(parameters) {
     return accountParameters(parameters)
       && typeof parameters.enabled === "boolean"
@@ -289,7 +290,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.7-rc3" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.7-rc4" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {

@@ -395,6 +395,17 @@ test("device telemetry and browser command complete a round trip", async (contex
   assert.equal(verification.command, "confirm_equipment_verification");
   assert.equal(verification.parameters.verificationToken, verificationToken);
 
+  const completedTasksPromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "run_completed_tasks",
+    parameters: { accountIndex: 2 }
+  }));
+  const completedTasks = await completedTasksPromise;
+  assert.equal(completedTasks.command, "run_completed_tasks");
+  assert.equal(completedTasks.parameters.accountIndex, 2);
+
   const cancelPromise = nextJson(device, "command.request");
   control.send(JSON.stringify({
     type: "command.send",
@@ -484,7 +495,7 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    ok: true, service: "play-keeper-relay", version: "2.0.7-rc3"
+    ok: true, service: "play-keeper-relay", version: "2.0.7-rc4"
   });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);

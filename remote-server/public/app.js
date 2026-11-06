@@ -894,11 +894,20 @@ function renderAccountDailyRoutine() {
   status.className = `state ${["running", "awaiting_auction"].includes(accountDaily.status) ? "online" : "offline"}`;
   document.querySelector(".account-daily-routine-panel").open = ["running", "awaiting_auction", "error"].includes(accountDaily.status);
   progress.replaceChildren();
+  const accountStatusLabels = {
+    queued: "等待", running: "运行中", ok: "已完成", error: "错误",
+    unverified: "待核验", inventory_pending: "背包汇总", returning: "返回挂机",
+    skipped: "已跳过", cancelled: "已中断"
+  };
   for (const account of accountDaily.accounts || []) {
-    const row = document.createElement("div"); row.className = `routine-account ${account.status || "queued"}`;
+    const accountStatus = account.status || "queued";
+    const row = document.createElement("div"); row.className = `routine-account ${accountStatus}`;
     const strong = document.createElement("strong"); strong.textContent = account.accountLabel || "账号";
-    const text = document.createElement("span"); text.textContent = `${account.status || "queued"} · ${account.message || ""}`;
-    row.append(strong, text); progress.append(row);
+    const state = document.createElement("span"); state.className = "routine-state";
+    state.textContent = accountStatusLabels[accountStatus] || accountStatus;
+    const text = document.createElement("span"); text.className = "routine-message";
+    text.textContent = account.message || "等待执行"; text.title = text.textContent;
+    row.append(strong, state, text); progress.append(row);
   }
   const pending = ["running", "awaiting_auction"].includes(accountDaily.status)
     && accountDaily.auctionDecision === "pending";
@@ -1700,6 +1709,10 @@ function renderDevices() {
     });
     card.querySelector(".run-daily-tasks").addEventListener("click", () => {
       sendCommand(device.deviceId, "run_daily_tasks", { accountIndex: activeAccountIndex });
+    });
+    card.querySelector(".run-completed-tasks").addEventListener("click", () => {
+      sendCommand(device.deviceId, "run_completed_tasks", { accountIndex: activeAccountIndex });
+      addLog(`${accountLabel(accounts, activeAccountIndex)} 已开始单独领取完成任务奖励`);
     });
     card.querySelector(".run-prestige").addEventListener("click", () => {
       if (saveAutomation()) sendCommand(device.deviceId, "run_prestige_items", { accountIndex: activeAccountIndex });
