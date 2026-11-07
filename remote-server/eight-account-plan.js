@@ -181,10 +181,10 @@ export class EightAccountPlan {
     if (!Number.isInteger(resourcePrice) || resourcePrice < 1 || resourcePrice > 9_999_999) {
       throw new Error("道具交易单价无效");
     }
-    if (!Array.isArray(items) || items.length < 1 || items.length > 10
+    if (!Array.isArray(items) || items.length < 1 || items.length > 12
         || new Set(items).size !== items.length
         || items.some((item) => typeof item !== "string" || !item.trim() || item.length > 30)) {
-      throw new Error("装备清单必须包含1–10件不重复装备");
+      throw new Error("装备清单必须包含1–12件不重复装备（10装备槽+2卡片槽）");
     }
     if (!Array.isArray(resourceItems) || resourceItems.length < 1 || resourceItems.length > 10) {
       throw new Error("道具组合需包含1–10项");

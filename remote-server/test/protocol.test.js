@@ -355,7 +355,7 @@ test("device telemetry and browser command complete a round trip", async (contex
     parameters: {
       accountIndex: 2,
       items: ["厄菲斯神剑", "厄菲斯神铠", "厄菲斯神冠", "厄菲斯神靴", "厄菲斯神链",
-        "厄菲斯神戒", "厄菲斯神翼", "厄菲斯神镯", "厄菲斯神玉", "厄菲斯神印"],
+        "厄菲斯神戒", "厄菲斯神翼", "厄菲斯神镯", "厄菲斯神玉", "厄菲斯神印", "卡片甲", "卡片乙"],
       price: 920,
       buyer: "buyer@id"
     }
@@ -364,7 +364,7 @@ test("device telemetry and browser command complete a round trip", async (contex
   assert.equal(equipment.command, "configure_equipment_transfer");
   assert.equal(equipment.parameters.price, 920);
   assert.equal(equipment.parameters.buyer, "buyer@id");
-  assert.equal(equipment.parameters.items.length, 10);
+  assert.equal(equipment.parameters.items.length, 12);
 
   const auctionBuyPromise = nextJson(device, "command.request");
   control.send(JSON.stringify({
@@ -394,6 +394,17 @@ test("device telemetry and browser command complete a round trip", async (contex
   const verification = await verifyPromise;
   assert.equal(verification.command, "confirm_equipment_verification");
   assert.equal(verification.parameters.verificationToken, verificationToken);
+
+  const completedTasksPromise = nextJson(device, "command.request");
+  control.send(JSON.stringify({
+    type: "command.send",
+    deviceId: "PK-ABCDEF123456",
+    command: "run_completed_tasks",
+    parameters: { accountIndex: 2 }
+  }));
+  const completedTasks = await completedTasksPromise;
+  assert.equal(completedTasks.command, "run_completed_tasks");
+  assert.equal(completedTasks.parameters.accountIndex, 2);
 
   const cancelPromise = nextJson(device, "command.request");
   control.send(JSON.stringify({
@@ -484,7 +495,7 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    ok: true, service: "play-keeper-relay", version: "2.0.6"
+    ok: true, service: "play-keeper-relay", version: "2.0.7"
   });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);

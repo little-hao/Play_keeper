@@ -6,11 +6,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
 import { EightAccountPlan, resolveAccountRoute } from "./eight-account-plan.js";
-import { sendCompletionReport } from "./email-report.js";
+import { sendCompletionReport, sendDailyRoutineReport } from "./email-report.js";
 import { AuthStore } from "./auth-store.js";
 import { PlanDiagnosticsStore } from "./plan-diagnostics.js";
 import { EquipmentTransferCoordinator } from "./equipment-transfer-coordinator.js";
 import { GptDiagnosticAdvisor } from "./gpt-diagnostics.js";
+import { DailyRoutinePlan } from "./daily-routine-plan.js";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const publicDirectory = path.join(currentDirectory, "public");
@@ -129,6 +130,17 @@ const commandValidators = {
           && !/[\r\n\t]/.test(parameters.skill)));
   },
   run_dungeon_sequence: accountParameters,
+  run_daily_routine(parameters) {
+    return accountParameters(parameters)
+      && typeof parameters.runId === "string"
+      && /^[A-Za-z0-9._:-]{1,120}$/.test(parameters.runId)
+      && validItemList(parameters.items, 20)
+      && (parameters.skill === undefined || (typeof parameters.skill === "string"
+        && parameters.skill.length <= 30 && !/[\r\n\t]/.test(parameters.skill)))
+      && typeof parameters.returnMap === "string"
+      && parameters.returnMap.trim().length >= 1
+      && parameters.returnMap.trim().length <= 30;
+  },
   configure_adventure(parameters) {
     return accountParameters(parameters)
       && typeof parameters.map === "string"
@@ -139,6 +151,7 @@ const commandValidators = {
   run_auto_capture: accountParameters,
   run_tower_battle: accountParameters,
   run_daily_tasks: accountParameters,
+  run_completed_tasks: accountParameters,
   configure_prestige_items(parameters) {
     return accountParameters(parameters)
       && typeof parameters.enabled === "boolean"
@@ -158,7 +171,7 @@ const commandValidators = {
     return accountParameters(parameters)
       && Array.isArray(parameters.items)
       && parameters.items.length >= 1
-      && parameters.items.length <= 10
+      && parameters.items.length <= 12
       && parameters.items.every((item) => typeof item === "string"
         && item.trim().length >= 1 && item.trim().length <= 30)
       && Number.isInteger(parameters.price)
@@ -277,7 +290,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.6" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.7" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -353,8 +366,8 @@ function normalizePlanOptions(value) {
     throw new Error("装备路线必须首尾为同一主号，且参与账号不能重复");
   }
   if (equipmentItems !== undefined
-      && (!validItemList(equipmentItems, 10) || new Set(equipmentItems).size !== equipmentItems.length)) {
-    throw new Error("装备套装必须包含1–10件不重复装备");
+      && (!validItemList(equipmentItems, 12) || new Set(equipmentItems).size !== equipmentItems.length)) {
+    throw new Error("装备套装必须包含1–12件不重复装备");
   }
   if (!Number.isInteger(equipmentPrice) || equipmentPrice < 1 || equipmentPrice > 9_999_999) {
     throw new Error("装备定向转移单价无效");
@@ -387,6 +400,48 @@ function normalizePlanOptions(value) {
     phaseTimeoutSeconds: Object.fromEntries(Object.entries(phaseTimeouts)
       .map(([phase, milliseconds]) => [phase, milliseconds / 1000])),
     phaseTimeouts };
+}
+
+function normalizeDailyRoutineOptions(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const accountLabels = Array.isArray(source.accountLabels)
+    ? [...new Set(source.accountLabels.map((item) => String(item).trim()).filter(Boolean))] : [];
+  if (accountLabels.length < 1 || accountLabels.length > 8
+      || accountLabels.some((label) => !validAccountLabel(label))) {
+    throw new Error("每日任务账号列表无效");
+  }
+  const dungeonItems = Array.isArray(source.dungeonItems)
+    ? source.dungeonItems : [...DEFAULT_DUNGEONS];
+  if (!validItemList(dungeonItems, 20)) throw new Error("每日任务副本组合无效");
+  const returnMap = typeof source.returnMap === "string" ? source.returnMap.trim() : "圣诞小屋";
+  if (!returnMap || returnMap.length > 30 || /[\r\n\t]/.test(returnMap)) {
+    throw new Error("完成后挂机副本无效");
+  }
+  const sourceMaps = source.returnMaps && typeof source.returnMaps === "object"
+    && !Array.isArray(source.returnMaps) ? source.returnMaps : {};
+  const returnMaps = {};
+  for (const label of accountLabels) {
+    const map = typeof sourceMaps[label] === "string" && sourceMaps[label].trim()
+      ? sourceMaps[label].trim() : returnMap;
+    if (map.length > 30 || /[\r\n\t]/.test(map)) throw new Error(`${label} 完成后挂机副本无效`);
+    returnMaps[label] = map;
+  }
+  const skill = typeof source.skill === "string" ? source.skill.trim() : "auto";
+  if (skill.length > 30 || /[\r\n\t]/.test(skill)) throw new Error("每日任务技能无效");
+  const resourceItems = Array.isArray(source.resourceItems) ? source.resourceItems : undefined;
+  if (resourceItems !== undefined && !validItemList(resourceItems, 10)) throw new Error("拍卖道具无效");
+  const resourcePrice = source.resourcePrice === undefined ? 920 : Number(source.resourcePrice);
+  const resourceReserveCount = source.resourceReserveCount === undefined
+    ? 1 : Number(source.resourceReserveCount);
+  if (!Number.isInteger(resourcePrice) || resourcePrice < 1 || resourcePrice > 9_999_999) {
+    throw new Error("拍卖价格无效");
+  }
+  if (![0, 1].includes(resourceReserveCount)) throw new Error("道具保留数量无效");
+  const emailNotify = source.emailNotify === true;
+  const reportEmail = typeof source.reportEmail === "string" ? source.reportEmail.trim() : "";
+  if (emailNotify && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reportEmail)) throw new Error("通知邮箱格式无效");
+  return { accountLabels, dungeonItems, returnMap, returnMaps, skill,
+    resourceItems, resourcePrice, resourceReserveCount, emailNotify, reportEmail };
 }
 
 function defaultPlanSchedule() {
@@ -502,6 +557,8 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
   const devices = new Map();
   const controllers = new Set();
   const pendingPlanCommands = new Map();
+  const pendingDailyRoutineCommands = new Map();
+  const dailyRoutineReportsSent = new Set();
   const pendingTransferCommands = new Map();
   const latestDiagnosticFrames = new Map();
   const pendingDiagnostics = new Map();
@@ -584,6 +641,42 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
     }
   });
   equipmentTransfer.restore(loadPlanState(`${stateFile}.transfer`, logger));
+
+  function publishDailyRoutine(payload) {
+    savePlanState(`${stateFile}.daily-routine`, payload, logger);
+    const deviceIds = [...new Set((payload.accounts || []).map((entry) => entry.deviceId))];
+    for (const controller of controllers) {
+      if (controller.user?.role === "admin" || deviceIds.every((deviceId) =>
+        authStore.canAccess(controller.user, deviceId))) {
+        sendJson(controller, { type: "daily.routine.update", payload });
+      }
+    }
+    if (["success", "error"].includes(payload.status) && payload.options?.emailNotify
+        && payload.options?.reportEmail && !dailyRoutineReportsSent.has(payload.runId)) {
+      dailyRoutineReportsSent.add(payload.runId);
+      sendDailyRoutineReport(dailyRoutinePlan.completionReport()).then((result) => {
+        broadcast({ type: "daily.routine.email", message: result.status });
+      }).catch((error) => broadcast({ type: "daily.routine.email",
+        message: `发送失败：${String(error?.message || error).slice(0, 120)}` }));
+    }
+  }
+
+  const dailyRoutinePlan = new DailyRoutinePlan({
+    emitAction(action) {
+      const commandId = dispatchDeviceCommand(action.deviceId, action.command, action.parameters,
+        { stepId: action.stepId, expiresInMs: 300_000 });
+      pendingDailyRoutineCommands.set(commandId, { action: structuredClone(action), sentAt: Date.now() });
+    },
+    onUpdate: publishDailyRoutine,
+    onAuctionReady(plan) {
+      const options = plan.options || {};
+      const main = options.accountLabels.includes("hao") ? "hao" : options.accountLabels[0];
+      const routeLabels = [main, ...options.accountLabels.filter((label) => label !== main), main];
+      startResourceSweep({ ...options, routeLabels },
+        { id: plan.ownerId, username: plan.ownerUsername, role: "user" });
+      dailyRoutinePlan.markAuctionHandoff();
+    }
+  });
 
   function deviceSummary(entry) {
     return {
@@ -819,6 +912,15 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
     });
   }
 
+  function startDailyRoutine(options, user = { role: "admin" }) {
+    if (equipmentTransfer.isActive()) throw new Error("单次转移正在运行，请先中断");
+    if (["running", "intervention"].includes(eightAccountPlan.snapshot().status)) {
+      throw new Error("挂机脚本正在运行，请先完成或中断");
+    }
+    const route = resolveAccountRoute(accessibleSummaries(user), options.accountLabels);
+    return dailyRoutinePlan.start(route, options, user);
+  }
+
   deviceServer.on("connection", (socket) => {
     socket.isAlive = true;
     socket.authenticated = false;
@@ -891,6 +993,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
           publishPlan(after);
         }
         equipmentTransfer.onTelemetry(entry.deviceId, entry.telemetry);
+        dailyRoutinePlan.onTelemetry(entry.deviceId, entry.telemetry);
       } else if (message.type === "command.result" && typeof message.commandId === "string") {
         const pending = pendingPlanCommands.get(message.commandId);
         if (pending && pending.action.deviceId === entry.deviceId) {
@@ -904,6 +1007,12 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         if (transferPending && transferPending.action.deviceId === entry.deviceId) {
           pendingTransferCommands.delete(message.commandId);
           equipmentTransfer.onCommandResult(transferPending.action, message.success === true,
+            String(message.message ?? ""));
+        }
+        const dailyPending = pendingDailyRoutineCommands.get(message.commandId);
+        if (dailyPending && dailyPending.action.deviceId === entry.deviceId) {
+          pendingDailyRoutineCommands.delete(message.commandId);
+          dailyRoutinePlan.onCommandResult(dailyPending.action, message.success === true,
             String(message.message ?? ""));
         }
         broadcast({
@@ -1008,6 +1117,13 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
           sendJson(socket, { type: "plan.update", plan: "eight_account_daily",
             payload: planSnapshot });
         }
+        const dailySnapshot = dailyRoutinePlan.snapshot();
+        const dailyDeviceIds = [...new Set((dailySnapshot.accounts || [])
+          .map((entry) => entry.deviceId).filter(Boolean))];
+        if (user.role === "admin" || (dailyDeviceIds.length > 0
+            && dailyDeviceIds.every((deviceId) => authStore.canAccess(user, deviceId)))) {
+          sendJson(socket, { type: "daily.routine.update", payload: dailySnapshot });
+        }
         sendSchedule(socket);
         if (user.role === "admin") {
           sendJson(socket, { type: "admin.snapshot", payload: authStore.publicSnapshot() });
@@ -1060,6 +1176,46 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
         }
         return;
       }
+      if (message.type === "daily.routine.start") {
+        try {
+          const options = normalizeDailyRoutineOptions(message.options);
+          publishDailyRoutine(startDailyRoutine(options, socket.user));
+        } catch (error) {
+          sendJson(socket, { type: "daily.routine.error", message: String(error?.message || error) });
+        }
+        return;
+      }
+      if (message.type === "daily.routine.settings.update") {
+        try {
+          const options = normalizeDailyRoutineOptions(message.options);
+          const settings = authStore.updateSettings(socket.user, { dailyRoutineOptions: options });
+          sendJson(socket, { type: "user.settings", payload: settings });
+          sendJson(socket, { type: "daily.routine.settings.saved" });
+        } catch (error) {
+          sendJson(socket, { type: "daily.routine.error", message: String(error?.message || error) });
+        }
+        return;
+      }
+      if (message.type === "daily.routine.auction") {
+        try {
+          if (socket.user?.role !== "admin"
+              && socket.user?.id !== dailyRoutinePlan.snapshot().ownerId) throw new Error("无权操作该任务");
+          publishDailyRoutine(dailyRoutinePlan.decideAuction(message.enabled === true));
+        } catch (error) {
+          sendJson(socket, { type: "daily.routine.error", message: String(error?.message || error) });
+        }
+        return;
+      }
+      if (message.type === "daily.routine.cancel") {
+        try {
+          if (socket.user?.role !== "admin"
+              && socket.user?.id !== dailyRoutinePlan.snapshot().ownerId) throw new Error("无权操作该任务");
+          publishDailyRoutine(dailyRoutinePlan.cancel());
+        } catch (error) {
+          sendJson(socket, { type: "daily.routine.error", message: String(error?.message || error) });
+        }
+        return;
+      }
       if (message.type === "plan.schedule.update") {
         try {
           const previous = authStore.getSettings(socket.user).planSchedule || defaultPlanSchedule();
@@ -1108,7 +1264,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
           const price = Number(message.price);
           const returnMap = String(message.returnMap || "圣兽云殿").trim();
           if (!validAccountLabel(sellerLabel) || !validAccountLabel(buyerLabel)
-              || !validItemList(items, 10) || !Number.isInteger(price)
+              || !validItemList(items, 12) || !Number.isInteger(price)
               || price < 1 || price > 9_999_999 || !returnMap || returnMap.length > 30) {
             throw new Error("请检查卖方、买方、装备组合、价格和返回挂机地图");
           }
@@ -1256,6 +1412,12 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
       equipmentTransfer.onCommandResult(pending.action, false, "30秒内未收到APP确认");
     }
     equipmentTransfer.tick();
+    dailyRoutinePlan.tick();
+    for (const [commandId, pending] of pendingDailyRoutineCommands) {
+      if (now - pending.sentAt < 30_000) continue;
+      pendingDailyRoutineCommands.delete(commandId);
+      dailyRoutinePlan.onCommandResult(pending.action, false, "30秒内未收到APP确认");
+    }
     for (const [commandId, pending] of pendingPlanCommands) {
       if (now - pending.sentAt < 30_000) continue;
       if (eightAccountPlan.isDeviceInGrace(pending.action.deviceId)) continue;

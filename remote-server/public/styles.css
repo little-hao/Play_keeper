@@ -52,6 +52,32 @@ small { color: var(--muted); }
 .session-runtime { color: var(--green) !important; font-variant-numeric: tabular-nums; }
 .device-list { display: grid; gap: 14px; }
 .daily-plan-panel { margin-bottom: 14px; padding: 16px; }
+.daily-plan-panel > summary { cursor: pointer; list-style: none; }
+.daily-plan-panel > summary::-webkit-details-marker { display: none; }
+.daily-plan-panel > summary::before { content: "▶"; margin-right: 8px; color: #57d685; }
+.daily-plan-panel[open] > summary::before { content: "▼"; }
+.account-daily-routine-panel { margin-bottom: 14px; }
+.account-daily-routine-panel > summary { cursor: pointer; list-style: none; }
+.account-daily-routine-panel > summary::-webkit-details-marker { display: none; }
+.account-daily-routine-panel > summary::before { content: "▶"; margin-right: 8px; color: #57d685; }
+.account-daily-routine-panel[open] > summary::before { content: "▼"; }
+.account-choice-grid, .account-map-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.daily-routine-progress { display: grid; gap: 9px; margin: 14px 0; }
+.routine-account { display: grid; grid-template-columns: minmax(72px, 100px) 82px minmax(0, 1fr); align-items: center; gap: 10px; padding: 11px 13px; background: linear-gradient(135deg, #151b25, #111720); border: 1px solid #303848; border-radius: 12px; box-shadow: inset 3px 0 #485467; transition: border-color .18s ease, transform .18s ease; }
+.routine-account:hover { border-color: #475467; transform: translateY(-1px); }
+.routine-account strong { color: #f4f7fb; }
+.routine-state { justify-self: start; padding: 4px 8px; color: #bdc7d6; background: #293140; border-radius: 999px; font-size: 12px; font-weight: 800; white-space: nowrap; }
+.routine-message { min-width: 0; overflow: hidden; color: #c8d0dd; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
+.routine-account.running { box-shadow: inset 3px 0 #4c9dff; }
+.routine-account.running .routine-state { color: #cfe6ff; background: #214d78; }
+.routine-account.ok { border-color: #2b8b57; box-shadow: inset 3px 0 #52d483; }
+.routine-account.ok .routine-state { color: #c9f7d8; background: #205f3b; }
+.routine-account.error { border-color: #a64b45; box-shadow: inset 3px 0 #ff756d; }
+.routine-account.error .routine-state { color: #ffd5d2; background: #6d2d29; }
+.routine-account.inventory_pending, .routine-account.unverified { box-shadow: inset 3px 0 #dcae4f; }
+.routine-account.inventory_pending .routine-state, .routine-account.unverified .routine-state { color: #ffe7ad; background: #654c20; }
+.auction-decision { display: grid; grid-template-columns: 1fr auto auto auto; align-items: center; gap: 10px; padding: 12px; margin: 12px 0; border: 1px solid #8a692a; border-radius: 10px; }
+@media (max-width: 760px) { .account-choice-grid, .account-map-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .auction-decision { grid-template-columns: 1fr; } .routine-account { grid-template-columns: minmax(72px, 1fr) auto; } .routine-message { grid-column: 1 / -1; white-space: normal; } }
 .global-control-panel, .global-monitor-panel { margin-bottom: 14px; padding: 16px; }
 .risk-badge { padding: 5px 8px; color: #ffd8d4; background: #562521; border-radius: 999px; font-size: 11px; font-weight: 700; }
 .global-control-row { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto; align-items: end; gap: 8px; }

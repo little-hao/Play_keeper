@@ -771,7 +771,7 @@ public final class MainActivity extends Activity {
         prestigeItems.setText(automationCoordinator.prestigeItemsText(accountIndex));
         form.addView(prestigeItems, formFieldParams());
 
-        form.addView(formLabel("装备定向转移（最多10件，每5件自动分批）"));
+        form.addView(formLabel("装备定向转移（最多12件：10装备槽+2卡片槽，每5件自动分批）"));
         EditText equipmentItems = new EditText(this);
         equipmentItems.setSingleLine(true);
         equipmentItems.setHint(AutomationCoordinator.DEFAULT_EQUIPMENT_ITEMS);
@@ -1371,6 +1371,37 @@ public final class MainActivity extends Activity {
                     resultMessage = "已启动副本组合";
                     break;
                 }
+                case "run_daily_routine": {
+                    int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
+                    String runId = parameters.optString("runId", "").trim();
+                    if (!runId.matches("[A-Za-z0-9._:-]{1,120}")) {
+                        throw new IllegalArgumentException("每日任务批次编号无效");
+                    }
+                    JSONArray itemArray = parameters.optJSONArray("items");
+                    if (itemArray == null || itemArray.length() < 1 || itemArray.length() > 20) {
+                        throw new IllegalArgumentException("每日任务副本列表无效");
+                    }
+                    StringBuilder itemText = new StringBuilder();
+                    for (int i = 0; i < itemArray.length(); i++) {
+                        String item = itemArray.optString(i, "").trim();
+                        if (item.isEmpty() || item.length() > 30) {
+                            throw new IllegalArgumentException("每日任务副本名称无效");
+                        }
+                        if (i > 0) itemText.append(',');
+                        itemText.append(item);
+                    }
+                    String returnMap = parameters.optString("returnMap", "圣诞小屋").trim();
+                    if (returnMap.isEmpty() || returnMap.length() > 30) {
+                        throw new IllegalArgumentException("完成后挂机副本无效");
+                    }
+                    automationCoordinator.runDailyRoutineNow(index, runId,
+                            itemText.toString(), parameters.optString("skill", "auto"),
+                            returnMap);
+                    success = true;
+                    resultMessage = "已启动账号每日任务，完成后返回" + returnMap + "挂机";
+                    break;
+                }
                 case "configure_adventure": {
                     int index = requiredAccountIndex(parameters);
                     automationCoordinator.configureAdventure(index,
@@ -1500,6 +1531,14 @@ public final class MainActivity extends Activity {
                     automationCoordinator.runDailyTasksNow(index);
                     success = true;
                     resultMessage = "已启动一键接受日常任务";
+                    break;
+                }
+                case "run_completed_tasks": {
+                    int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
+                    automationCoordinator.runCompletedTasksNow(index);
+                    success = true;
+                    resultMessage = "已启动完成任务奖励领取";
                     break;
                 }
                 case "run_seller_cleanup": {

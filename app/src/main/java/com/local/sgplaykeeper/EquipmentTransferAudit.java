@@ -10,10 +10,10 @@ import java.util.Set;
 import java.text.Normalizer;
 
 /**
- * Pure final-state check for the ten-item equipment relay.
+ * Pure final-state check for an equipment relay with ten equipment slots and two card slots.
  *
  * <p>The existing WebView automation remains responsible for finding, scrolling, listing and
- * buying equipment.  This class deliberately receives only the current main pet's ten slots, so
+ * buying equipment.  This class deliberately receives only the current main pet's twelve slots, so
  * equipment on a secondary pet cannot affect the result.</p>
  */
 final class EquipmentTransferAudit {
@@ -64,6 +64,7 @@ final class EquipmentTransferAudit {
     }
 
     private static final Map<String, String> TARGETS_BY_SLOT;
+    private static final List<String> SLOT_NAMES;
 
     static {
         LinkedHashMap<String, String> targets = new LinkedHashMap<>();
@@ -78,6 +79,10 @@ final class EquipmentTransferAudit {
         targets.put("宝石", "厄菲斯神玉");
         targets.put("道具", "厄菲斯神印");
         TARGETS_BY_SLOT = Collections.unmodifiableMap(targets);
+        List<String> slots = new ArrayList<>(targets.keySet());
+        slots.add("卡片1");
+        slots.add("卡片2");
+        SLOT_NAMES = Collections.unmodifiableList(slots);
     }
 
     private EquipmentTransferAudit() {
@@ -98,17 +103,16 @@ final class EquipmentTransferAudit {
         if (scope != PetScope.MAIN) {
             throw new IllegalArgumentException("Equipment transfer may inspect only the main pet");
         }
-        if (expectedNames == null || expectedNames.isEmpty() || expectedNames.size() > 10) {
-            throw new IllegalArgumentException("Expected equipment list must contain 1-10 items");
+        if (expectedNames == null || expectedNames.isEmpty() || expectedNames.size() > 12) {
+            throw new IllegalArgumentException("Expected equipment list must contain 1-12 items");
         }
         Map<String, String> actual = mainPetEquipmentBySlot == null
                 ? Collections.emptyMap() : mainPetEquipmentBySlot;
         Set<String> skipped = skippedMissingNames == null
                 ? Collections.emptySet() : new LinkedHashSet<>(skippedMissingNames);
-        List<String> slots = new ArrayList<>(TARGETS_BY_SLOT.keySet());
         List<ItemResult> results = new ArrayList<>(expectedNames.size());
         for (int index = 0; index < expectedNames.size(); index++) {
-            String slot = slots.get(index);
+            String slot = SLOT_NAMES.get(index);
             String expectedName = expectedNames.get(index);
             String actualName = actual.get(slot);
             ItemStatus status;
@@ -168,7 +172,7 @@ final class EquipmentTransferAudit {
      */
     static boolean workflowCompleted(List<String> expectedNames, Set<String> purchasedNames,
                                      Set<String> skippedNames, int filledSlots) {
-        if (expectedNames == null || expectedNames.isEmpty() || expectedNames.size() > 10) {
+        if (expectedNames == null || expectedNames.isEmpty() || expectedNames.size() > 12) {
             return false;
         }
         Set<String> purchased = purchasedNames == null

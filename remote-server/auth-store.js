@@ -44,6 +44,9 @@ function defaultSettings(accountLabels) {
     accountLabels: labels, mainAccount,
     quickAuctionAccount: "", quickBuyPrice: 920, quickHangAccount: "", quickHangMap: "圣兽云殿",
     auctionBuyer: "", equipmentBuyer: "",
+    dailyRoutineOptions: { accountLabels: labels, dungeonItems: ["绘画小屋", "伊苏王的神墓", "火龙王的宫殿", "史芬克斯密穴"],
+      skill: "auto", returnMap: "圣诞小屋", returnMaps: {}, resourceItems: ["曙光印记", "进化宝石", "强化丹A", "强化丹B", "天仙玉露"],
+      resourcePrice: 920, resourceReserveCount: 1, emailNotify: false, reportEmail: "" },
     planSchedule: { enabled: false, time: "04:00", timeZone: "Asia/Shanghai",
       lastRunDate: "", lastAttemptAt: 0, lastError: "",
       options: { routeLabels: mainAccount ? [...labels, mainAccount] : [], reportEmail: "" } }
