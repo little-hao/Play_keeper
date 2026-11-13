@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Play Keeper 自动捕捉 / 神宠自动合宠",
+  "version": "1.5.1",
+  "description": "口袋宠物 Windows 浏览器工具 v1.5.1：修复 HTTP 游戏页许可证激活与签名验证。",
+  "permissions": [
+    "debugger"
+  ],
+  "host_permissions": [
+    "http://sgplay.cc/*",
+    "https://sgplay.cc/*",
+    "https://keeper.19990920.xyz/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://sgplay.cc/*",
+        "https://sgplay.cc/*"
+      ],
+      "js": [
+        "license-config.js",
+        "license-client.js",
+        "god-planner-core.js",
+        "play-keeper-auto-capture.user.js",
+        "play-keeper-god-planner.js",
+        "play-keeper-god-transactions.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Play Keeper 自动捕捉 / 神宠规划器"
+  }
+}

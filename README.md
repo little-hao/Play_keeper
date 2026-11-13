@@ -4,6 +4,8 @@ Play Keeper 是面向 Android 10 及以上设备的多账号网页挂机与远�
 
 当前正式版：**v2.0.7** · [下载 APK 与 VPS 包](https://github.com/little-hao/Play_keeper/releases/latest) · [更新记录](CHANGELOG.md)
 
+浏览器端附属功能：[`browser-extension/`](browser-extension/) 保存神宠规划器、单次事务、自动合宠循环及许可证客户端的最新源码。该模块与 Android App 分开发布，但共用本仓库以便 Windows 与 Mac 开发环境同步。
+
 > 本项目操作真实游戏账号与物品。首次使用请先用低价值道具、小范围账号路线验证设置；涉及交易时应核对卖方、买方、名称和价格。
 
 ## 界面预览
