@@ -4,7 +4,7 @@
   if (window.__PK_GOD_PLANNER_V150__) return;
   window.__PK_GOD_PLANNER_V150__ = true;
 
-  const VERSION = "1.5.1";
+  const VERSION = "1.5.2";
   const core = globalThis.PlayKeeperGodPlannerCore;
   if (!core) {
     console.error("[PK God Planner] core 未加载");
@@ -550,7 +550,7 @@
       <section class="panel">
         <div class="panel-head"><h3>神宠规划器 v${VERSION}</h3><button class="compact-toggle secondary">收起</button></div>
         <div class="panel-body">
-        <div class="sub">阶段 1 · Planner（v1.5.1 许可证安全上下文修复）</div>
+        <div class="sub">阶段 1 · Planner（v1.5.2 BOSS 刷新测试版）</div>
         <div class="phase">规划器本身只读；下方阶段2单次事务会在明确确认后执行。</div>
         <div class="grid">
           <div class="row"><label>模式</label><select class="mode"><option value="full">满神</option><option value="partial">残神</option><option value="formula">公式神宠</option></select></div>
@@ -573,7 +573,7 @@
           <button class="deputy secondary">记录当前为副宠</button><button class="pasture secondary">记录牧场</button>
           <button class="bag secondary">记录背包</button><button class="pasture-prelevel secondary">牧场副宠补级</button>
           <button class="plan-button">生成规划</button><button class="copy secondary">复制规划</button>
-          <button class="clear secondary">清空快照</button><button class="capture-toggle secondary">显示自动捕捉</button>
+          <button class="clear secondary">清空快照</button><button class="capture-toggle secondary">显示自动捕捉 / BOSS 刷新</button>
           <button class="dock secondary">复位/换侧</button><button class="hide secondary">隐藏规划器</button>
         </div>
         <div class="box warn"><b>自动循环前置操作</b><br>请依次锁定主宠、记录背包、记录牧场；建议先点“牧场副宠补级”，把计划使用的低阶副宠提前升到 Lv40，可明显缩短循环时间。</div>
@@ -630,7 +630,7 @@
     const captureToggle = shadow.querySelector(".capture-toggle");
     const syncCaptureLabel = () => {
       const visible = Boolean(window.PlayKeeperAutoCaptureTest?.isPanelVisible?.());
-      captureToggle.textContent = visible ? "隐藏自动捕捉" : "显示自动捕捉";
+      captureToggle.textContent = visible ? "隐藏自动捕捉 / BOSS 刷新" : "显示自动捕捉 / BOSS 刷新";
     };
     captureToggle.addEventListener("click", () => {
       window.PlayKeeperAutoCaptureTest?.togglePanel?.();

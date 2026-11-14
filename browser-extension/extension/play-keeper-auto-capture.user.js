@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Play Keeper Windows 浏览器自动捕捉
 // @namespace    https://github.com/little-hao/Play_keeper
-// @version      1.5.1
-// @description  自动进入指定地图，仅遇到目标宠物时按顺序执行捕捉、使用精灵球、等待结果并继续探险。
+// @version      1.5.2
+// @description  自动捕捉与关卡 BOSS 刷新：普通怪逃跑重置，仅遇 BOSS 自动战斗。
 // @match        http://sgplay.cc/*
 // @match        https://sgplay.cc/*
 // @run-at       document-idle
@@ -16,7 +16,7 @@
   if (window.__PK_WINDOWS_AUTO_CAPTURE_V01__) return;
   window.__PK_WINDOWS_AUTO_CAPTURE_V01__ = true;
 
-  const SCRIPT_VERSION = "1.5.1";
+  const SCRIPT_VERSION = "1.5.2";
   const POLL_INTERVAL_MS = 800;
   const CLICK_GUARD_MS = 550;
   const BALL_MENU_TIMEOUT_MS = 15_000;
@@ -30,6 +30,12 @@
   const MAX_UNKNOWN_TICKS = 30;
   const DEFAULT_MAP = "圣诞小屋";
   const DEFAULT_TARGETS = ["小幽灵欧姆", "鬼精灵欧姆"];
+  const DEFAULT_BOSSES = ["§巫·白无常§", "§巫·黑无常§"];
+  const MODE_CAPTURE = "capture";
+  const MODE_BATTLE_BENCHMARK = "battle-benchmark";
+  const MODE_BOSS_REFRESH = "boss-refresh";
+  const STORAGE_MODE = "pk_windows_run_mode";
+  const STORAGE_BOSSES = "pk_windows_boss_names";
   const STORAGE_MAP = "pk_windows_capture_map";
   const STORAGE_TARGETS = "pk_windows_capture_targets";
   const STORAGE_TEST_BATTLES = "pk_windows_capture_test_battles";
@@ -84,6 +90,9 @@
     errors: [],
     testMaxBattles: 20,
     testDeadline: 0,
+    mode: MODE_CAPTURE,
+    encounterStartedAt: 0,
+    currentBoss: "",
     persistTimer: 0,
   };
 
@@ -100,6 +109,10 @@
   let testBattlesNode = null;
   let testMinutesNode = null;
   let bridgeNode = null;
+  let modeNode = null;
+  let bossesNode = null;
+  let skippedNode = null;
+  let bossesSeenNode = null;
 
   function freshStats() {
     return {
@@ -107,6 +120,10 @@
       targetBattles: 0,
       ballsUsed: 0,
       captureSuccesses: 0,
+      normalSkipped: 0,
+      bossesSeen: 0,
+      bossBattlesCompleted: 0,
+      encounterLoadTotalMs: 0,
     };
   }
 
@@ -275,6 +292,32 @@
       .map(normalize)
       .filter(Boolean);
     return values.length ? Array.from(new Set(values)) : [...DEFAULT_TARGETS];
+  }
+
+  function configuredBosses() {
+    const values = String(bossesNode?.value || "")
+      .split(/[,，、/\n]/)
+      .map(normalize)
+      .filter(Boolean);
+    return values.length ? Array.from(new Set(values)) : [...DEFAULT_BOSSES];
+  }
+
+  function configuredMode() {
+    const value = String(modeNode?.value || MODE_CAPTURE);
+    return [MODE_CAPTURE, MODE_BATTLE_BENCHMARK, MODE_BOSS_REFRESH].includes(value) ? value : MODE_CAPTURE;
+  }
+
+  function detectBossInBattle(battleBox) {
+    const bosses = configuredBosses();
+    const candidates = enemyTextCandidates(battleBox);
+    const enemyStatus = battleBox?.querySelector?.(".booss-info");
+    const texts = [normalize(enemyStatus?.textContent), ...candidates.map((item) => item.text)].filter(Boolean);
+    for (const text of texts) {
+      const canonicalText = canonicalLabel(text);
+      const boss = bosses.find((name) => canonicalText.includes(canonicalLabel(name)));
+      if (boss) return { boss, sourceText: text };
+    }
+    return null;
   }
 
   function boundedNumber(node, fallback, minimum, maximum) {
@@ -616,6 +659,8 @@
     if (ballsNode) ballsNode.textContent = String(runtime.stats.ballsUsed);
     if (successesNode) successesNode.textContent = String(runtime.stats.captureSuccesses);
     if (battlesNode) battlesNode.textContent = `${runtime.stats.targetBattles}/${runtime.stats.battles}`;
+    if (skippedNode) skippedNode.textContent = String(runtime.stats.normalSkipped);
+    if (bossesSeenNode) bossesSeenNode.textContent = `${runtime.stats.bossBattlesCompleted}/${runtime.stats.bossesSeen}`;
     if (startButton) startButton.disabled = runtime.running;
     if (stopButton) stopButton.disabled = !runtime.running;
   }
@@ -637,6 +682,8 @@
     runtime.targetName = "";
     runtime.captureOutcome = "";
     runtime.captureResolvedAt = 0;
+    runtime.encounterStartedAt = 0;
+    runtime.currentBoss = "";
   }
 
   async function start() {
@@ -653,6 +700,9 @@
     localStorage.setItem(STORAGE_TARGETS, configuredTargets().join(","));
     localStorage.setItem(STORAGE_TEST_BATTLES, String(runtime.testMaxBattles));
     localStorage.setItem(STORAGE_TEST_MINUTES, String(testMinutes));
+    runtime.mode = configuredMode();
+    localStorage.setItem(STORAGE_MODE, runtime.mode);
+    localStorage.setItem(STORAGE_BOSSES, configuredBosses().join(","));
     runtime.running = true;
     runtime.startedAt = Date.now();
     runtime.stoppedAt = 0;
@@ -678,7 +728,10 @@
       maxMinutes: testMinutes,
       snapshot: pageSnapshot(),
     });
-    log(`试运行开始：最多 ${runtime.testMaxBattles} 场/${testMinutes} 分钟；地图 ${configuredMap()}；目标 ${configuredTargets().join(" / ")}`);
+    const modeText = runtime.mode === MODE_BOSS_REFRESH
+      ? `逃跑刷 BOSS（${configuredBosses().join(" / ")}）`
+      : runtime.mode === MODE_BATTLE_BENCHMARK ? "纯自动战斗对照" : `自动捕捉 ${configuredTargets().join(" / ")}`;
+    log(`试运行开始：${modeText}；最多 ${runtime.testMaxBattles} 场/${testMinutes} 分钟；地图 ${configuredMap()}`);
     schedule(50);
   }
 
@@ -731,6 +784,10 @@
     const continueButton = exactText("继续探险");
     if (continueButton) {
       runtime.unknownTicks = 0;
+      if (runtime.currentBoss && !runtime.continueClicked) {
+        runtime.stats.bossBattlesCompleted += 1;
+        recordEvent("info", "boss-result", "BOSS 战斗完成", { boss: runtime.currentBoss });
+      }
       if (runtime.ballUsedThisBattle && !runtime.captureOutcome) {
         if (!runtime.captureResultDeadline || Date.now() < runtime.captureResultDeadline) {
           setStatus("精灵球已使用，正在确认捕捉结果", "waiting");
@@ -756,6 +813,9 @@
     const captureButton = namedElement("捕捉");
     if (battleBox && isVisible(battleBox) && autoButton && captureButton) {
       runtime.unknownTicks = 0;
+      if (runtime.phase === "flee-return") {
+        if (waitForPhase("flee-return", "点击逃跑后 30 秒仍未返回副本页，已安全停止")) return;
+      }
       if (runtime.phase !== "battle-ready") enterPhase("battle-ready", 0, "战斗页面已就绪");
       handleBattle(battleBox, autoButton, captureButton);
       return;
@@ -776,6 +836,7 @@
       runtime.unknownTicks = 0;
       resetBattleState();
       if (safeNavigationClick(fightButton, "fight", "已点击战斗，等待战斗页面", 5_000)) {
+        runtime.encounterStartedAt = Date.now();
         enterPhase("battle-loading", BATTLE_LOAD_TIMEOUT_MS, "已点击战斗，等待战斗控件加载");
       }
       return;
@@ -941,12 +1002,37 @@
         return;
       }
       runtime.stats.battles += 1;
+      if (runtime.encounterStartedAt) {
+        runtime.stats.encounterLoadTotalMs += Math.max(0, Date.now() - runtime.encounterStartedAt);
+      }
       resetBattleState(battleBox);
       recordEvent("info", "battle", "检测到新战斗", {
         battleNumber: runtime.stats.battles,
         snapshot: pageSnapshot(),
       });
       log(`检测到第 ${runtime.stats.battles} 场战斗`);
+    }
+
+    if (runtime.mode === MODE_BOSS_REFRESH || runtime.mode === MODE_BATTLE_BENCHMARK) {
+      const bossMatch = detectBossInBattle(battleBox);
+      if (bossMatch && !runtime.currentBoss) {
+        runtime.currentBoss = bossMatch.boss;
+        runtime.stats.bossesSeen += 1;
+        recordEvent("info", "boss-detection", "识别到关卡 BOSS", bossMatch);
+        log(`识别到 BOSS：${bossMatch.boss}，开始自动战斗`);
+      }
+      if (runtime.mode === MODE_BOSS_REFRESH && !bossMatch) {
+        const fleeButton = namedElement("逃跑") || labeledElement("逃跑");
+        if (!fleeButton) {
+          setStatus("普通怪：等待逃跑按钮可用", "waiting");
+          return;
+        }
+        if (safeClick(fleeButton, "普通怪，已逃跑并等待返回副本页")) {
+          runtime.stats.normalSkipped += 1;
+          enterPhase("flee-return", BATTLE_LOAD_TIMEOUT_MS, "已逃跑，等待返回副本页");
+        }
+        return;
+      }
     }
 
     const menuItems = visibleElements(".jineng-list .li,.jineng-list button,.jineng-list uni-button");
@@ -960,6 +1046,11 @@
       } else {
         safeClick(autoButton, "正在打开自动攻击菜单");
       }
+      return;
+    }
+
+    if (runtime.mode === MODE_BOSS_REFRESH || runtime.mode === MODE_BATTLE_BENCHMARK) {
+      setStatus(runtime.currentBoss ? `BOSS ${runtime.currentBoss} 战斗中` : "对照模式：自动战斗中", "normal");
       return;
     }
 
@@ -1321,7 +1412,7 @@
           cursor:move; touch-action:none; user-select:none; }
         h3 { margin: 0; font-size: 15px; color: #54d585; }
         label { display: block; margin: 7px 0 3px; color: #aebed3; }
-        input { width: 100%; box-sizing: border-box; padding: 7px 8px; border-radius: 7px;
+        input, select { width: 100%; box-sizing: border-box; padding: 7px 8px; border-radius: 7px;
           border: 1px solid #3b4c63; color: #fff; background: #080d14; font: inherit; }
         .limits { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
         .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 10px 0; }
@@ -1339,11 +1430,19 @@
         .hint { margin-top: 8px; color: #8193aa; font-size: 11px; }
       </style>
       <section class="panel">
-        <div class="panel-head"><h3>自动捕捉 · v${SCRIPT_VERSION}</h3><button class="hide secondary">隐藏</button></div>
+        <div class="panel-head"><h3>自动捕捉 / BOSS 刷新 · v${SCRIPT_VERSION}</h3><button class="hide secondary">隐藏</button></div>
+        <label>运行模式</label>
+        <select class="mode">
+          <option value="${MODE_CAPTURE}">自动捕捉</option>
+          <option value="${MODE_BATTLE_BENCHMARK}">纯自动战斗（对照）</option>
+          <option value="${MODE_BOSS_REFRESH}">普通怪逃跑，仅战 BOSS</option>
+        </select>
         <label>地图</label>
         <input class="map" maxlength="30" value="${localStorage.getItem(STORAGE_MAP) || DEFAULT_MAP}">
         <label>目标宠物（逗号分隔）</label>
         <input class="targets" maxlength="100" value="${localStorage.getItem(STORAGE_TARGETS) || DEFAULT_TARGETS.join(",")}">
+        <label>BOSS 名称（逗号分隔）</label>
+        <input class="bosses" maxlength="160" value="${localStorage.getItem(STORAGE_BOSSES) || DEFAULT_BOSSES.join(",")}">
         <div class="limits">
           <div><label>最多运行场数</label><input class="test-battles" type="number" min="1" max="999" value="${localStorage.getItem(STORAGE_TEST_BATTLES) || "20"}"></div>
           <div><label>最长运行分钟</label><input class="test-minutes" type="number" min="1" max="480" value="${localStorage.getItem(STORAGE_TEST_MINUTES) || "30"}"></div>
@@ -1353,6 +1452,8 @@
           <div class="stat">目标/总战斗<b class="battles">0/0</b></div>
           <div class="stat">使用精灵球<b class="balls">0</b></div>
           <div class="stat">捕捉成功<b class="successes">0</b></div>
+          <div class="stat">已跳过普通怪<b class="skipped">0</b></div>
+          <div class="stat">完成/遇到 BOSS<b class="bosses-seen">0/0</b></div>
         </div>
         <div class="status">等待用户开始</div>
         <div class="buttons">
@@ -1369,12 +1470,17 @@
 
     panel = host;
     mapNode = shadow.querySelector(".map");
+    modeNode = shadow.querySelector(".mode");
+    modeNode.value = localStorage.getItem(STORAGE_MODE) || MODE_CAPTURE;
     targetsNode = shadow.querySelector(".targets");
+    bossesNode = shadow.querySelector(".bosses");
     statusNode = shadow.querySelector(".status");
     runtimeNode = shadow.querySelector(".runtime");
     ballsNode = shadow.querySelector(".balls");
     successesNode = shadow.querySelector(".successes");
     battlesNode = shadow.querySelector(".battles");
+    skippedNode = shadow.querySelector(".skipped");
+    bossesSeenNode = shadow.querySelector(".bosses-seen");
     startButton = shadow.querySelector(".start");
     stopButton = shadow.querySelector(".stop");
     testBattlesNode = shadow.querySelector(".test-battles");

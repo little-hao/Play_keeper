@@ -14,5 +14,6 @@ rm -f "$OUTPUT_FILE"
   zip -qr "$OUTPUT_FILE" . -x '*.DS_Store'
 )
 
-unzip -l "$OUTPUT_FILE" | grep -q ' manifest.json$'
+ZIP_ENTRIES="$(unzip -Z1 "$OUTPUT_FILE")"
+grep -Fxq 'manifest.json' <<<"$ZIP_ENTRIES"
 echo "Created $OUTPUT_FILE"
