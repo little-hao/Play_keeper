@@ -4,7 +4,7 @@
   if (window.__PK_GOD_TRANSACTIONS_V150__) return;
   window.__PK_GOD_TRANSACTIONS_V150__ = true;
 
-  const VERSION = "1.5.1";
+  const VERSION = "1.5.3";
   const TRUSTED_CLICK_MESSAGE = "pk-auto-capture/trusted-click-v1";
   const TRUSTED_CLICK_PING = "pk-auto-capture/ping-v1";
   const planner = window.PlayKeeperGodPlanner;
@@ -1766,7 +1766,7 @@
         const refreshed = await waitUntil(() => {
           const current = pastureEntryForTarget(entry.pet);
           return Number(current?.pet.level) > beforeLevel ? current : null;
-        }, 12000, 220);
+        }, 1500, 180);
         if (refreshed) {
           entry = refreshed;
           modal = null;
@@ -1782,7 +1782,9 @@
           verified = { afterCount, afterLevel, reopened: true };
         }
       }
-      if (Number(verified?.afterLevel) <= beforeLevel && Number(use.expW) >= 20) {
+      const inventoryDecrementVerified = Number.isFinite(Number(verified?.afterCount))
+        && Number(verified.afterCount) === beforeCount - 1;
+      if (!inventoryDecrementVerified && Number(verified?.afterLevel) <= beforeLevel && Number(use.expW) >= 20) {
         const synced = await waitUntil(() => {
           const modalLevel = pastureModalLevel();
           if (Number(modalLevel) > beforeLevel) return { afterLevel: Number(modalLevel), source: "modal" };
@@ -2206,19 +2208,25 @@
     return deputy;
   }
 
-  async function verifyCarriedDeputyLevel40(target) {
-    await openPetAttributes();
-    const matches = Array.from(document.querySelectorAll(".user-left .ul .li,.user-left .li"))
+  function carriedDeputyLevel40Matches(target) {
+    return Array.from(document.querySelectorAll(".user-left .ul .li,.user-left .li"))
       .filter(isRendered)
       .filter((card) => {
         const text = String(card.innerText || card.textContent || "");
         const name = text.match(/^([\s\S]*?)\s*Lv\s*\d+/i)?.[1]?.trim() || "";
-        if (normalize(name) !== normalize(target.name) || !/Lv\s*40/i.test(text)) return false;
+        const level = Number(text.match(/Lv\s*(\d+)/i)?.[1]);
+        if (normalize(name) !== normalize(target.name) || !Number.isInteger(level) || level < 40) return false;
         const key = portraitKeyFromElement(card);
         return !target.portraitKey || !key || key === target.portraitKey;
       });
+  }
+
+  async function verifyCarriedDeputyLevel40(target) {
+    await openPetAttributes();
+    const matches = carriedDeputyLevel40Matches(target);
     if (matches.length !== 1) throw new Error(`携带宠物中无法唯一确认副宠 ${target.name} 为 Lv40，匹配到 ${matches.length} 张卡片`);
-    const verified = { ...target, level: 40, displayLevel: 40, effectiveLevel: 40,
+    const verifiedLevel = Number(String(matches[0].innerText || matches[0].textContent || "").match(/Lv\s*(\d+)/i)?.[1]);
+    const verified = { ...target, level: verifiedLevel, displayLevel: verifiedLevel, effectiveLevel: verifiedLevel,
       portraitKey: target.portraitKey || portraitKeyFromElement(matches[0]) };
     planner.storeDeputyPet(verified);
     logEvent("automation/deputy-level-verified-without-main-switch", { deputy: verified });
@@ -2283,12 +2291,50 @@
 
     if (checkpoint.stage === "pasture-prepared") {
       await openPasture();
-      deputy = await withdrawNextDeputy(deputy);
-      if (Number(deputy.level) < 40) throw new Error(`取出前副宠 ${deputy.name} 仅 Lv${deputy.level}，停止`);
-      bumpAutoStat("deputiesWithdrawn");
-      planner.storeDeputyPet(deputy);
-      checkpoint = saveAutoCheckpoint("deputy-levelled", deputy);
-      logEvent("automation/checkpoint", { stage: checkpoint.stage, deputy });
+      const identityMatches = pastureRows().filter((entry) => samePastureIdentity(entry.pet, deputy));
+      if (identityMatches.length === 0) {
+        await openPetAttributes();
+        const carriedMatches = carriedDeputyLevel40Matches(deputy);
+        if (carriedMatches.length === 1) {
+          deputy = await verifyCarriedDeputyLevel40(deputy);
+          checkpoint = saveAutoCheckpoint("deputy-levelled", deputy, {
+            reconciledFrom: "pasture-prepared",
+            reconciledAt: new Date().toISOString(),
+          });
+          logEvent("automation/pasture-prepared-reconciled", {
+            result: "already-carried",
+            deputy,
+          });
+          setTxStatus(`旧检查点的副宠 ${deputy.name} 已在携带栏，已跳过重复取出。`, "warn");
+        } else if (carriedMatches.length === 0) {
+          const previous = checkpoint;
+          deputy = null;
+          checkpoint = saveAutoCheckpoint("start", null, {
+            resetReason: "pasture-prepared-target-missing",
+            previousDeputy: previous.deputy,
+          });
+          logEvent("automation/checkpoint-reset", {
+            previous,
+            reason: "旧检查点副宠既不在牧场也不在携带栏",
+          });
+          setTxStatus(`旧检查点的副宠 ${previous.deputy?.name || "未知"} 已不存在，已重新扫描当前牧场。`, "warn");
+          await openPasture();
+          deputy = await prepareNextPastureDeputy();
+          checkpoint = saveAutoCheckpoint("pasture-prepared", deputy, { recoveredFromStaleCheckpoint: true });
+        } else {
+          throw new Error(`旧检查点副宠 ${deputy.name} 在携带栏匹配到 ${carriedMatches.length} 张卡片，无法安全确定目标`);
+        }
+      } else if (identityMatches.length > 1) {
+        throw new Error(`旧检查点副宠 ${deputy.name} 在牧场匹配到 ${identityMatches.length} 行，无法安全确定目标`);
+      }
+      if (checkpoint.stage === "pasture-prepared") {
+        deputy = await withdrawNextDeputy(deputy);
+        if (Number(deputy.level) < 40) throw new Error(`取出前副宠 ${deputy.name} 仅 Lv${deputy.level}，停止`);
+        bumpAutoStat("deputiesWithdrawn");
+        planner.storeDeputyPet(deputy);
+        checkpoint = saveAutoCheckpoint("deputy-levelled", deputy);
+        logEvent("automation/checkpoint", { stage: checkpoint.stage, deputy });
+      }
     }
 
     if (checkpoint.stage === "deputy-withdrawn") {
@@ -2549,6 +2595,7 @@
         每次启动先复核锁定主宠、完整背包和牧场。每轮先在牧场把低阶/低CC优先副宠补到 Lv40，再取出；不会把副宠设为主战。随后按面板设置仅给锁定主宠进化 0–10 次；强化丹 A/B 耗尽时跳过剩余进化并进入合成。复核主副宠等级与身份后合成一次，其他无法验证的检查点仍会暂停并保留接管日志。
         <div class="row" style="margin-top:8px"><label>最多周期</label><input class="auto-cycles" type="number" min="1" max="50" value="10"></div>
         <div class="row"><label>单只合成上限</label><input class="auto-retries" type="number" min="1" max="10" value="3"></div>
+        <div class="checks"><label><input class="auto-fresh-start" type="checkbox">清除旧检查点，从当前牧场重新开始</label></div>
         <div class="buttons"><button class="auto-start">开始自动循环</button><button class="auto-stop secondary" disabled>安全停止</button></div>
       </div>
       <div class="status tx-status" style="display:none">属性页经验按累计经验读取；Lv1 页面若直接显示约 563.3W 总阈值也可安全识别。背包会自动滚动到计划使用的经验道具。</div>`;
@@ -2600,9 +2647,15 @@
     autoStart.addEventListener("click", async () => {
       const cycles = Math.max(1, Math.min(50, Number(section.querySelector(".auto-cycles").value) || 10));
       const retries = Math.max(1, Math.min(10, Number(section.querySelector(".auto-retries").value) || 3));
+      const freshStart = section.querySelector(".auto-fresh-start").checked;
       autoStart.disabled = true;
       autoStop.disabled = false;
       try {
+        if (freshStart) {
+          saveAutoCheckpoint("start", null, { resetReason: "user-requested-fresh-start" });
+          section.querySelector(".auto-fresh-start").checked = false;
+          setTxStatus("已按用户选择清除旧检查点，将以当前牧场快照开始。", "warn");
+        }
         await startAutoLoop(cycles, retries);
       } catch (error) {
         setTxStatus(`自动循环未启动：${error?.message || error}`, "error");
