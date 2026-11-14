@@ -4,7 +4,7 @@
   if (window.__PK_GOD_TRANSACTIONS_V150__) return;
   window.__PK_GOD_TRANSACTIONS_V150__ = true;
 
-  const VERSION = "1.5.3";
+  const VERSION = "1.5.4";
   const TRUSTED_CLICK_MESSAGE = "pk-auto-capture/trusted-click-v1";
   const TRUSTED_CLICK_PING = "pk-auto-capture/ping-v1";
   const planner = window.PlayKeeperGodPlanner;
@@ -1644,10 +1644,12 @@
   function choosePastureEntry(rows, config, target = null) {
     if (target) {
       const identity = rows.filter((entry) => samePastureIdentity(entry.pet, target));
-      const progressed = identity.filter((entry) => Number(entry.pet.level) > Number(target.level));
-      if (progressed.length === 1) return progressed[0];
       const byIndex = identity.find((entry) => entry.pastureIndex === Number(target.pastureIndex));
       if (byIndex) return byIndex;
+      const exactLevel = identity.filter((entry) => Number(entry.pet.level) === Number(target.level));
+      if (exactLevel.length === 1) return exactLevel[0];
+      const progressed = identity.filter((entry) => Number(entry.pet.level) > Number(target.level));
+      if (progressed.length === 1) return progressed[0];
       if (identity.length === 1) return identity[0];
       throw new Error(`牧场无法唯一恢复目标副宠 ${target.name}；稳定身份匹配到 ${identity.length} 行`);
     }
@@ -1718,9 +1720,15 @@
     const config = planner.getConfig();
     let { entry, modal } = await openPastureUpgradeModal(target);
     let liveLevel = pastureModalLevel(modal) || Number(entry.pet.level);
+    const initialLevel = liveLevel;
     if (liveLevel >= 40) {
       await closePastureUpgradeModal();
-      return { ...entry.pet, level: liveLevel, displayLevel: liveLevel };
+      return {
+        pet: { ...entry.pet, level: liveLevel, displayLevel: liveLevel },
+        upgraded: false,
+        initialLevel,
+        verifiedUses: 0,
+      };
     }
     const targetW = core.pastureRemainingW(liveLevel, config.level1To40ExpW);
     const safeInventory = core.pastureSafeInventory(inventory, liveLevel, targetW);
@@ -1814,7 +1822,16 @@
     }, 12000, 250);
     if (!level40) throw new Error(`牧场经验消耗完成，但 ${entry.pet.name} 的列表等级未确认达到 Lv40`);
     logEvent("pasture-upgrade/pet-complete", { before: entry.pet, after: level40.pet });
-    return level40.pet;
+    return {
+      pet: level40.pet,
+      upgraded: initialLevel < 40 && operations > 0 && Number(level40.pet.level) >= 40,
+      initialLevel,
+      verifiedUses: operations,
+    };
+  }
+
+  function pastureRowKey(pet) {
+    return [pet?.pastureIndex, normalize(pet?.name), pet?.tier, pet?.element, pet?.cc].join("|");
   }
 
   async function upgradePastureDeputiesInternal(requestedCount) {
@@ -1822,8 +1839,9 @@
     const config = planner.getConfig();
     const inventory = { ...(planner.getState().inventory || {}) };
     const completed = [];
+    const completedRows = new Set();
     for (let index = 0; index < requestedCount; index += 1) {
-      const pets = planner.scanPasture();
+      const pets = planner.scanPasture().filter((pet) => !completedRows.has(pastureRowKey(pet)));
       const plan = core.planPastureUpgrades({
         pasturePets: pets,
         inventory,
@@ -1834,7 +1852,22 @@
       const selected = plan.selectedPlans[0];
       if (!selected) throw new Error(plan.reason || `完成 ${completed.length} 只后，没有可执行的下一只牧场副宠补级计划`);
       try {
-        completed.push(await upgradePasturePet(selected.pet, inventory));
+        const result = await upgradePasturePet(selected.pet, inventory);
+        if (!result.upgraded) {
+          throw new Error(
+            `计划目标 ${selected.pet.name} 为 Lv${selected.pet.level}，但实际打开的牧场行已是 Lv${result.pet.level}；`
+            + "本次未计入完成数，已停止以避免重复跳过",
+          );
+        }
+        completed.push(result.pet);
+        completedRows.add(pastureRowKey(result.pet));
+        logEvent("pasture-upgrade/completed-counted", {
+          requestedCount,
+          completedCount: completed.length,
+          pet: result.pet,
+          initialLevel: result.initialLevel,
+          verifiedUses: result.verifiedUses,
+        });
       } catch (error) {
         planner.storeBagInventory(inventory);
         throw error;
@@ -1853,7 +1886,7 @@
       await refreshBagSnapshot("pasture-upgrade/preflight");
       const count = planner.getConfig().pastureUpgradeCount;
       const completed = await upgradePastureDeputiesInternal(count);
-      finish(`牧场副宠补级完成：已按低阶/低CC优先确认 ${completed.length} 只宠物达到 Lv40。主战宠物未改变。`, "success");
+      finish(`牧场副宠补级完成：请求 ${count} 只，实际完成 ${completed.length} 只从低于 Lv40 升至 Lv40。主战宠物未改变。`, "success");
     } catch (error) {
       try { await closePastureUpgradeModal(); } catch (_) {}
       finish(`牧场副宠补级停止：${error?.message || error}`, "error");
@@ -2195,7 +2228,11 @@
     let deputy = entry.pet;
     if (Number(deputy.level) < 40) {
       const inventory = { ...(planner.getState().inventory || {}) };
-      deputy = await upgradePasturePet(deputy, inventory);
+      const result = await upgradePasturePet(deputy, inventory);
+      if (!result.upgraded) {
+        throw new Error(`自动循环计划升级 ${deputy.name}，但实际选中行已是 Lv${result.pet.level}，已停止防止取错宠物`);
+      }
+      deputy = result.pet;
       planner.storeBagInventory(inventory);
       planner.scanPasture();
       bumpAutoStat("pasturePetsLeveled");

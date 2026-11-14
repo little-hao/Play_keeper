@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Play Keeper 自动捕捉 / 神宠自动合宠",
-  "version": "1.5.3",
-  "description": "口袋宠物 Windows 浏览器工具 v1.5.3：牧场补级提速与旧检查点安全恢复。",
+  "version": "1.5.4",
+  "description": "口袋宠物 Windows 浏览器工具 v1.5.4：修复牧场同身份宠物选行与实际补级计数。",
   "permissions": [
     "debugger"
   ],

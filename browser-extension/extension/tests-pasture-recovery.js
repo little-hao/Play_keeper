@@ -19,4 +19,11 @@ assert.match(source, /class="auto-fresh-start"/,
 assert.match(source, /level < 40/,
   "携带副宠恢复应接受 Lv40 及以上等级");
 
-console.log("pasture recovery v1.5.3 tests passed");
+assert.ok(source.indexOf("const byIndex") < source.indexOf("const progressed"),
+  "同身份宠物必须先按牧场行索引匹配，不能先选已有 Lv40 宠物");
+assert.match(source, /pasture-upgrade\/completed-counted/,
+  "完成数应有独立的实际升级证据事件");
+assert.match(source, /if \(!result\.upgraded\)/,
+  "未消耗经验道具的已有 Lv40 行不得计入完成数");
+
+console.log("pasture recovery v1.5.4 tests passed");
