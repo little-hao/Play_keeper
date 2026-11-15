@@ -25,5 +25,19 @@ assert.match(source, /pasture-upgrade\/completed-counted/,
   "完成数应有独立的实际升级证据事件");
 assert.match(source, /if \(!result\.upgraded\)/,
   "未消耗经验道具的已有 Lv40 行不得计入完成数");
+assert.match(source, /checkpoint-pasture-index-restored/,
+  "检查点恢复应优先使用已保存的牧场行索引");
+assert.match(source, /identicalPetCount/,
+  "索引恢复应兼容任意数量完全相同的牧场宠物");
+assert.match(source, /samePasturePet\(indexed\.pet, target\)/,
+  "按索引恢复时仍必须核验宠物完整身份");
+assert.match(source, /level\/inventory-replanned/,
+  "规划道具行消失时应完整重扫库存并重新规划");
+assert.match(source, /Number\(consumed\.afterCount \|\| 0\)/,
+  "经验道具消耗后应采用页面实际剩余数量");
+assert.match(source, /AutomationStopRequestedError/,
+  "用户停止应与页面加载错误分开处理");
+assert.match(source, /currentPageKind\(\) === "pet-attributes"/,
+  "宠物资料页判断不能仅依赖牧场也会使用的通用布局类名");
 
-console.log("pasture recovery v1.5.4 tests passed");
+console.log("pasture recovery v1.5.5 tests passed");

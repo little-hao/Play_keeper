@@ -336,4 +336,4 @@ assert.equal(replannedAfter500.ok, true);
 assert.equal(replannedAfter500.totalW, 65);
 assert.equal(replannedAfter500.uses[0].count, 13);
 
-console.log("god-planner v1.5.4 tests passed");
+console.log("god-planner v1.5.5 tests passed");

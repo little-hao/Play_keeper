@@ -4,7 +4,7 @@
   if (window.__PK_GOD_TRANSACTIONS_V150__) return;
   window.__PK_GOD_TRANSACTIONS_V150__ = true;
 
-  const VERSION = "1.5.4";
+  const VERSION = "1.5.5";
   const TRUSTED_CLICK_MESSAGE = "pk-auto-capture/trusted-click-v1";
   const TRUSTED_CLICK_PING = "pk-auto-capture/ping-v1";
   const planner = window.PlayKeeperGodPlanner;
@@ -37,6 +37,12 @@
   const takeover = { active: false, startedAt: 0, reason: "" };
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  class AutomationStopRequestedError extends Error {
+    constructor() {
+      super("用户请求停止");
+      this.name = "AutomationStopRequestedError";
+    }
+  }
   const normalize = (value) => String(value ?? "").replace(/\s+/g, "").trim();
   const baseMaterialName = (value) => String(value ?? "")
     .replace(/【绑定】|\[绑定\]|（绑定）|\(绑定\)/g, "").trim();
@@ -683,6 +689,10 @@
     const deadline = Date.now() + timeoutMs;
     let last;
     while (Date.now() < deadline) {
+      // 已提交的单步事务仍需完成验证；事务之间的页面等待可立即响应停止请求。
+      if (runtime.autoRunning && runtime.stopRequested && !runtime.running) {
+        throw new AutomationStopRequestedError();
+      }
       try {
         last = check();
         if (last) return last;
@@ -1040,8 +1050,24 @@
         if (!tx.uses?.length) throw new Error("剩余经验计划为空，但尚未达到 Lv40；停止");
 
         const use = tx.uses[0];
-        const rows = await locateInventoryRows(use.id);
-        if (!rows.length) throw new Error(`未找到可用的 ${use.name} 行；停止，不会改用未规划道具`);
+        let rows = await locateInventoryRows(use.id);
+        if (!rows.length) {
+          const previousCount = Number(inventory[use.id] || 0);
+          const rescanned = await scanLiveExpInventory();
+          inventory = { ...inventory, ...rescanned };
+          logEvent("level/inventory-replanned", {
+            missingItem: use.name,
+            previousCount,
+            rescannedCount: Number(inventory[use.id] || 0),
+            inventory,
+          });
+          // 实际库存已经变化时返回循环顶部，让规划器基于完整新快照重新选道具。
+          if (Number(inventory[use.id] || 0) < previousCount) continue;
+          rows = await locateInventoryRows(use.id);
+          if (!rows.length) {
+            throw new Error(`完整重扫后仍未找到 ${use.name} 行；背包显示数量 ${inventory[use.id] || 0}，停止以避免误用道具`);
+          }
+        }
         const beforeCount = liveCount(use.id);
         const beforePet = pet;
         const remainingText = tx.remaining?.ok
@@ -1070,7 +1096,7 @@
           const estimated = core.estimateLevelProgressFromTotalExp(Number(beforePet.currentExp) + Number(use.expW) * core.EXP_PER_W);
           if (!estimated?.ok) throw new Error(`${use.name} 已扣除，但无法更新可信经验快照：${estimated?.reason || "未知错误"}`);
           updated = { ...beforePet, ...estimated, name: beforePet.name };
-          inventory = { ...inventory, [use.id]: Math.max(0, Number(inventory[use.id] || 0) - 1) };
+          inventory = { ...inventory, [use.id]: Math.max(0, Number(consumed.afterCount || 0)) };
         } else {
           verificationSource = "pet-progress";
           setTxStatus(`${use.name} 的背包数量暂未刷新；正在读取宠物属性核验等级/经验变化，不会重复使用…`);
@@ -1442,8 +1468,9 @@
   }
 
   async function openPetAttributes(expectedPet = null) {
-    const alreadyOnPetPage = Boolean(document.querySelector(".user-right")
-      && document.querySelector(".user-left .ul,.user-left"));
+    const alreadyOnPetPage = currentPageKind() === "pet-attributes"
+      || Boolean(document.querySelector(".user-left .ul,.user-left")
+        && Array.from(document.querySelectorAll('uni-button[name="属性"],[name="属性"]')).some(isVisible));
     if (!alreadyOnPetPage) await clickNamedButton("宠物资料");
     const page = await waitUntil(() => {
       const cards = Array.from(document.querySelectorAll(".user-left .ul .li,.user-left .li"))
@@ -1639,6 +1666,34 @@
       && Number(a.tier) === Number(b.tier)
       && Math.abs(Number(a.cc) - Number(b.cc)) < 0.001
       && normalize(a.element) === normalize(b.element);
+  }
+
+  function resolveCheckpointPastureEntry(rows, target) {
+    const savedIndex = Number(target?.pastureIndex);
+    const indexed = Number.isInteger(savedIndex)
+      ? rows.find((entry) => entry.pastureIndex === savedIndex)
+      : null;
+    if (indexed && samePasturePet(indexed.pet, target)) {
+      logEvent("automation/checkpoint-pasture-index-restored", {
+        pastureIndex: savedIndex,
+        identicalPetCount: rows.filter((entry) => samePasturePet(entry.pet, target)).length,
+        pet: indexed.pet,
+      });
+      return indexed;
+    }
+    const exact = rows.filter((entry) => samePasturePet(entry.pet, target));
+    if (exact.length === 1) {
+      logEvent("automation/checkpoint-pasture-identity-restored", {
+        previousPastureIndex: target?.pastureIndex,
+        pastureIndex: exact[0].pastureIndex,
+        pet: exact[0].pet,
+      });
+      return exact[0];
+    }
+    if (exact.length > 1) {
+      throw new Error(`旧检查点副宠 ${target.name} 有 ${exact.length} 只完全相同宠物，且已保存索引 ${target?.pastureIndex ?? "无"} 不再对应目标，无法安全恢复`);
+    }
+    return null;
   }
 
   function choosePastureEntry(rows, config, target = null) {
@@ -2328,8 +2383,8 @@
 
     if (checkpoint.stage === "pasture-prepared") {
       await openPasture();
-      const identityMatches = pastureRows().filter((entry) => samePastureIdentity(entry.pet, deputy));
-      if (identityMatches.length === 0) {
+      const checkpointEntry = resolveCheckpointPastureEntry(pastureRows(), deputy);
+      if (!checkpointEntry) {
         await openPetAttributes();
         const carriedMatches = carriedDeputyLevel40Matches(deputy);
         if (carriedMatches.length === 1) {
@@ -2361,8 +2416,8 @@
         } else {
           throw new Error(`旧检查点副宠 ${deputy.name} 在携带栏匹配到 ${carriedMatches.length} 张卡片，无法安全确定目标`);
         }
-      } else if (identityMatches.length > 1) {
-        throw new Error(`旧检查点副宠 ${deputy.name} 在牧场匹配到 ${identityMatches.length} 行，无法安全确定目标`);
+      } else {
+        deputy = checkpointEntry.pet;
       }
       if (checkpoint.stage === "pasture-prepared") {
         deputy = await withdrawNextDeputy(deputy);
@@ -2532,14 +2587,20 @@
       }
     } catch (error) {
       const message = error?.message || String(error);
-      outcome = "已中断";
-      finalReason = message;
-      bumpAutoStat("errors");
-      logEvent("automation/paused", { cycle: runtime.autoCycle, message });
-      takeover.active = true;
-      takeover.startedAt = Date.now();
-      takeover.reason = message;
-      logEvent("user-takeover/started", { cycle: runtime.autoCycle, reason: message, page: currentPageKind() });
+      if (error instanceof AutomationStopRequestedError) {
+        outcome = "已安全停止";
+        finalReason = "用户请求停止；未提交新的单步操作";
+        logEvent("automation/stopped-by-user", { cycle: runtime.autoCycle, page: currentPageKind() });
+      } else {
+        outcome = "已中断";
+        finalReason = message;
+        bumpAutoStat("errors");
+        logEvent("automation/paused", { cycle: runtime.autoCycle, message });
+        takeover.active = true;
+        takeover.startedAt = Date.now();
+        takeover.reason = message;
+        logEvent("user-takeover/started", { cycle: runtime.autoCycle, reason: message, page: currentPageKind() });
+      }
     } finally {
       const summary = formatAutoSummary(outcome, finalReason);
       logEvent("automation/run-summary", { outcome, reason: finalReason, stats: runtime.autoStats, summary });

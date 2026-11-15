@@ -4,7 +4,7 @@
   if (window.__PK_GOD_PLANNER_V150__) return;
   window.__PK_GOD_PLANNER_V150__ = true;
 
-  const VERSION = "1.5.4";
+  const VERSION = "1.5.5";
   const core = globalThis.PlayKeeperGodPlannerCore;
   if (!core) {
     console.error("[PK God Planner] core 未加载");
@@ -550,7 +550,7 @@
       <section class="panel">
         <div class="panel-head"><h3>神宠规划器 v${VERSION}</h3><button class="compact-toggle secondary">收起</button></div>
         <div class="panel-body">
-        <div class="sub">阶段 1 · Planner（v1.5.4 牧场实际补级计数修复）</div>
+        <div class="sub">阶段 1 · Planner（v1.5.5 自动循环恢复与补级重规划）</div>
         <div class="phase">规划器本身只读；下方阶段2单次事务会在明确确认后执行。</div>
         <div class="grid">
           <div class="row"><label>模式</label><select class="mode"><option value="full">满神</option><option value="partial">残神</option><option value="formula">公式神宠</option></select></div>
