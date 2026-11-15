@@ -4,7 +4,7 @@
   if (window.__PK_GOD_TRANSACTIONS_V150__) return;
   window.__PK_GOD_TRANSACTIONS_V150__ = true;
 
-  const VERSION = "1.5.6";
+  const VERSION = "1.5.7";
   const TRUSTED_CLICK_MESSAGE = "pk-auto-capture/trusted-click-v1";
   const TRUSTED_CLICK_PING = "pk-auto-capture/ping-v1";
   const planner = window.PlayKeeperGodPlanner;
@@ -1624,7 +1624,7 @@
       liveMain = await waitForStableCurrentPet({ ...liveMain, level: 40 });
       planner.scanMainPet();
     }
-    if (Number(liveMain?.level) !== 40) throw new Error(`主宠补级后仍未确认 Lv40`);
+    if (Number(liveMain?.level) < 40) throw new Error(`主宠补级后仍未确认至少达到 Lv40`);
     logEvent("automation/main-ready", { main: liveMain });
     return liveMain;
   }
@@ -2475,8 +2475,8 @@
       const lockedMain = planner.getState().mainPet;
       await selectCarriedPet(lockedMain, "锁定公式主宠");
       const mainBeforeEvolution = planner.scanMainPet();
-      if (Number(mainBeforeEvolution.level) !== 40) {
-        throw new Error(`进化前锁定公式主宠 ${mainBeforeEvolution.name || "未知"} 为 Lv${mainBeforeEvolution.level || "未知"}，必须为 Lv40`);
+      if (Number(mainBeforeEvolution.level) < 40) {
+        throw new Error(`进化前锁定公式主宠 ${mainBeforeEvolution.name || "未知"} 为 Lv${mainBeforeEvolution.level || "未知"}，必须至少达到 Lv40`);
       }
       const requestedEvolutions = Math.max(0, Math.min(10, Number(planner.getConfig().evolutionPerCycle) || 0));
       let evolutionsDone = Math.max(0, Number(checkpoint.evolutionsDone) || 0);
@@ -2521,8 +2521,8 @@
       await selectCarriedPet(main, "锁定公式主宠");
       let refreshedMain = planner.scanMainPet();
       deputy = await verifyCarriedDeputyLevel40(deputy);
-      if (Number(refreshedMain.level) !== 40 || Number(deputy?.level) !== 40) {
-        throw new Error(`合成前实时等级不满足：主宠 Lv${refreshedMain.level || "未知"}，副宠 Lv${deputy?.level || "未知"}`);
+      if (Number(refreshedMain.level) < 40 || Number(deputy?.level) < 40) {
+        throw new Error(`合成前实时等级不满足至少 Lv40：主宠 Lv${refreshedMain.level || "未知"}，副宠 Lv${deputy?.level || "未知"}`);
       }
       await selectCarriedPet(refreshedMain, "锁定公式主宠");
       refreshedMain = planner.scanMainPet();

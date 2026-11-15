@@ -282,6 +282,14 @@ const synthPartialOk = core.validateSynthesisTransaction({
 });
 assert.equal(synthPartialOk.ok, true);
 
+const synthAboveLevel40Ok = core.validateSynthesisTransaction({
+  mainPet: { name: "主", level: 42, tier: 10, cc: 130 },
+  deputyPet: { name: "副", level: 41, tier: 8, cc: 3 },
+  inventory: { supremeStone: 0 },
+  config: { mode: "formula", useSupremeStone: false, fullQualificationCc: 60 },
+});
+assert.equal(synthAboveLevel40Ok.ok, true, "主副宠高于 Lv40 时仍应允许合成");
+
 const plan = core.buildPlan({
   mainPet: { name: "主宠", level: 40, tier: 10, tierText: "十阶", cc: 58, element: "水" },
   deputyPet: { name: "副宠", level: 40, tier: 8, tierText: "八阶", cc: 2, element: "火" },
@@ -346,4 +354,4 @@ assert.equal(replannedAfter500.ok, true);
 assert.equal(replannedAfter500.totalW, 65);
 assert.equal(replannedAfter500.uses[0].count, 13);
 
-console.log("god-planner v1.5.6 tests passed");
+console.log("god-planner v1.5.7 tests passed");

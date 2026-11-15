@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Play Keeper 自动捕捉 / 神宠自动合宠",
-  "version": "1.5.6",
-  "description": "口袋宠物 Windows 浏览器工具 v1.5.6：修复普通培养停止 CC 的逐轮复核。",
+  "version": "1.5.7",
+  "description": "口袋宠物 Windows 浏览器工具 v1.5.7：合成流程兼容高于 Lv40 的主宠和副宠。",
   "permissions": [
     "debugger"
   ],

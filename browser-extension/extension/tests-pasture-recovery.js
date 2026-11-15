@@ -47,5 +47,11 @@ const autoLoopSource = source.slice(source.indexOf("async function startAutoLoop
 assert.ok(autoLoopSource.indexOf('targetCcReached(beforeCycleMain, stopCc, "before-cycle", cycle)')
   < autoLoopSource.indexOf('saveAutoCheckpoint("start", null)'),
 "达到停止 CC 时必须保留 complete 检查点，不能先重置下一轮");
+assert.match(source, /Number\(liveMain\?\.level\) < 40/,
+  "主宠准备完成应接受 Lv40 及以上等级");
+assert.match(source, /Number\(mainBeforeEvolution\.level\) < 40/,
+  "进化前检查应接受高于 Lv40 的主宠");
+assert.match(source, /Number\(refreshedMain\.level\) < 40 \|\| Number\(deputy\?\.level\) < 40/,
+  "合成前检查应接受 Lv40 及以上的主宠和副宠");
 
-console.log("pasture recovery v1.5.6 tests passed");
+console.log("pasture recovery v1.5.7 tests passed");
