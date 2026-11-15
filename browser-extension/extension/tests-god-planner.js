@@ -293,6 +293,16 @@ assert.equal(plan.candidates.length, 1);
 assert.equal(plan.deputyPet.name, "副宠");
 assert.ok(plan.warnings.some((item) => item.includes("参数冲突提醒")));
 
+const exactTargetPlan = core.buildPlan({
+  mainPet: { name: "主宠", level: 40, tier: 10, tierText: "十阶", cc: 115, element: "水" },
+  deputyPet: { name: "副宠", level: 40, tier: 8, tierText: "八阶", cc: 2, element: "火" },
+  pasturePets: [{ name: "副宠", tier: 8, level: 40, cc: 2 }],
+  inventory: { strengthA: 0, strengthB: 0, supremeStone: 0 },
+  config: { mode: "full", targetCc: 115, fullQualificationCc: 60, useSupremeStone: false },
+});
+assert.ok(exactTargetPlan.steps.some((step) => step.type === "target-cc-reached"),
+  "主宠 CC 等于停止值时也必须判定为已达到目标");
+
 const formulaPlanWithoutMain = core.buildPlan({
   mainPet: null,
   deputyPet: { name: "副宠", level: 40, tier: 4, cc: 25 },
@@ -336,4 +346,4 @@ assert.equal(replannedAfter500.ok, true);
 assert.equal(replannedAfter500.totalW, 65);
 assert.equal(replannedAfter500.uses[0].count, 13);
 
-console.log("god-planner v1.5.5 tests passed");
+console.log("god-planner v1.5.6 tests passed");

@@ -625,8 +625,8 @@
       if (cfg.mode === "full") {
         if (mainPet.tier !== 10) steps.push({ type: "evolve-main", text: `主宠当前 ${mainPet.tierText || mainPet.tier + "阶"}，需进化到十阶` });
         else steps.push({ type: "tier-ok", text: "主宠已为十阶" });
-        if (mainPet.cc > cfg.targetCc) steps.push({ type: "target-cc-reached", text: `主宠 CC=${mainPet.cc} 已高于普通培养停止值 ${cfg.targetCc}` });
-        else steps.push({ type: "raise-cc", text: `主宠 CC=${mainPet.cc}，继续培养至 > ${cfg.targetCc}` });
+        if (mainPet.cc >= cfg.targetCc) steps.push({ type: "target-cc-reached", text: `主宠 CC=${mainPet.cc} 已达到普通培养停止值 ${cfg.targetCc}` });
+        else steps.push({ type: "raise-cc", text: `主宠 CC=${mainPet.cc}，继续培养至 ≥ ${cfg.targetCc}` });
         if (mainPet.tier === 10 && mainPet.cc > cfg.fullQualificationCc) {
           steps.push({ type: "full-qualification", text: `已满足满神资格门槛：十阶且 CC>${cfg.fullQualificationCc}` });
         } else {

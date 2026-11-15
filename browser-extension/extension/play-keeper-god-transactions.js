@@ -4,7 +4,7 @@
   if (window.__PK_GOD_TRANSACTIONS_V150__) return;
   window.__PK_GOD_TRANSACTIONS_V150__ = true;
 
-  const VERSION = "1.5.5";
+  const VERSION = "1.5.6";
   const TRUSTED_CLICK_MESSAGE = "pk-auto-capture/trusted-click-v1";
   const TRUSTED_CLICK_PING = "pk-auto-capture/ping-v1";
   const planner = window.PlayKeeperGodPlanner;
@@ -1577,6 +1577,31 @@
     return refreshedCard;
   }
 
+  async function readLockedMainLive(roleLabel = "培养停止值复核") {
+    const locked = planner.getState().mainPet;
+    await openPetAttributes();
+    await selectCarriedPet(locked, roleLabel);
+    const liveMain = planner.scanMainPet();
+    if (!liveMain?.name || normalize(liveMain.name) !== normalize(locked?.name)) {
+      throw new Error(`培养停止值复核失败：预期主宠 ${locked?.name || "未知"}，实际读取 ${liveMain?.name || "未知"}`);
+    }
+    return liveMain;
+  }
+
+  function targetCcReached(main, stopCc, phase, cycle = runtime.autoCycle) {
+    const currentCc = Number(main?.cc);
+    const reached = Number.isFinite(stopCc) && Number.isFinite(currentCc) && currentCc >= stopCc;
+    logEvent("automation/target-cc-check", {
+      phase,
+      cycle,
+      main: main?.name || "",
+      currentCc,
+      stopCc,
+      reached,
+    });
+    return reached;
+  }
+
   async function ensureLockedMainReady() {
     const locked = planner.getState().mainPet;
     await openPetAttributes();
@@ -2550,24 +2575,35 @@
     runtime.autoStats = createAutoStats(maxCycles, maxSynthesisRetries);
     let outcome = "正常结束";
     let finalReason = "";
+    const stopCc = Number(planner.getConfig().targetCc);
     logEvent("automation/start", { maxCycles, maxSynthesisRetries, main: state.mainPet, config: planner.getConfig() });
     try {
       await requireValidLicense({ forceRefresh: true });
+      const initialMain = await readLockedMainLive("启动前培养停止值复核");
+      if (targetCcReached(initialMain, stopCc, "before-start", 0)) {
+        outcome = "已达到培养目标";
+        finalReason = `主宠 ${initialMain.name} CC ${initialMain.cc} 已达到培养停止值 ${stopCc}`;
+        logEvent("automation/stop-cc-reached", { phase: "before-start", cycle: 0, main: initialMain, stopCc });
+        return;
+      }
       await ensureLockedMainReady();
       await refreshBagSnapshot("automation/preflight");
       await openPasture();
       planner.scanPasture();
-      const readyMain = planner.getState().mainPet;
-      const stopCc = Number(planner.getConfig().targetCc);
-      if (Number.isFinite(stopCc) && Number(readyMain?.cc) >= stopCc) {
-        outcome = "未执行";
-        finalReason = `主宠 ${readyMain.name} CC ${readyMain.cc} 已达到培养停止值 ${stopCc}`;
-        logEvent("automation/stop-cc-reached", { main: readyMain, stopCc });
-        return;
-      }
       for (let cycle = 1; cycle <= maxCycles && !runtime.stopRequested; cycle += 1) {
-        if (runtime.autoCheckpoint?.stage === "complete") saveAutoCheckpoint("start", null);
         runtime.autoCycle = cycle;
+        if (cycle > 1) {
+          const beforeCycleMain = await readLockedMainLive("下一轮前培养停止值复核");
+          if (targetCcReached(beforeCycleMain, stopCc, "before-cycle", cycle)) {
+            outcome = "已达到培养目标";
+            finalReason = `主宠 ${beforeCycleMain.name} CC ${beforeCycleMain.cc} 已达到培养停止值 ${stopCc}`;
+            logEvent("automation/stop-cc-reached", {
+              phase: "before-cycle", cycle, main: beforeCycleMain, stopCc,
+            });
+            break;
+          }
+        }
+        if (runtime.autoCheckpoint?.stage === "complete") saveAutoCheckpoint("start", null);
         if (cycle > 1) {
           setTxStatus(`自动循环 ${cycle}/${maxCycles}：先复核上一轮合成后的主宠等级，必要时自动补到 Lv40…`);
           await ensureLockedMainReady();
@@ -2579,6 +2615,17 @@
         logEvent("automation/cycle-finish", { cycle, result });
         if (result?.stopped) break;
         if (result?.success) bumpAutoStat("cyclesCompleted");
+        if (result?.success) {
+          const afterSynthesisMain = await readLockedMainLive("合成后培养停止值复核");
+          if (targetCcReached(afterSynthesisMain, stopCc, "after-synthesis", cycle)) {
+            outcome = "已达到培养目标";
+            finalReason = `主宠 ${afterSynthesisMain.name} CC ${afterSynthesisMain.cc} 已达到培养停止值 ${stopCc}`;
+            logEvent("automation/stop-cc-reached", {
+              phase: "after-synthesis", cycle, main: afterSynthesisMain, stopCc,
+            });
+            break;
+          }
+        }
         if (result?.success && cycle < maxCycles) saveAutoCheckpoint("start", null);
       }
       if (runtime.stopRequested) {

@@ -39,5 +39,13 @@ assert.match(source, /AutomationStopRequestedError/,
   "用户停止应与页面加载错误分开处理");
 assert.match(source, /currentPageKind\(\) === "pet-attributes"/,
   "宠物资料页判断不能仅依赖牧场也会使用的通用布局类名");
+assert.match(source, /targetCcReached\(afterSynthesisMain, stopCc, "after-synthesis", cycle\)/,
+  "每轮合成成功后必须立即复核培养停止 CC");
+assert.match(source, /targetCcReached\(beforeCycleMain, stopCc, "before-cycle", cycle\)/,
+  "下一轮补级和取副宠前必须再次复核培养停止 CC");
+const autoLoopSource = source.slice(source.indexOf("async function startAutoLoop"), source.indexOf("function stopAutoLoop"));
+assert.ok(autoLoopSource.indexOf('targetCcReached(beforeCycleMain, stopCc, "before-cycle", cycle)')
+  < autoLoopSource.indexOf('saveAutoCheckpoint("start", null)'),
+"达到停止 CC 时必须保留 complete 检查点，不能先重置下一轮");
 
-console.log("pasture recovery v1.5.5 tests passed");
+console.log("pasture recovery v1.5.6 tests passed");

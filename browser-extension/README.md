@@ -1,6 +1,6 @@
 # Play Keeper 浏览器插件
 
-这是 Play Keeper Android App 的附属浏览器功能模块，当前源码版本为 **v1.5.5**。它通过 Chrome 扩展在 `sgplay.cc` 游戏页提供神宠规划、单次进化/合成、牧场补级、自动循环、诊断日志和许可证校验。
+这是 Play Keeper Android App 的附属浏览器功能模块，当前源码版本为 **v1.5.6**。它通过 Chrome 扩展在 `sgplay.cc` 游戏页提供神宠规划、单次进化/合成、牧场补级、自动循环、诊断日志和许可证校验。
 
 ## 目录
 
@@ -13,7 +13,7 @@
 ```bash
 git clone https://github.com/little-hao/Play_keeper.git
 cd Play_keeper
-git switch fix/browser-extension-v1.5.5-auto-recovery
+git switch fix/browser-extension-v1.5.6-target-cc
 node --check browser-extension/extension/background.js
 node browser-extension/extension/tests-god-planner.js
 ```
