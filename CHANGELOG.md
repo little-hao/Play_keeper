@@ -1,5 +1,11 @@
 # Changelog
 
+## Browser extension 1.6.0 — 2026-11-16
+
+- 连续进化等待改为活动时间预算，后台停滞时自动切回前台一次。
+- 进化最终提示缺失时以属性页“进化次数恰好 +1”兜底核验，避免重复点击。
+- 诊断日志跨页面刷新保留，并新增窗口焦点、页面可见、冻结与恢复记录。
+
 ## 2.0.7 — 2026-11-07
 
 - 正式合入并行账号每日任务、每账号返回地图、可选道具拍卖、背包汇总和邮件报告。
@@ -428,3 +434,14 @@
 - 初始单账号 WebView 测试版。
 - 增加保持亮屏、黑色遮罩、首页、刷新和 User-Agent 切换。
 - 仅对 `sgplay.cc` 开放明文 HTTP。
+# Browser extension v1.5.8
+
+- Added an opt-in experimental background-run mode with verified foreground recovery.
+- Added browser focus, active-tab, minimized-window and page-visibility diagnostics.
+- Batched consecutive main-pet evolution with configurable checkpoints and optional CC checks.
+- Reduced synthesis failure cooldown to five seconds and added one bounded full temple re-entry recovery.
+# Browser extension v1.5.9
+
+- Replaced repeated evolution text comparison with per-click mutation and processing-state observation.
+- Treats the ten-evolution message as a normal limit and continues to synthesis.
+- Detects partially refreshed level/experience fields during background operation and performs a bounded foreground refresh without repeating item consumption.

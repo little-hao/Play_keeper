@@ -4,7 +4,7 @@
   if (window.__PK_GOD_PLANNER_V150__) return;
   window.__PK_GOD_PLANNER_V150__ = true;
 
-  const VERSION = "1.5.7";
+  const VERSION = "1.6.0";
   const core = globalThis.PlayKeeperGodPlannerCore;
   if (!core) {
     console.error("[PK God Planner] core 未加载");
@@ -35,6 +35,9 @@
     pastureUpgradeCount: 1,
     pastureMaxTier: 8,
     evolutionPerCycle: 1,
+    evolutionVerifyBatchSize: 5,
+    verifyCcDuringEvolutionBatch: true,
+    allowBackgroundAttempt: false,
     guardMaterialName: "天神之石",
     auxiliaryMaterialName: "★★★成长魂石",
   });
@@ -55,6 +58,9 @@
   let pastureUpgradeCountNode;
   let pastureMaxTierNode;
   let evolutionPerCycleNode;
+  let evolutionVerifyBatchSizeNode;
+  let verifyCcDuringEvolutionBatchNode;
+  let allowBackgroundAttemptNode;
   let guardMaterialNode;
   let auxiliaryMaterialNode;
 
@@ -344,6 +350,9 @@
       pastureUpgradeCount: Math.max(1, Math.floor(Number(pastureUpgradeCountNode?.value) || 1)),
       pastureMaxTier: Math.max(1, Math.min(10, Math.floor(Number(pastureMaxTierNode?.value) || 8))),
       evolutionPerCycle: Math.max(0, Math.min(10, Math.floor(Number(evolutionPerCycleNode?.value) || 0))),
+      evolutionVerifyBatchSize: Math.max(1, Math.min(10, Math.floor(Number(evolutionVerifyBatchSizeNode?.value) || 5))),
+      verifyCcDuringEvolutionBatch: Boolean(verifyCcDuringEvolutionBatchNode?.checked),
+      allowBackgroundAttempt: Boolean(allowBackgroundAttemptNode?.checked),
       guardMaterialName: String(guardMaterialNode?.value || "天神之石").trim() || "天神之石",
       auxiliaryMaterialName: String(auxiliaryMaterialNode?.value || "★★★成长魂石").trim() || "★★★成长魂石",
     };
@@ -550,7 +559,7 @@
       <section class="panel">
         <div class="panel-head"><h3>神宠规划器 v${VERSION}</h3><button class="compact-toggle secondary">收起</button></div>
         <div class="panel-body">
-        <div class="sub">阶段 1 · Planner（v1.5.7 合成兼容 Lv40 以上宠物）</div>
+        <div class="sub">阶段 1 · Planner（v1.6.0 后台看门狗与持久诊断）</div>
         <div class="phase">规划器本身只读；下方阶段2单次事务会在明确确认后执行。</div>
         <div class="grid">
           <div class="row"><label>模式</label><select class="mode"><option value="full">满神</option><option value="partial">残神</option><option value="formula">公式神宠</option></select></div>
@@ -560,6 +569,7 @@
           <div class="row"><label>牧场升级数量</label><input class="pasture-upgrade-count" type="number" min="1" max="60" step="1"></div>
           <div class="row"><label>牧场最高阶数</label><input class="pasture-max-tier" type="number" min="1" max="10" step="1"></div>
           <div class="row"><label>每周期主宠进化次数</label><input class="evolution-per-cycle" type="number" min="0" max="10" step="1"></div>
+          <div class="row"><label>连续进化核验间隔</label><input class="evolution-verify-batch-size" type="number" min="1" max="10" step="1"></div>
           <div class="row"><label>守护材料</label><input class="guard-material" maxlength="30"></div>
           <div class="row"><label>辅助材料</label><input class="auxiliary-material" maxlength="30"></div>
         </div>
@@ -567,6 +577,8 @@
           <label><input class="evolution-material" type="checkbox">规划中允许使用进化材料</label>
           <label><input class="direct-evolution" type="checkbox">无进化材料时允许直接进化</label>
           <label><input class="supreme" type="checkbox">满足最终条件时规划使用至尊神石</label>
+          <label><input class="verify-cc-batch" type="checkbox">连续进化期间核验 CC</label>
+          <label><input class="allow-background" type="checkbox">允许尝试后台运行（实验，默认关闭）</label>
         </div>
         <div class="buttons">
           <button class="auto-scan">扫描当前页</button><button class="main secondary">锁定主宠</button>
@@ -598,6 +610,9 @@
     pastureUpgradeCountNode = shadow.querySelector(".pasture-upgrade-count");
     pastureMaxTierNode = shadow.querySelector(".pasture-max-tier");
     evolutionPerCycleNode = shadow.querySelector(".evolution-per-cycle");
+    evolutionVerifyBatchSizeNode = shadow.querySelector(".evolution-verify-batch-size");
+    verifyCcDuringEvolutionBatchNode = shadow.querySelector(".verify-cc-batch");
+    allowBackgroundAttemptNode = shadow.querySelector(".allow-background");
     guardMaterialNode = shadow.querySelector(".guard-material");
     auxiliaryMaterialNode = shadow.querySelector(".auxiliary-material");
 
@@ -611,6 +626,9 @@
     pastureUpgradeCountNode.value = String(config.pastureUpgradeCount || 1);
     pastureMaxTierNode.value = String(config.pastureMaxTier || 8);
     evolutionPerCycleNode.value = String(config.evolutionPerCycle ?? 1);
+    evolutionVerifyBatchSizeNode.value = String(config.evolutionVerifyBatchSize ?? 5);
+    verifyCcDuringEvolutionBatchNode.checked = config.verifyCcDuringEvolutionBatch !== false;
+    allowBackgroundAttemptNode.checked = Boolean(config.allowBackgroundAttempt);
     guardMaterialNode.value = String(config.guardMaterialName || "天神之石");
     auxiliaryMaterialNode.value = String(config.auxiliaryMaterialName || "★★★成长魂石");
 
@@ -645,8 +663,8 @@
     });
     shadow.querySelector(".hide").addEventListener("click", () => { panelHost.style.display = "none"; });
     for (const node of [modeNode, targetCcNode, qualificationCcNode, expTargetNode, pastureUpgradeCountNode,
-      pastureMaxTierNode, evolutionPerCycleNode, guardMaterialNode, auxiliaryMaterialNode,
-      evolutionMaterialNode, directEvolutionNode, supremeNode]) {
+      pastureMaxTierNode, evolutionPerCycleNode, evolutionVerifyBatchSizeNode, guardMaterialNode, auxiliaryMaterialNode,
+      evolutionMaterialNode, directEvolutionNode, supremeNode, verifyCcDuringEvolutionBatchNode, allowBackgroundAttemptNode]) {
       node.addEventListener("change", () => { saveConfig(); if (state.lastPlan) buildPlan(); });
     }
     if (!applySavedPosition()) applyDock(localStorage.getItem(DOCK_KEY) || "right");

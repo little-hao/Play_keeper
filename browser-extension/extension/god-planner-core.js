@@ -284,6 +284,35 @@
     };
   }
 
+  function classifyPetProgressConsistency(pet) {
+    if (!pet || Number(pet.level) >= 40) return { ok: true, transitional: false, observed: pet || null };
+    const currentExp = Number(pet.currentExp);
+    const upgradeExp = Number(pet.upgradeExp);
+    if (!Number.isFinite(currentExp) || !Number.isFinite(upgradeExp)) {
+      return { ok: false, transitional: false, reason: "页面缺少等级、当前经验或升级经验" };
+    }
+    const inferred = estimateLevelProgressFromTotalExp(currentExp);
+    if (!inferred?.ok) return { ok: false, transitional: false, reason: inferred?.reason || "无法按累计经验推算等级" };
+    const displayedLevel = Number(pet.level);
+    const inferredLevel = Number(inferred.level);
+    const thresholdMatchesInferred = inferredLevel >= 40
+      ? upgradeExp <= 0
+      : Math.abs(upgradeExp - Number(inferred.upgradeExp)) <= EXP_DISPLAY_TOLERANCE;
+    if (displayedLevel !== inferredLevel && thresholdMatchesInferred) {
+      return {
+        ok: false,
+        transitional: true,
+        reason: `累计经验和升级阈值已对应 Lv${inferredLevel}，但等级文字仍显示 Lv${displayedLevel}`,
+        displayedLevel,
+        inferredLevel,
+        currentExp,
+        displayedUpgradeExp: upgradeExp,
+        expectedUpgradeExp: inferred.upgradeExp,
+      };
+    }
+    return { ok: true, transitional: false, observed: pet, inferredLevel, expectedUpgradeExp: inferred.upgradeExp };
+  }
+
   function parsePastureRow(text) {
     const raw = clean(text);
     const match = raw.match(/(.{1,30}?)[（(]\s*([一二三四五六七八九十\d]+阶)\s*([金木水火土]?)\s*[)）]\s*(?:Lv|LV|等级)?\s*(\d{1,3})\s+(\d+(?:\.\d+)?)(?:\s|$)/);
@@ -717,6 +746,7 @@
     parsePetProgressText,
     remainingExpToLevel40,
     estimateLevelProgressFromTotalExp,
+    classifyPetProgressConsistency,
     parsePastureRow,
     dedupePets,
     planExperience,

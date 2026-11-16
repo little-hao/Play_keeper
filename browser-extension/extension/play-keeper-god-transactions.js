@@ -4,9 +4,11 @@
   if (window.__PK_GOD_TRANSACTIONS_V150__) return;
   window.__PK_GOD_TRANSACTIONS_V150__ = true;
 
-  const VERSION = "1.5.7";
+  const VERSION = "1.6.0";
   const TRUSTED_CLICK_MESSAGE = "pk-auto-capture/trusted-click-v1";
   const TRUSTED_CLICK_PING = "pk-auto-capture/ping-v1";
+  const BROWSER_CONTEXT_MESSAGE = "pk-auto-capture/browser-context-v1";
+  const FOREGROUND_MESSAGE = "pk-auto-capture/foreground-v1";
   const planner = window.PlayKeeperGodPlanner;
   const core = window.PlayKeeperGodPlannerCore;
   const license = window.PlayKeeperLicense;
@@ -16,6 +18,7 @@
   }
 
   const AUTO_CHECKPOINT_KEY = "pk-god-auto-checkpoint-v1";
+  const DIAGNOSTIC_SESSION_KEY = "pk-god-transactions-diagnostic-v3";
   const STATUS_POSITION_KEY = "pk-god-status-position-v1";
   function readAutoCheckpoint() {
     try {
@@ -27,7 +30,16 @@
   }
   const runtime = { running: false, autoRunning: false, stopRequested: false, lastAction: "", startedAt: 0, lastResult: null, autoCycle: 0,
     autoCheckpoint: readAutoCheckpoint(), autoStats: null };
-  const diagnosticLog = [];
+  function readPersistedDiagnosticLog() {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(DIAGNOSTIC_SESSION_KEY) || "null");
+      return Array.isArray(saved?.events) ? saved.events.slice(-1000) : [];
+    } catch (_) {
+      return [];
+    }
+  }
+  const diagnosticLog = readPersistedDiagnosticLog();
+  let diagnosticPersistTimer = 0;
   let txStatus;
   let statusFloatHost;
   let statusFloatText;
@@ -59,6 +71,7 @@
       deputiesWithdrawn: 0,
       evolutionAttempts: 0, evolutionSuccesses: 0, evolutionMaterialSkips: 0,
       synthesisAttempts: 0, synthesisSuccesses: 0, synthesisFailures: 0,
+      foregroundRecoveries: 0, ccVerifications: 0, synthesisPageRecoveries: 0,
       errors: 0,
     };
   }
@@ -83,6 +96,7 @@
       `取出副宠：${stats.deputiesWithdrawn} 只`,
       `进化：提交 ${stats.evolutionAttempts} 次，成功 ${stats.evolutionSuccesses} 次，材料不足跳过 ${stats.evolutionMaterialSkips} 次`,
       `合成：提交 ${stats.synthesisAttempts} 次，成功 ${stats.synthesisSuccesses} 次，失败 ${stats.synthesisFailures} 次`,
+      `恢复：切回前台 ${stats.foregroundRecoveries} 次，重进合成页 ${stats.synthesisPageRecoveries} 次；CC 核验 ${stats.ccVerifications} 次`,
       `耗时：${formatElapsed(Date.now() - stats.startedAt)}`,
     ];
     if (reason) lines.push(`结束原因：${reason}`);
@@ -103,14 +117,34 @@
   }
 
   function logEvent(event, details = {}) {
+    let safeDetails;
+    try {
+      safeDetails = structuredClone(details);
+    } catch (_) {
+      try {
+        safeDetails = JSON.parse(JSON.stringify(details, (_key, value) => (
+          value instanceof Element ? elementDiagnostic(value) : value
+        )));
+      } catch (_) {
+        safeDetails = { serializationError: true, summary: String(details) };
+      }
+    }
     diagnosticLog.push({
       at: new Date().toISOString(),
       version: VERSION,
       event,
       action: runtime.lastAction || "",
-      details,
+      details: safeDetails,
     });
     if (diagnosticLog.length > 1000) diagnosticLog.splice(0, diagnosticLog.length - 1000);
+    clearTimeout(diagnosticPersistTimer);
+    diagnosticPersistTimer = setTimeout(() => {
+      try {
+        sessionStorage.setItem(DIAGNOSTIC_SESSION_KEY, JSON.stringify({
+          version: VERSION, savedAt: new Date().toISOString(), events: diagnosticLog.slice(-1000),
+        }));
+      } catch (_) {}
+    }, 50);
   }
 
   function elementDiagnostic(element) {
@@ -414,11 +448,82 @@
     }
   }
 
+  function pageVisibilitySnapshot() {
+    return {
+      visibilityState: document.visibilityState,
+      hidden: Boolean(document.hidden),
+      hasFocus: Boolean(document.hasFocus()),
+    };
+  }
+
+  async function readBrowserContext(reason = "") {
+    const response = await globalThis.chrome.runtime.sendMessage({ type: BROWSER_CONTEXT_MESSAGE });
+    const context = response?.ok ? response.context : { error: response?.error || "浏览器状态读取失败" };
+    runtime.lastBrowserContext = { ...context, ...pageVisibilitySnapshot(), reason, at: new Date().toISOString() };
+    return runtime.lastBrowserContext;
+  }
+
+  async function bringGameToForeground(reason) {
+    const response = await globalThis.chrome.runtime.sendMessage({ type: FOREGROUND_MESSAGE, reason });
+    if (!response?.ok) throw new Error(`无法将游戏标签页切回前台：${response?.error || "扩展后台无响应"}`);
+    await sleep(250);
+    const context = await readBrowserContext(reason);
+    logEvent("browser/foreground-recovery", { reason, response: response.details, context });
+    bumpAutoStat("foregroundRecoveries");
+    return context;
+  }
+
+  function isForegroundContext(context) {
+    return Boolean(context?.tabActive && context?.windowFocused && !context?.minimized
+      && context?.visibilityState === "visible" && context?.hasFocus);
+  }
+
+  function installLifecycleDiagnostics() {
+    const record = (event, extra = {}) => {
+      const page = pageVisibilitySnapshot();
+      logEvent(`lifecycle/${event}`, { page, ...extra });
+      readBrowserContext(`lifecycle/${event}`).then((context) => {
+        logEvent(`lifecycle/${event}-browser-context`, { context });
+      }).catch(() => {});
+    };
+    document.addEventListener("visibilitychange", () => record("visibilitychange"));
+    window.addEventListener("focus", () => record("window-focus"));
+    window.addEventListener("blur", () => record("window-blur"));
+    window.addEventListener("pagehide", (event) => record("pagehide", { persisted: Boolean(event.persisted) }));
+    window.addEventListener("pageshow", (event) => record("pageshow", { persisted: Boolean(event.persisted) }));
+    document.addEventListener("freeze", () => record("freeze"));
+    document.addEventListener("resume", () => record("resume"));
+  }
+
+  installLifecycleDiagnostics();
+
+  async function withForegroundRecovery(label, operation) {
+    try {
+      return await operation(false);
+    } catch (error) {
+      const config = planner.getConfig();
+      const context = await readBrowserContext(`${label}/verification-failed`).catch(() => ({}));
+      if (!config.allowBackgroundAttempt || isForegroundContext(context)) throw error;
+      logEvent("browser/background-verification-failed", {
+        label, error: String(error?.message || error), context,
+      });
+      await bringGameToForeground(`${label}首次结果验证失败`);
+      return operation(true);
+    }
+  }
+
   async function trustedClick(element, label) {
     if (!isInteractable(element)) throw new Error(`${label}：目标不可点击或已离开页面`);
     await requireValidLicense();
     logEvent("trusted-click/request", { label, target: elementDiagnostic(element) });
     await ensureBridge();
+    const beforeContext = await readBrowserContext(label);
+    const allowBackgroundAttempt = Boolean(planner.getConfig().allowBackgroundAttempt);
+    if (!allowBackgroundAttempt && !isForegroundContext(beforeContext)) {
+      await bringGameToForeground(`${label}（后台尝试已关闭）`);
+    } else if (allowBackgroundAttempt && !isForegroundContext(beforeContext)) {
+      logEvent("browser/background-attempt", { label, context: beforeContext });
+    }
     const panelHost = document.getElementById("pk-god-planner-host");
     const previousPointerEvents = panelHost?.style.pointerEvents || "";
     if (panelHost) panelHost.style.pointerEvents = "none";
@@ -438,7 +543,11 @@
         y,
       });
       if (!response?.ok) throw new Error(`${label}：可信点击失败：${response?.error || "后台无确认"}`);
-      logEvent("trusted-click/success", { label, requestId, x, y, method: response?.method || "" });
+      logEvent("trusted-click/success", {
+        label, requestId, x, y, method: response?.method || "",
+        browserContextBefore: beforeContext,
+        pageVisibilityAfter: pageVisibilitySnapshot(),
+      });
     } finally {
       if (panelHost) panelHost.style.pointerEvents = previousPointerEvents;
     }
@@ -490,7 +599,7 @@
     }));
   }
 
-  async function selectRecordedPet(slotIndex, target, roleLabel) {
+  async function selectRecordedPetAttempt(slotIndex, target, roleLabel) {
     const triggers = Array.from(document.querySelectorAll(".content-bor2 .pet-trigger")).filter(isInteractable);
     if (triggers.length !== 2) throw new Error(`合成页宠物下拉结构不一致：应为 2 个，实际 ${triggers.length} 个`);
     await trustedClick(triggers[slotIndex], `打开${roleLabel}下拉`);
@@ -536,6 +645,10 @@
     if (!confirmed) throw new Error(`${roleLabel}选择后页面没有显示“${target.name}”及其等级；停止`);
     logEvent("synthesis/pet-selected", { role: roleLabel, name: target.name });
     return { name: selected.option.name, level: selected.option.level, growth: selected.option.growth, portraitKey: selected.option.portraitKey, displayed: confirmed };
+  }
+
+  async function selectRecordedPet(slotIndex, target, roleLabel) {
+    return selectRecordedPetAttempt(slotIndex, target, roleLabel);
   }
 
   function synthesisPetSlotText(slotIndex) {
@@ -631,6 +744,81 @@
       if (count > (before.get(text) || 0)) added.push(text);
     }
     return added;
+  }
+
+  async function clickAndObserveEvolution(action, label) {
+    const startedAt = Date.now();
+    const observed = [];
+    const observedKeys = new Set();
+    let busySeen = false;
+    let final = null;
+    let activeElapsedMs = 0;
+    let lastTickAt = Date.now();
+    let foregroundRecoveryAttempted = false;
+    let lastContextCheckAt = 0;
+    const readEvolutionStatus = (root = document) => {
+      const text = String(root?.innerText || root?.textContent || "").trim().replace(/\s+/g, " ");
+      if (!text || text.length > 260) return "";
+      const match = text.match(/(?:进化中(?:\.{2,}|…+)?|恭喜您[，,]?\s*宝贝进化成功[！!]{0,2}|进化道具不足[！!]{0,2}|宠物已进化十次[！!]?\s*无法继续进化)/);
+      return match?.[0] || "";
+    };
+    const record = (root) => {
+      const text = readEvolutionStatus(root);
+      if (!text) return;
+      const at = Date.now();
+      const key = `${text}|${Math.floor(at / 100)}`;
+      if (!observedKeys.has(key)) {
+        observedKeys.add(key);
+        observed.push({ at, text });
+      }
+      if (/进化中/.test(text)) busySeen = true;
+      if (/进化成功/.test(text)) final = { text, success: true, insufficient: false, limitReached: false };
+      else if (/进化道具不足/.test(text)) final = { text, success: false, insufficient: true, limitReached: false };
+      else if (/已进化十次/.test(text)) final = { text, success: false, insufficient: false, limitReached: true };
+    };
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        record(mutation.target);
+        for (const node of mutation.addedNodes || []) record(node);
+      }
+    });
+    observer.observe(document.body, { subtree: true, childList: true, characterData: true });
+    try {
+      await trustedClick(action, label);
+      let result = null;
+      while (activeElapsedMs < 25000) {
+        await sleep(120);
+        const now = Date.now();
+        // 页面被冻结时，定时器恢复后的巨大时间差不计入有效等待时间。
+        activeElapsedMs += Math.min(500, Math.max(0, now - lastTickAt));
+        lastTickAt = now;
+        if (final && (final.limitReached || final.insufficient || busySeen
+          || observed.some((entry) => /进化成功/.test(entry.text)))) {
+          result = final;
+          break;
+        }
+        if (busySeen && activeElapsedMs >= 8000 && !foregroundRecoveryAttempted
+          && now - lastContextCheckAt >= 1000) {
+          lastContextCheckAt = now;
+          const context = await readBrowserContext("进化中等待最终结果").catch(() => ({}));
+          if (!isForegroundContext(context)) {
+            foregroundRecoveryAttempted = true;
+            logEvent("evolution/background-stall-detected", { label, activeElapsedMs, context, observed });
+            await bringGameToForeground("进化中超过 8 秒未返回最终结果");
+          }
+        }
+      }
+      if (result) await sleep(Math.max(0, 1200 - (Date.now() - startedAt)));
+      return {
+        ...(result || {}), observed, busySeen,
+        pendingVerification: !result && busySeen,
+        activeElapsedMs,
+        wallElapsedMs: Date.now() - startedAt,
+        foregroundRecoveryAttempted,
+      };
+    } finally {
+      observer.disconnect();
+    }
   }
 
   function readSynthesisResultMessage() {
@@ -798,6 +986,10 @@
       version: VERSION,
       page: `${location.origin}${location.pathname}${location.hash}`,
       runtime: { ...runtime },
+      browserContext: {
+        lastObserved: runtime.lastBrowserContext || null,
+        page: pageVisibilitySnapshot(),
+      },
       planner: { state, config },
       domSelfTest: collectDomSelfTest(),
       events: diagnosticLog.slice(),
@@ -1009,6 +1201,39 @@
     }, timeout, 250);
   }
 
+  async function recoverTransitionalPetProgress(pet, expectedPet, reason) {
+    let consistency = core.classifyPetProgressConsistency(pet);
+    if (!consistency.transitional) return pet;
+    logEvent("level/transitional-render-detected", { reason, pet, consistency });
+    setTxStatus(`检测到属性页部分更新：${consistency.reason}。暂停使用道具并等待页面同步…`, "warn");
+    let recovered = await waitUntil(() => {
+      const live = currentPet();
+      const check = core.classifyPetProgressConsistency(live);
+      return petMatchesExpected(live, { ...expectedPet, level: undefined }) && check.ok ? live : null;
+    }, 3500, 250);
+    if (recovered) {
+      logEvent("level/transitional-render-recovered", { via: "wait", before: pet, after: recovered });
+      return recovered;
+    }
+    const context = await readBrowserContext("属性页部分更新").catch(() => ({}));
+    if (!isForegroundContext(context)) await bringGameToForeground("属性页等级文字滞后");
+    const refresh = exactAction(["点击刷新"]);
+    if (refresh) await trustedClick(refresh, "刷新属性页以同步等级和经验");
+    await sleep(1800);
+    await openPetAttributes({ ...expectedPet, level: undefined });
+    recovered = await waitUntil(() => {
+      const live = currentPet();
+      const check = core.classifyPetProgressConsistency(live);
+      return petMatchesExpected(live, { ...expectedPet, level: undefined }) && check.ok ? live : null;
+    }, 30000, 300);
+    if (!recovered) {
+      consistency = core.classifyPetProgressConsistency(currentPet());
+      throw new Error(`属性页等级/经验在切回前台并刷新后仍不一致：${consistency.reason || "无法读取稳定状态"}`);
+    }
+    logEvent("level/transitional-render-recovered", { via: "foreground-refresh", before: pet, after: recovered, context });
+    return recovered;
+  }
+
   async function levelTo40Once(expectedPet = null) {
     begin("补当前宠到 Lv40");
     try {
@@ -1040,6 +1265,7 @@
       const maxOperations = 80;
       while (operations < maxOperations) {
         if (pet.level >= 40) break;
+        pet = await recoverTransitionalPetProgress(pet, expectedPet || pet, "补级循环规划前");
         if (pet.currentExp == null || pet.upgradeExp == null) {
           throw new Error("补级快照缺少当前经验/升级经验；停止，不会继续使用道具");
         }
@@ -1125,6 +1351,7 @@
           if (!updated) {
             throw new Error(`${use.name} 点击后既未确认库存减少，也未确认目标宠物等级/经验增加；事务停止且不会重试`);
           }
+          updated = await recoverTransitionalPetProgress(updated, expectedPet || beforePet, `${use.name}使用后属性核验`);
           inventory = { ...inventory, [use.id]: Math.max(0, Number(inventory[use.id] || beforeCount) - 1) };
           if (Number(updated.level) < 40) {
             await openBag();
@@ -1247,6 +1474,21 @@
         verification = await waitForExpectedEvolutionCount(target, expectedEvolutionCount, 30000);
       }
     }
+    if (!verification.observed && !verification.identityMismatch && planner.getConfig().allowBackgroundAttempt) {
+      const context = await readBrowserContext("进化属性变化首次验证失败").catch(() => ({}));
+      if (!isForegroundContext(context)) {
+        logEvent("browser/background-verification-failed", {
+          label: "进化属性变化", expectedEvolutionCount,
+          lastObservedEvolutionCount: verification.lastCount, context,
+        });
+        await bringGameToForeground("进化属性变化首次验证失败");
+        const refresh = exactAction(["点击刷新"]);
+        if (refresh) await trustedClick(refresh, "切回前台后刷新宠物资料");
+        await sleep(1800);
+        await openPetAttributes(target);
+        verification = await waitForExpectedEvolutionCount(target, expectedEvolutionCount, 30000);
+      }
+    }
     if (verification.identityMismatch) {
       throw new Error(`进化后属性页宠物从“${target.name}”变为“${verification.identityMismatch}”；目标不一致，停止`);
     }
@@ -1262,13 +1504,14 @@
     return observed;
   }
 
-  async function evolveOnce() {
-    begin("进化一次");
+  async function evolveOnce(options = {}) {
+    const deferVerification = Boolean(options.deferVerification);
+    begin(deferVerification ? "连续进化一步" : "进化一次");
     try {
       requireConfirmation();
-      await refreshBagSnapshot("进化预检");
+      if (options.refreshInventory !== false) await refreshBagSnapshot("进化预检");
       const state = planner.getState();
-      const pet = state.mainPet;
+      const pet = options.petOverride || state.mainPet;
       logEvent("evolution/preflight-snapshot", { pet, page: currentPageKind() });
       const preflight = core.validateEvolutionTransaction({ pet });
       if (!preflight.ok) throw new Error(preflight.reason);
@@ -1303,11 +1546,16 @@
       if (targetOptions.length !== 1) {
         throw new Error(`进化页无法按头像精确匹配“${pet.name}”（标识 ${pet.portraitKey}）；找到 ${targetOptions.length} 个候选`);
       }
-      await trustedClick(targetOptions[0].element, `选择并设为主战进化目标 ${pet.name}`);
-      const active = await waitUntil(() => targetOptions[0].element.isConnected
+      const alreadyActive = targetOptions[0].element.classList.contains("active");
+      if (!alreadyActive) {
+        await trustedClick(targetOptions[0].element, `选择并设为主战进化目标 ${pet.name}`);
+      }
+      const active = alreadyActive || await waitUntil(() => targetOptions[0].element.isConnected
         && targetOptions[0].element.classList.contains("active"), 2200, 100);
       if (!active) throw new Error(`点击“${pet.name}”后未验证到目标宠物已选中；停止`);
-      logEvent("evolution/main-battle-selected", { name: pet.name, portraitKey: pet.portraitKey });
+      logEvent("evolution/main-battle-selected", {
+        name: pet.name, portraitKey: pet.portraitKey, reusedExistingSelection: alreadyActive,
+      });
 
       const inventory = state.inventory;
       if (!inventory) throw new Error("尚未记录背包，无法判断强化丹 A/B 库存；请先记录背包");
@@ -1320,7 +1568,6 @@
         strengthB: Number(inventory.strengthB || 0),
         attempts: materials,
       });
-      const outcomePattern = /(?:恭喜您[，,]?\s*宝贝进化成功|进化道具不足)[！!]{0,2}/;
       let material = "";
       let outcome = null;
       for (let index = 0; index < materials.length; index += 1) {
@@ -1331,15 +1578,13 @@
         const action = uniqueInteractable(".ri", `${material} 进化按钮`, paths[0]);
         logEvent("evolution/path-selected", { material, pathCount: paths.length, action: elementDiagnostic(action) });
         setTxStatus(`进化预检通过：${pet.name} Lv${pet.level}，进化次数 ${pet.evolutionCount}/10；尝试 ${material}…`);
-        const beforeOutcome = outcomeSnapshot(outcomePattern);
-        await trustedClick(action, `使用 ${material} 进化一次`);
-        outcome = await waitUntil(() => {
-          const added = newOutcomes(beforeOutcome, outcomePattern).sort((a, b) => a.length - b.length);
-          const text = added[0] || "";
-          return text ? { text, success: /进化成功/.test(text), insufficient: /进化道具不足/.test(text) } : null;
-        }, 18000, 250);
+        outcome = await clickAndObserveEvolution(action, `使用 ${material} 进化一次`);
         logEvent("evolution/result-message", { material, outcome });
         if (outcome?.success) break;
+        if (outcome?.limitReached) {
+          finish(`主宠 ${pet.name} 已达到进化十次上限；本次未消耗进化材料，按正常上限进入合成。`, "warn");
+          return { success: false, limitReached: true, material: "", expectedEvolutionCount: 10 };
+        }
         if (outcome?.insufficient && material === "强化丹A" && materials[index + 1] === "强化丹B") {
           logEvent("evolution/material-fallback", { from: "强化丹A", to: "强化丹B", reason: outcome.text });
           setTxStatus("强化丹 A 被页面判定不足，按策略改用强化丹 B；只再尝试一次…");
@@ -1348,7 +1593,27 @@
         if (outcome?.insufficient) throw new Error(`${material} 被页面判定不足；未执行进化`);
         break;
       }
-      await sleep(outcome?.success ? 2600 : 1200);
+      if (outcome?.pendingVerification) {
+        setTxStatus("进化页面保持“进化中”且没有最终提示；不会重复点击，正在返回属性页核验进化次数…", "warn");
+        logEvent("evolution/result-fallback-to-attributes", {
+          pet, expectedEvolutionCount: preflight.expectedEvolutionCount, outcome,
+        });
+        const observedPet = await returnToPetAttributes(pet, preflight.expectedEvolutionCount);
+        await refreshPlannerSnapshots({ refreshCurrentRole: true });
+        finish(`进化页面未返回最终提示，但属性页已确认 ${pet.name} 的进化次数增加到 ${observedPet.evolutionCount}；本次按成功计数。`, "success");
+        return {
+          success: true,
+          material,
+          expectedEvolutionCount: preflight.expectedEvolutionCount,
+          verifiedByAttributes: true,
+        };
+      }
+      await sleep(outcome?.success ? 1200 : 800);
+      if (!outcome?.success) throw new Error(outcome?.text || "点击进化后未验证到成功结果");
+      if (deferVerification) {
+        finish(`连续进化一步已由页面消息验证成功：${pet.name}，使用 ${material}；等待批次检查点统一核验属性。`);
+        return { success: true, material, expectedEvolutionCount: preflight.expectedEvolutionCount };
+      }
       const observed = await returnToPetAttributes(pet, preflight.expectedEvolutionCount);
       await refreshPlannerSnapshots({ refreshCurrentRole: true });
       finish(`进化一次已验证：${observed.name} 的进化次数 ${pet.evolutionCount} → ${observed.evolutionCount}（使用 ${material}）。未自动继续。`);
@@ -1372,7 +1637,7 @@
     await trustedClick(tabs[0], `切换到${label}页`);
   }
 
-  async function prepareSynthesisSelections(state, config) {
+  async function prepareSynthesisSelectionsAttempt(state, config) {
     const selectedMain = await selectRecordedPet(0, state.mainPet, "主宠");
     if (!Number.isFinite(selectedMain.level) || selectedMain.level < 40) throw new Error(`合成页实时主宠等级为 Lv${selectedMain.level || "未知"}，必须达到 Lv40`);
     await activateSelectedSynthesisMain(state.mainPet);
@@ -1387,15 +1652,39 @@
     return { guardName, auxiliaryName, selectedMain, selectedDeputy };
   }
 
+  async function prepareSynthesisSelections(state, config) {
+    return withForegroundRecovery("合成页主副宠和材料选择", async (recovered) => {
+      if (recovered) {
+        await openSynthesisPage();
+        if (!await waitForStableSynthesisPage(15000)) throw new Error("切回前台后合成页仍未稳定加载");
+      }
+      return prepareSynthesisSelectionsAttempt(state, config);
+    });
+  }
+
   async function refreshSynthesisAfterFailure(state, config) {
-    setTxStatus("已确认合成失败；等待 12 秒让失败页和服务器冷却完成，再重新进入神殿并恢复选择…", "warn");
-    logEvent("synthesis/failure-cooldown-start", { milliseconds: 12000 });
-    await sleep(12000);
-    await openSynthesisPage();
-    await sleep(1500);
-    await prepareSynthesisSelections(state, config);
+    const cooldownMs = 5000;
+    setTxStatus("已确认合成失败；等待 5 秒后刷新合成页并恢复选择…", "warn");
+    logEvent("synthesis/failure-cooldown-start", { milliseconds: cooldownMs });
+    await sleep(cooldownMs);
+    try {
+      await openGodTempleTab("进化");
+      await waitForStableEvolutionPage(8000);
+      await openGodTempleTab("合成");
+      if (!await waitForStableSynthesisPage(10000)) throw new Error("合成页切换后未稳定加载");
+      await prepareSynthesisSelections(state, config);
+    } catch (firstError) {
+      logEvent("synthesis/full-navigation-recovery", {
+        reason: String(firstError?.message || firstError), attempt: 1,
+      });
+      bumpAutoStat("synthesisPageRecoveries");
+      setTxStatus("合成页刷新或选择异常，正在执行唯一一次完整恢复：中心城镇→右箭头→宠物神殿→合成…", "warn");
+      await openSynthesisPage();
+      if (!await waitForStableSynthesisPage(15000)) throw new Error("完整重进宠物神殿后合成页仍未稳定加载");
+      await prepareSynthesisSelections(state, config);
+    }
     logEvent("synthesis/failure-page-refreshed", {
-      main: state.mainPet.name, deputy: state.deputyPet.name, cooldownMs: 12000,
+      main: state.mainPet.name, deputy: state.deputyPet.name, cooldownMs,
     });
   }
 
@@ -1780,7 +2069,7 @@
     if (!await waitUntil(() => pastureUpgradeModal() ? null : true, 5000, 150)) throw new Error("牧场升级弹窗未关闭");
   }
 
-  async function openPastureUpgradeModal(target) {
+  async function openPastureUpgradeModalAttempt(target) {
     await openPasture();
     let entry = choosePastureEntry(pastureRows(), planner.getConfig(), target);
     entry.element.scrollIntoView({ block: "center", inline: "nearest" });
@@ -1794,6 +2083,13 @@
     const footer = normalize(modal.textContent);
     if (!footer.includes(normalize(entry.pet.name))) throw new Error(`牧场升级弹窗目标不是 ${entry.pet.name}`);
     return { entry, modal };
+  }
+
+  async function openPastureUpgradeModal(target) {
+    return withForegroundRecovery("牧场升级弹窗", async (recovered) => {
+      if (recovered) await openPasture();
+      return openPastureUpgradeModalAttempt(target);
+    });
   }
 
   async function upgradePasturePet(target, inventory) {
@@ -2478,38 +2774,79 @@
       if (Number(mainBeforeEvolution.level) < 40) {
         throw new Error(`进化前锁定公式主宠 ${mainBeforeEvolution.name || "未知"} 为 Lv${mainBeforeEvolution.level || "未知"}，必须至少达到 Lv40`);
       }
-      const requestedEvolutions = Math.max(0, Math.min(10, Number(planner.getConfig().evolutionPerCycle) || 0));
+      const evolutionConfig = planner.getConfig();
+      const requestedEvolutions = Math.max(0, Math.min(10, Number(evolutionConfig.evolutionPerCycle) || 0));
+      const verifyBatchSize = Math.max(1, Math.min(10, Number(evolutionConfig.evolutionVerifyBatchSize) || 5));
+      const verifyCc = evolutionConfig.verifyCcDuringEvolutionBatch !== false;
       let evolutionsDone = Math.max(0, Number(checkpoint.evolutionsDone) || 0);
+      let evolutionBatchStopped = false;
       while (evolutionsDone < requestedEvolutions && Number(mainBeforeEvolution.evolutionCount) < 10) {
+        const remaining = requestedEvolutions - evolutionsDone;
+        const chunkSize = Math.min(verifyBatchSize, remaining, 10 - Number(mainBeforeEvolution.evolutionCount));
+        const chunkStartCount = Number(mainBeforeEvolution.evolutionCount);
         logEvent("automation/checkpoint", {
-          stage: "evolution-main/start", main: mainBeforeEvolution, deputy,
-          evolutionsDone, requestedEvolutions,
+          stage: "evolution-main/batch-start", main: mainBeforeEvolution, deputy,
+          evolutionsDone, requestedEvolutions, chunkSize, verifyBatchSize, verifyCc,
         });
         await openEvolutionPage();
-        runtime.lastResult = null;
-        bumpAutoStat("evolutionAttempts");
-        await evolveOnce();
-        if (!transactionSucceeded()) {
-          const message = runtime.lastResult?.message || "锁定公式主宠进化失败";
-          if (/强化丹\s*A\s*\/\s*B\s*均不足/.test(message)) {
-            logEvent("automation/evolution-skipped-material-exhausted", {
-              main: mainBeforeEvolution,
-              evolutionsDone,
-              requestedEvolutions,
-              message,
-            });
-            bumpAutoStat("evolutionMaterialSkips");
-            setTxStatus(`自动循环：强化丹 A/B 均不足，本轮停止继续进化，保留主宠当前状态并进入合成…`, "warn");
+        let chunkSuccesses = 0;
+        for (let index = 0; index < chunkSize; index += 1) {
+          runtime.lastResult = null;
+          bumpAutoStat("evolutionAttempts");
+          const workingPet = { ...mainBeforeEvolution, evolutionCount: chunkStartCount + chunkSuccesses };
+          const stepResult = await evolveOnce({ deferVerification: true, refreshInventory: false, petOverride: workingPet });
+          if (stepResult?.limitReached) {
+            evolutionBatchStopped = true;
+            logEvent("automation/evolution-limit-reached", { main: workingPet, evolutionsDone, requestedEvolutions });
             break;
           }
-          throw new Error(message);
+          if (!transactionSucceeded()) {
+            const message = runtime.lastResult?.message || "锁定公式主宠进化失败";
+            if (/强化丹\s*A\s*\/\s*B\s*均不足|被页面判定不足/.test(message)) {
+              logEvent("automation/evolution-skipped-material-exhausted", {
+                main: workingPet, evolutionsDone, requestedEvolutions, message,
+              });
+              bumpAutoStat("evolutionMaterialSkips");
+              setTxStatus("自动循环：强化丹 A/B 不足，本轮停止继续进化并进入合成…", "warn");
+              evolutionBatchStopped = true;
+              break;
+            }
+            throw new Error(message);
+          }
+          bumpAutoStat("evolutionSuccesses");
+          chunkSuccesses += 1;
+          evolutionsDone += 1;
+          checkpoint = saveAutoCheckpoint("deputy-levelled", deputy, {
+            evolutionsDone, requestedEvolutions, expectedEvolutionCount: chunkStartCount + chunkSuccesses,
+          });
+          if (stepResult?.verifiedByAttributes && index + 1 < chunkSize) {
+            logEvent("automation/evolution-page-resume-after-attribute-fallback", {
+              evolutionsDone, expectedEvolutionCount: chunkStartCount + chunkSuccesses,
+            });
+            await openEvolutionPage();
+          }
         }
-        bumpAutoStat("evolutionSuccesses");
-        evolutionsDone += 1;
+        if (!chunkSuccesses) break;
+        const expectedCount = chunkStartCount + chunkSuccesses;
+        await returnToPetAttributes(mainBeforeEvolution, expectedCount);
         await openPetAttributes();
-        await selectCarriedPet(planner.getState().mainPet, "锁定公式主宠");
+        await selectCarriedPet(mainBeforeEvolution, "锁定公式主宠");
         Object.assign(mainBeforeEvolution, planner.scanMainPet());
+        logEvent("automation/evolution-batch-verified", {
+          chunkSuccesses, evolutionsDone, requestedEvolutions,
+          expectedEvolutionCount: expectedCount, observed: mainBeforeEvolution,
+          ccChecked: verifyCc,
+        });
+        if (verifyCc) {
+          bumpAutoStat("ccVerifications");
+          const stopCc = Number(evolutionConfig.targetCc);
+          if (Number.isFinite(stopCc) && Number(mainBeforeEvolution.cc) >= stopCc) {
+            setTxStatus(`连续进化检查点：主宠 CC ${mainBeforeEvolution.cc} 已达到 ${stopCc}，停止本周期剩余进化并继续合成。`, "warn");
+            break;
+          }
+        }
         checkpoint = saveAutoCheckpoint("deputy-levelled", deputy, { evolutionsDone, requestedEvolutions });
+        if (evolutionBatchStopped) break;
       }
       checkpoint = saveAutoCheckpoint("main-evolved", deputy, { evolutionsDone, requestedEvolutions });
       logEvent("automation/checkpoint", { stage: checkpoint.stage, main: planner.getState().mainPet, deputy });

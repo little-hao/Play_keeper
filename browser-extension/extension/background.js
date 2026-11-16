@@ -6,7 +6,9 @@ const TRUSTED_CLICK_MESSAGE = "pk-auto-capture/trusted-click-v1";
 const TRUSTED_CLICK_PING = "pk-auto-capture/ping-v1";
 const LICENSE_REQUEST_MESSAGE = "pk-license/request-v1";
 const LICENSE_VERIFY_MESSAGE = "pk-license/verify-v1";
-const EXTENSION_VERSION = "1.5.7";
+const EXTENSION_VERSION = "1.6.0";
+const BROWSER_CONTEXT_MESSAGE = "pk-auto-capture/browser-context-v1";
+const FOREGROUND_MESSAGE = "pk-auto-capture/foreground-v1";
 const GAME_URL_RE = /^https?:\/\/(?:www\.)?sgplay\.cc(?:[/:#?]|$)/i;
 const LICENSE_PATHS = new Set(["/v1/activate", "/v1/refresh"]);
 const LICENSE_CONFIG = globalThis.PlayKeeperLicenseConfig || {};
@@ -153,7 +155,47 @@ async function dispatchTrustedClick(sender, x, y) {
   throw lastError;
 }
 
+async function browserContext(sender) {
+  const tabId = sender.tab?.id;
+  if (!Number.isInteger(tabId)) throw new Error("无法识别当前游戏标签页");
+  const tab = await chrome.tabs.get(tabId);
+  const windowInfo = await chrome.windows.get(tab.windowId);
+  return {
+    tabId,
+    windowId: tab.windowId,
+    tabActive: Boolean(tab.active),
+    windowFocused: Boolean(windowInfo.focused),
+    windowState: String(windowInfo.state || "unknown"),
+    minimized: windowInfo.state === "minimized",
+  };
+}
+
+async function bringGameToForeground(sender) {
+  const contextBefore = await browserContext(sender);
+  if (contextBefore.minimized) {
+    await chrome.windows.update(contextBefore.windowId, { state: "normal" });
+  }
+  await chrome.windows.update(contextBefore.windowId, { focused: true });
+  await chrome.tabs.update(contextBefore.tabId, { active: true });
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  return { before: contextBefore, after: await browserContext(sender) };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === BROWSER_CONTEXT_MESSAGE) {
+    browserContext(sender).then(
+      (context) => sendResponse({ ok: true, context }),
+      (error) => sendResponse({ ok: false, error: String(error?.message || error) }),
+    );
+    return true;
+  }
+  if (message?.type === FOREGROUND_MESSAGE) {
+    bringGameToForeground(sender).then(
+      (details) => sendResponse({ ok: true, details }),
+      (error) => sendResponse({ ok: false, error: String(error?.message || error) }),
+    );
+    return true;
+  }
   if (message?.type === LICENSE_VERIFY_MESSAGE) {
     verifyLicenseSignature(message.token).then(
       (valid) => sendResponse({ ok: true, valid }),
