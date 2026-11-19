@@ -30,8 +30,8 @@ jobs:
       - name: Test relay and recovery scenarios
         working-directory: remote-server
         run: npm ci && npm test
-      - name: Test and build isolated candidate
-        run: ./gradlew testCandidateUnitTest lintCandidate assembleCandidate --no-daemon
+      - name: Test and build overwrite-upgrade release
+        run: ./gradlew testReleaseUnitTest lintRelease assembleRelease --no-daemon
       - name: Preserve test reports
         if: always()
         uses: actions/upload-artifact@v7
@@ -40,6 +40,6 @@ jobs:
           path: app/build/reports/
       - uses: actions/upload-artifact@v7
         with:
-          name: play-keeper-unsigned-candidate
-          path: app/build/outputs/apk/candidate/*.apk
+          name: play-keeper-v2.0.8-rc1-overwrite-test
+          path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error

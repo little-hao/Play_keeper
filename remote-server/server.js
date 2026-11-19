@@ -235,7 +235,7 @@ function finiteRange(value, minimum, maximum) {
 function accountParameters(parameters) {
   return Number.isInteger(parameters?.accountIndex)
     && parameters.accountIndex >= 0
-    && parameters.accountIndex <= 3;
+    && parameters.accountIndex <= 7;
 }
 
 function equipmentBuyParameters(parameters) {
@@ -243,7 +243,7 @@ function equipmentBuyParameters(parameters) {
     && (parameters.sellerAccountIndex === undefined
       || (Number.isInteger(parameters.sellerAccountIndex)
         && parameters.sellerAccountIndex >= -1
-        && parameters.sellerAccountIndex <= 3))
+        && parameters.sellerAccountIndex <= 7))
     && (parameters.recovery === undefined || typeof parameters.recovery === "boolean");
 }
 
@@ -289,7 +289,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.7-rc2" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.8-rc1" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -1494,7 +1494,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
 function validPreviewFrame(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   if (!Number.isInteger(payload.accountIndex)
-      || payload.accountIndex < 0 || payload.accountIndex > 3) return false;
+      || payload.accountIndex < 0 || payload.accountIndex > 7) return false;
   if (!Number.isSafeInteger(payload.sequence) || payload.sequence < 0) return false;
   if (!Number.isInteger(payload.width) || payload.width < 1 || payload.width > 2560) return false;
   if (!Number.isInteger(payload.height) || payload.height < 1 || payload.height > 3200) return false;
@@ -1506,7 +1506,7 @@ function validPreviewFrame(payload) {
 function sanitizeSelectInteraction(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
   if (!Number.isInteger(payload.accountIndex)
-      || payload.accountIndex < 0 || payload.accountIndex > 3) return null;
+      || payload.accountIndex < 0 || payload.accountIndex > 7) return null;
   if (typeof payload.elementToken !== "string"
       || !/^[A-Za-z0-9_-]{1,80}$/.test(payload.elementToken)) return null;
   if (!Array.isArray(payload.options) || payload.options.length < 1

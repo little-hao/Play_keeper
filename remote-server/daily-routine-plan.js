@@ -31,25 +31,9 @@ export class DailyRoutinePlan {
       auctionHandoff: false, options: structuredClone(options), message: "账号每日任务并行执行中",
       accounts: route.map((account) => ({ ...account, status: "queued", task: "daily_routine",
         message: "等待 APP 接收", updatedAt: now, evidence: {}, inventoryCounts: {},
-        inventoryRequested: false, returnRequested: false, history: [] })) };
+        inventoryRequested: false, returnRequested: false, dispatched: false, history: [] })) };
     this.#publish();
-    for (const account of this.state.accounts) {
-      const returnMap = String(options.returnMaps?.[account.accountLabel]
-        || options.returnMap || "圣诞小屋").trim();
-      const action = { deviceId: account.deviceId, accountIndex: account.accountIndex,
-        accountLabel: account.accountLabel, command: "run_daily_routine",
-        stepId: `${runId}:${account.deviceId}:${account.accountIndex}`,
-        parameters: { accountIndex: account.accountIndex, runId,
-          items: options.dungeonItems, skill: options.skill || "auto", returnMap } };
-      try {
-        this.emitAction(action);
-        account.status = "running";
-        account.message = `已下发；完成后返回${returnMap}挂机`;
-      } catch (error) {
-        account.status = "error";
-        account.message = String(error?.message || error);
-      }
-    }
+    this.#dispatchQueued();
     this.#settle();
     return this.snapshot();
   }
@@ -159,8 +143,9 @@ export class DailyRoutinePlan {
   cancel() {
     if (!this.isActive()) return this.snapshot();
     for (const account of this.state.accounts.filter((entry) => !TERMINAL.has(entry.status))) {
-      try { this.emitAction({ deviceId: account.deviceId, accountIndex: account.accountIndex,
-        accountLabel: account.accountLabel, command: "cancel_automation",
+      if (account.dispatched) try { this.emitAction({ deviceId: account.deviceId,
+        accountIndex: account.accountIndex, accountLabel: account.accountLabel,
+        command: "cancel_automation",
         stepId: `${this.state.runId}:cancel:${account.deviceId}:${account.accountIndex}`,
         parameters: { accountIndex: account.accountIndex } }); } catch { /* offline */ }
       account.status = "cancelled";
@@ -174,6 +159,7 @@ export class DailyRoutinePlan {
 
   #settle() {
     this.tickGuard = true;
+    this.#dispatchQueued();
     const allDone = this.state.accounts.length > 0
       && this.state.accounts.every((entry) => TERMINAL.has(entry.status));
     if (allDone) {
@@ -210,4 +196,39 @@ export class DailyRoutinePlan {
   }
 
   #publish() { this.onUpdate?.(this.snapshot()); }
+
+  #dispatchQueued() {
+    if (this.state.status !== "running") return;
+    const devices = [...new Set(this.state.accounts.map((account) => account.deviceId))];
+    for (const deviceId of devices) {
+      const deviceAccounts = this.state.accounts.filter((account) => account.deviceId === deviceId);
+      const limit = Math.max(1, Math.min(8,
+        Number(deviceAccounts.find((account) => account.concurrencyLimit)?.concurrencyLimit) || 4));
+      let occupied = deviceAccounts.filter((account) => account.dispatched
+        && !TERMINAL.has(account.status)).length;
+      if (occupied > 0) continue;
+      for (const account of deviceAccounts.filter((entry) => !entry.dispatched
+          && entry.status === "queued")) {
+        if (occupied >= limit) break;
+        account.dispatched = true;
+        const returnMap = String(this.state.options.returnMaps?.[account.accountLabel]
+          || this.state.options.returnMap || "圣诞小屋").trim();
+        try {
+          this.emitAction({ deviceId: account.deviceId, accountIndex: account.accountIndex,
+            accountLabel: account.accountLabel, command: "run_daily_routine",
+            stepId: `${this.state.runId}:${account.deviceId}:${account.accountIndex}`,
+            parameters: { accountIndex: account.accountIndex, runId: this.state.runId,
+              items: this.state.options.dungeonItems,
+              skill: this.state.options.skill || "auto", returnMap } });
+          account.status = "running";
+          account.message = `已下发；完成后返回${returnMap}挂机`;
+          occupied++;
+        } catch (error) {
+          account.status = "error";
+          account.message = String(error?.message || error);
+        }
+        account.updatedAt = this.now();
+      }
+    }
+  }
 }

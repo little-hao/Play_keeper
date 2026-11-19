@@ -59,9 +59,12 @@ export function resolveAccountRoute(deviceSummaries, labels) {
   for (const device of deviceSummaries) {
     const reported = Array.isArray(device?.telemetry?.accounts) ? device.telemetry.accounts : [];
     for (const account of reported) {
-      if (!Number.isInteger(account?.index) || typeof account?.label !== "string") continue;
+      if (!Number.isInteger(account?.index) || typeof account?.label !== "string"
+          || account.opened === false) continue;
       accounts.push({ deviceId: device.deviceId, accountIndex: account.index,
-        accountLabel: account.label, online: true,
+        accountLabel: account.label, profileId: String(account.profileId || ""), online: true,
+        concurrencyLimit: Math.max(1, Math.min(8,
+          Number(device?.telemetry?.app?.maxConcurrentAccounts) || 4)),
         automation: account.automation && typeof account.automation === "object"
           ? { ...account.automation } : {} });
     }
@@ -1026,7 +1029,7 @@ export class EightAccountPlan {
     }
     route.forEach((entry, index) => {
       if (!entry || typeof entry.deviceId !== "string" || !Number.isInteger(entry.accountIndex)
-          || entry.accountIndex < 0 || entry.accountIndex > 3) {
+          || entry.accountIndex < 0 || entry.accountIndex > 7) {
         throw new Error(`路线第${index + 1}个账号无效`);
       }
     });

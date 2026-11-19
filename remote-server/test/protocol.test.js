@@ -456,7 +456,7 @@ test("invalid tokens and invalid commands are rejected", async (context) => {
   const invalidRecoveryPromise = nextJson(control, "command.error");
   control.send(JSON.stringify({
     type: "command.send", deviceId: "missing", command: "run_equipment_buy",
-    parameters: { accountIndex: 1, sellerAccountIndex: 4, recovery: true }
+    parameters: { accountIndex: 1, sellerAccountIndex: 8, recovery: true }
   }));
   assert.match((await invalidRecoveryPromise).message, /无效/);
   for (const verificationToken of ["", "-".repeat(36), "stale"] ) {
@@ -484,7 +484,7 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    ok: true, service: "play-keeper-relay", version: "2.0.7-rc2"
+    ok: true, service: "play-keeper-relay", version: "2.0.8-rc1"
   });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);

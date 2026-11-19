@@ -61,3 +61,25 @@ test("marks an APP ok result unverified when task evidence is missing", () => {
   assert.equal(plan.snapshot().accounts[0].status, "unverified");
   assert.equal(plan.snapshot().status, "error");
 });
+
+test("batches accounts by the concurrency limit reported by one device", () => {
+  let clock = 50_000;
+  const actions = [];
+  const accounts = Array.from({ length: 8 }, (_, accountIndex) => ({
+    deviceId: "PK-EIGHT", accountIndex, accountLabel: `hao${accountIndex || ""}`,
+    concurrencyLimit: 4
+  }));
+  const plan = new DailyRoutinePlan({ emitAction: (action) => actions.push(action),
+    now: () => clock });
+  const started = plan.start(accounts, { dungeonItems: ["圣诞小屋"] }, {});
+  assert.equal(actions.filter((action) => action.command === "run_daily_routine").length, 4);
+  assert.deepEqual(plan.snapshot().accounts.map((account) => account.status),
+    ["running", "running", "running", "running", "queued", "queued", "queued", "queued"]);
+  clock += 1_000;
+  completeVerifiedAccount(plan, started, accounts[0], clock);
+  assert.equal(actions.filter((action) => action.command === "run_daily_routine").length, 4);
+  for (const account of accounts.slice(1, 4)) completeVerifiedAccount(plan, started, account, ++clock);
+  assert.equal(actions.filter((action) => action.command === "run_daily_routine").length, 8);
+  assert.equal(actions.filter((action) => action.command === "run_daily_routine").at(-1)
+    .accountIndex, 7);
+});
