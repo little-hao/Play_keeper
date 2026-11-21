@@ -22,6 +22,6 @@ const prepareStart = tx.indexOf("async function prepareSynthesisSelectionsAttemp
 const prepareEnd = tx.indexOf("async function prepareSynthesisSelections", prepareStart + 1);
 const prepare = tx.slice(prepareStart, prepareEnd);
 assert.ok(prepare.indexOf('phase: "reopen-same-page"') < prepare.indexOf("rebuildSynthesisSelectionPage()"));
-assert.ok(prepare.indexOf("rebuildSynthesisSelectionPage()") < prepare.indexOf("alternativeMainOptionIndex"));
+assert.ok(prepare.indexOf("rebuildSynthesisSelectionPage()") < prepare.indexOf("switchToAlternativeSynthesisMain"));
 
 console.log("v1.8.8 synthesis empty deputy recovery checks passed");

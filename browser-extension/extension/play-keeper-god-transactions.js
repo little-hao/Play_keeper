@@ -4,7 +4,7 @@
   if (window.__PK_GOD_TRANSACTIONS_V150__) return;
   window.__PK_GOD_TRANSACTIONS_V150__ = true;
 
-  const VERSION = "1.8.9";
+  const VERSION = "1.8.10";
   const TRUSTED_CLICK_MESSAGE = "pk-auto-capture/trusted-click-v1";
   const TRUSTED_CLICK_PING = "pk-auto-capture/ping-v1";
   const BROWSER_CONTEXT_MESSAGE = "pk-auto-capture/browser-context-v1";
@@ -829,6 +829,40 @@
     return /副宠下拉已打开但没有可选宠物（选项 0）/.test(error?.message || "");
   }
 
+  function sameRecordedPetIdentity(left, right) {
+    if (!left || !right) return false;
+    const sameName = normalize(left.name) === normalize(right.name);
+    const sameLevel = Number(left.level) === Number(right.level);
+    const sameGrowth = Number.isFinite(Number(left.cc)) && Number.isFinite(Number(right.cc))
+      && Number(left.cc) === Number(right.cc);
+    const samePortrait = !left.portraitKey || !right.portraitKey
+      || String(left.portraitKey) === String(right.portraitKey);
+    return sameName && sameLevel && sameGrowth && samePortrait;
+  }
+
+  async function switchToAlternativeSynthesisMain(selectedMain, state, details = {}) {
+    const canSwitchMain = Number(selectedMain.optionCount) > 1
+      && Number.isInteger(Number(selectedMain.optionIndex));
+    if (!canSwitchMain) throw new Error("两只完全相同宠物需要换位，但合成页没有可用的备用主宠位置");
+    const alternativeIndex = Number(selectedMain.optionIndex) === 0 ? 1 : 0;
+    logEvent("synthesis/empty-deputy-options-main-fallback", {
+      ...details,
+      previousMainOptionIndex: selectedMain.optionIndex,
+      alternativeMainOptionIndex: alternativeIndex,
+      mainOptionCount: selectedMain.optionCount,
+    });
+    setTxStatus("两只宠物身份完全相同且曾出现副宠空列表，正在强制换到另一只主宠，再选择唯一剩余副宠…", "warn");
+    const alternativeMain = await selectRecordedPetAttempt(0, state.mainPet, "备用主宠", alternativeIndex);
+    await activateSelectedSynthesisMain(state.mainPet);
+    await waitForSynthesisMainRerender(state.mainPet, "after-alternative-main");
+    const deputy = await selectRecordedPet(1, state.deputyPet, "副宠");
+    logEvent("synthesis/empty-deputy-options-recovered", {
+      phase: "after-alternative-main", selectedMain: alternativeMain, selectedDeputy: deputy,
+      alternativeMainOptionIndex: alternativeIndex, forcedForIdenticalPets: true,
+    });
+    return { selectedMain: alternativeMain, selectedDeputy: deputy };
+  }
+
   async function rebuildSynthesisSelectionPage() {
     logEvent("synthesis/empty-deputy-options-page-rebuild", { phase: "start" });
     await openGodTempleTab("进化");
@@ -980,15 +1014,61 @@
     }
   }
 
-  function readSynthesisResultMessage() {
-    const pattern = /合成(?:成功|失败)[！!][^\n]{0,120}/;
+  function classifySynthesisOutcomeText(value) {
+    const text = String(value || "").trim().replace(/\s+/g, " ");
+    if (!text || text.length > 260) return null;
+    const success = text.match(/合成成功(?:[！!])?[^\n]{0,120}/)?.[0];
+    if (success) return { text: success, success: true, retryableFailure: false, kind: "success" };
+    const failure = text.match(/合成失败(?!时)(?:[！!])?[^\n]{0,120}/)?.[0];
+    if (failure) return { text: failure, success: false, retryableFailure: true, kind: "failure" };
+    const rejection = text.match(/(?:合成冷却|冷却时间|主宠|副宠|宠物|合成材料|守护材料|辅助材料)[^\n]{0,80}(?:错误|无效|不足|不能|无法|请选择|相同|重复|冷却)[^\n]{0,80}/)?.[0]
+      || text.match(/(?:不能|无法|请勿|请选择)[^\n]{0,80}(?:合成|主宠|副宠|宠物)[^\n]{0,80}/)?.[0];
+    return rejection ? { text: rejection, success: false, retryableFailure: false, kind: "rejection" } : null;
+  }
+
+  function readSynthesisOutcome() {
     const matches = Array.from(document.querySelectorAll("uni-view,uni-text,span,p,div"))
       .filter(isVisible)
       .map((element) => String(element.innerText || element.textContent || "").trim().replace(/\s+/g, " "))
-      .map((text) => text.match(pattern)?.[0] || "")
+      .map(classifySynthesisOutcomeText)
       .filter(Boolean)
-      .sort((a, b) => a.length - b.length);
-    return matches[0] || "";
+      .sort((a, b) => a.text.length - b.text.length);
+    return matches[0] || null;
+  }
+
+  async function clickAndObserveSynthesis(action) {
+    const before = readSynthesisOutcome()?.text || "";
+    const observed = [];
+    const observedKeys = new Set();
+    let final = null;
+    const record = (root) => {
+      const result = classifySynthesisOutcomeText(root?.innerText || root?.textContent || "");
+      if (!result || result.text === before) return;
+      const key = `${result.kind}|${result.text}`;
+      if (!observedKeys.has(key)) {
+        observedKeys.add(key);
+        observed.push(result);
+      }
+      final = result;
+    };
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        record(mutation.target);
+        for (const node of mutation.addedNodes || []) record(node);
+      }
+    });
+    observer.observe(document.body, { subtree: true, childList: true, characterData: true });
+    try {
+      await trustedClick(action, "执行一次宠物合成");
+      const result = await waitUntil(() => {
+        if (final) return final;
+        const visible = readSynthesisOutcome();
+        return visible && visible.text !== before ? visible : null;
+      }, 25000, 120);
+      return { result, observed };
+    } finally {
+      observer.disconnect();
+    }
   }
 
   function aliasesFor(itemId) {
@@ -1824,32 +1904,27 @@
         selectedMain = await selectRecordedPet(0, state.mainPet, "主宠");
         await activateSelectedSynthesisMain(state.mainPet);
         await waitForSynthesisMainRerender(state.mainPet, "after-page-rebuild");
-        try {
+        if (sameRecordedPetIdentity(state.mainPet, state.deputyPet)) {
+          const switched = await switchToAlternativeSynthesisMain(selectedMain, state, {
+            reason: "identical-pets-require-switch-after-empty-list",
+            firstError: firstDeputyError.message,
+            secondError: secondDeputyError.message,
+          });
+          selectedMain = switched.selectedMain;
+          selectedDeputy = switched.selectedDeputy;
+        } else try {
           selectedDeputy = await selectRecordedPet(1, state.deputyPet, "副宠");
           logEvent("synthesis/empty-deputy-options-recovered", { phase: "after-page-rebuild", selectedMain, selectedDeputy });
         } catch (thirdDeputyError) {
           if (!isEmptyDeputyOptionsError(thirdDeputyError)) throw thirdDeputyError;
-          const canSwitchMain = Number(selectedMain.optionCount) > 1
-            && Number.isInteger(Number(selectedMain.optionIndex));
-          if (!canSwitchMain) throw thirdDeputyError;
           await closeSynthesisPetPopup(1, "副宠");
-          const alternativeIndex = Number(selectedMain.optionIndex) === 0 ? 1 : 0;
-          logEvent("synthesis/empty-deputy-options-main-fallback", {
+          const switched = await switchToAlternativeSynthesisMain(selectedMain, state, {
             firstError: firstDeputyError.message,
             secondError: secondDeputyError.message,
             thirdError: thirdDeputyError.message,
-            previousMainOptionIndex: selectedMain.optionIndex,
-            alternativeMainOptionIndex: alternativeIndex,
-            mainOptionCount: selectedMain.optionCount,
           });
-          setTxStatus("重建合成页后副宠仍为空，正在把另一只同身份宠物改为主宠，让原主宠成为唯一剩余副宠…", "warn");
-          selectedMain = await selectRecordedPetAttempt(0, state.mainPet, "备用主宠", alternativeIndex);
-          await activateSelectedSynthesisMain(state.mainPet);
-          await waitForSynthesisMainRerender(state.mainPet, "after-alternative-main");
-          selectedDeputy = await selectRecordedPet(1, state.deputyPet, "副宠");
-          logEvent("synthesis/empty-deputy-options-recovered", {
-            phase: "after-alternative-main", selectedMain, selectedDeputy, alternativeMainOptionIndex: alternativeIndex,
-          });
+          selectedMain = switched.selectedMain;
+          selectedDeputy = switched.selectedDeputy;
         }
       }
     }
@@ -1935,17 +2010,25 @@
       }
 
       const action = uniqueInteractable('uni-button[name="开始合成"]', "开始合成按钮");
-      const beforeResultMessage = readSynthesisResultMessage();
       const beforeSignature = synthesisSelectionSignature();
       setTxStatus(`已核验：主宠 ${transactionMainPet.name}；副宠 ${state.deputyPet.name}；守护 ${guardName}；辅助 ${auxiliaryName}。即将只点击一次“开始合成”…`);
-      await trustedClick(action, "执行一次宠物合成");
-
-      const result = await waitUntil(() => {
-        const text = readSynthesisResultMessage();
-        if (!text || text === beforeResultMessage) return null;
-        return { text, success: /合成成功/.test(text) };
-      }, 25000, 240);
-      if (!result) throw new Error("已点击一次合成，但 25 秒内未读到唯一的“合成成功/合成失败”页面消息；停止且不会重试");
+      const observation = await clickAndObserveSynthesis(action);
+      const result = observation.result;
+      if (!result) {
+        logEvent("synthesis/outcome-timeout-state", {
+          observed: observation.observed,
+          beforeSignature,
+          afterSignature: synthesisSelectionSignature(),
+          selectionChanged: synthesisSelectionSignature() !== beforeSignature,
+          selectedPets: Array.from(document.querySelectorAll(".content-bor2 .pet-text"))
+            .map((node) => String(node.textContent || "").trim()),
+          selectedMaterials: Array.from(document.querySelectorAll(".content-bor2 .mat-text"))
+            .map((node) => String(node.textContent || "").trim()),
+        });
+        throw new Error("已点击一次合成，但 25 秒内未读到成功、失败或服务器拒绝提示；已保存点击后页面状态，停止且不会重试");
+      }
+      logEvent("synthesis/outcome-observed", { result, observed: observation.observed });
+      if (result.kind === "rejection") throw new Error(`服务器拒绝本次合成：“${result.text}”；停止且不会重试`);
       logEvent("synthesis/verified", { ...result, selectionChanged: synthesisSelectionSignature() !== beforeSignature });
       if (!result.success) {
         setTxStatus(`已确认合成失败：${result.text}。正在按“进化→合成”刷新并恢复本次主副宠和材料选择…`, "warn");

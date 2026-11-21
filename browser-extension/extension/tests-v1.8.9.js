@@ -8,7 +8,8 @@ const root = __dirname;
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
 const tx = fs.readFileSync(path.join(root, "play-keeper-god-transactions.js"), "utf8");
 
-assert.equal(manifest.version, "1.8.9");
+const [, minor = 0, patch = 0] = manifest.version.split(".").map(Number);
+assert.ok(minor > 8 || (minor === 8 && patch >= 9), "manifest version must retain the v1.8.9 fixes");
 assert.match(tx, /function hasForcedPetOptionIndex\(value\)/);
 assert.match(tx, /value !== null && value !== undefined && Number\.isInteger\(value\) && value >= 0/);
 assert.doesNotMatch(tx, /Number\.isInteger\(Number\(forcedOptionIndex\)\)/);
