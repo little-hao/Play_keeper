@@ -5,7 +5,7 @@
 globalThis.PlayKeeperLicenseConfig = Object.freeze({
   enabled: true,
   productId: "playkeeper-god-planner",
-  extensionVersion: "1.8.10",
+  extensionVersion: "1.8.11",
   serverBaseUrl: "https://keeper.19990920.xyz/license-api",
   refreshBeforeMinutes: 12 * 60,
   publicKeyJwk: {

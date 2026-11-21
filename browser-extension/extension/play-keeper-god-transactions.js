@@ -4,7 +4,7 @@
   if (window.__PK_GOD_TRANSACTIONS_V150__) return;
   window.__PK_GOD_TRANSACTIONS_V150__ = true;
 
-  const VERSION = "1.8.10";
+  const VERSION = "1.8.11";
   const TRUSTED_CLICK_MESSAGE = "pk-auto-capture/trusted-click-v1";
   const TRUSTED_CLICK_PING = "pk-auto-capture/ping-v1";
   const BROWSER_CONTEXT_MESSAGE = "pk-auto-capture/browser-context-v1";
@@ -1021,9 +1021,21 @@
     if (success) return { text: success, success: true, retryableFailure: false, kind: "success" };
     const failure = text.match(/合成失败(?!时)(?:[！!])?[^\n]{0,120}/)?.[0];
     if (failure) return { text: failure, success: false, retryableFailure: true, kind: "failure" };
-    const rejection = text.match(/(?:合成冷却|冷却时间|主宠|副宠|宠物|合成材料|守护材料|辅助材料)[^\n]{0,80}(?:错误|无效|不足|不能|无法|请选择|相同|重复|冷却)[^\n]{0,80}/)?.[0]
-      || text.match(/(?:不能|无法|请勿|请选择)[^\n]{0,80}(?:合成|主宠|副宠|宠物)[^\n]{0,80}/)?.[0];
+    const rejection = text.match(/(?:合成冷却|冷却时间)[^\n]{0,120}/)?.[0]
+      || text.match(/(?:主宠|副宠|宠物|合成材料|守护材料|辅助材料)[^\n]{0,80}(?:错误|无效|不足|不能|无法|相同|重复)[^\n]{0,80}/)?.[0]
+      || text.match(/(?:不能|无法|请勿)[^\n]{0,80}(?:合成|主宠|副宠|宠物)[^\n]{0,80}/)?.[0];
     return rejection ? { text: rejection, success: false, retryableFailure: false, kind: "rejection" } : null;
+  }
+
+  function synthesisOutcomePriority(result) {
+    if (!result) return 0;
+    if (result.kind === "success" || result.kind === "failure") return 3;
+    if (result.kind === "rejection") return 1;
+    return 0;
+  }
+
+  function preferSynthesisOutcome(current, candidate) {
+    return synthesisOutcomePriority(candidate) > synthesisOutcomePriority(current) ? candidate : current;
   }
 
   function readSynthesisOutcome() {
@@ -1049,7 +1061,7 @@
         observedKeys.add(key);
         observed.push(result);
       }
-      final = result;
+      final = preferSynthesisOutcome(final, result);
     };
     const observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
