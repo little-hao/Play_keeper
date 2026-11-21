@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Play Keeper Windows 浏览器自动捕捉
 // @namespace    https://github.com/little-hao/Play_keeper
-// @version      1.8.8
+// @version      1.8.9
 // @description  自动进入指定地图，仅遇到目标宠物时按顺序执行捕捉、使用精灵球、等待结果并继续探险。
 // @match        http://sgplay.cc/*
 // @match        https://sgplay.cc/*
@@ -16,7 +16,7 @@
   if (window.__PK_WINDOWS_AUTO_CAPTURE_V01__) return;
   window.__PK_WINDOWS_AUTO_CAPTURE_V01__ = true;
 
-  const SCRIPT_VERSION = "1.8.8";
+  const SCRIPT_VERSION = "1.8.9";
   const POLL_INTERVAL_MS = 800;
   const CLICK_GUARD_MS = 550;
   const BALL_MENU_TIMEOUT_MS = 15_000;

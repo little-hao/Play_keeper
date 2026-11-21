@@ -4,7 +4,7 @@
   if (window.__PK_GOD_TRANSACTIONS_V150__) return;
   window.__PK_GOD_TRANSACTIONS_V150__ = true;
 
-  const VERSION = "1.8.8";
+  const VERSION = "1.8.9";
   const TRUSTED_CLICK_MESSAGE = "pk-auto-capture/trusted-click-v1";
   const TRUSTED_CLICK_PING = "pk-auto-capture/ping-v1";
   const BROWSER_CONTEXT_MESSAGE = "pk-auto-capture/browser-context-v1";
@@ -606,17 +606,57 @@
     }));
   }
 
+  async function waitForSynthesisPetOptions(slotIndex, roleLabel) {
+    const startedAt = Date.now();
+    let overlaySeenAt = 0;
+    let stableEmptySince = 0;
+    let emptySignature = "";
+    const maxWaitMs = 5000;
+    const minimumOverlayAgeMs = 1500;
+    const stableEmptyMs = 1000;
+    while (Date.now() - startedAt < maxWaitMs) {
+      const candidate = Array.from(document.querySelectorAll(".content-bor2 .pet-popup"))[slotIndex];
+      const overlay = candidate?.querySelector(".pet-overlay");
+      if (!overlay || !isVisible(overlay)) {
+        overlaySeenAt = 0;
+        stableEmptySince = 0;
+        emptySignature = "";
+        await sleep(100);
+        continue;
+      }
+      if (!overlaySeenAt) overlaySeenAt = Date.now();
+      const optionCount = candidate.querySelectorAll(".pet-item").length;
+      if (optionCount > 0) return candidate;
+      const loading = Array.from(candidate.querySelectorAll(".loading,.loading-icon,.uni-load-more,[class*='loading']"))
+        .some(isVisible);
+      const signature = `${normalize(candidate.textContent)}|${candidate.querySelectorAll("*").length}`;
+      if (loading || signature !== emptySignature) {
+        emptySignature = signature;
+        stableEmptySince = Date.now();
+      } else if (!stableEmptySince) stableEmptySince = Date.now();
+      const overlayAge = Date.now() - overlaySeenAt;
+      const stableEmptyAge = Date.now() - stableEmptySince;
+      if (!loading && overlayAge >= minimumOverlayAgeMs && stableEmptyAge >= stableEmptyMs) {
+        logEvent("synthesis/pet-options-stable-empty", {
+          role: roleLabel, slotIndex, overlayAge, stableEmptyAge, maxWaitMs,
+        });
+        return null;
+      }
+      await sleep(100);
+    }
+    logEvent("synthesis/pet-options-wait-timeout", { role: roleLabel, slotIndex, maxWaitMs });
+    return null;
+  }
+
+  function hasForcedPetOptionIndex(value) {
+    return value !== null && value !== undefined && Number.isInteger(value) && value >= 0;
+  }
+
   async function selectRecordedPetAttempt(slotIndex, target, roleLabel, forcedOptionIndex = null) {
     const triggers = Array.from(document.querySelectorAll(".content-bor2 .pet-trigger")).filter(isInteractable);
     if (triggers.length !== 2) throw new Error(`合成页宠物下拉结构不一致：应为 2 个，实际 ${triggers.length} 个`);
     await trustedClick(triggers[slotIndex], `打开${roleLabel}下拉`);
-    const popup = await waitUntil(() => {
-      const popups = Array.from(document.querySelectorAll(".content-bor2 .pet-popup"));
-      const candidate = popups[slotIndex];
-      const overlay = candidate?.querySelector(".pet-overlay");
-      const optionCount = candidate?.querySelectorAll(".pet-item").length || 0;
-      return overlay && isVisible(overlay) && optionCount > 0 ? candidate : null;
-    }, 12000, 150);
+    const popup = await waitForSynthesisPetOptions(slotIndex, roleLabel);
     if (!popup) {
       const current = Array.from(document.querySelectorAll(".content-bor2 .pet-popup"))[slotIndex];
       const overlayVisible = Boolean(current?.querySelector(".pet-overlay") && isVisible(current.querySelector(".pet-overlay")));
@@ -630,8 +670,8 @@
       options: options.map(({ name, level, growth, portraitKey }) => ({ name, level, growth, portraitKey })),
     });
     let selected;
-    if (Number.isInteger(Number(forcedOptionIndex))) {
-      const forced = options[Number(forcedOptionIndex)];
+    if (hasForcedPetOptionIndex(forcedOptionIndex)) {
+      const forced = options[forcedOptionIndex];
       const sameName = forced && normalize(forced.name) === normalize(target.name);
       const sameLevel = forced && (!Number.isFinite(Number(target.level)) || Number(forced.level) === Number(target.level));
       const samePortrait = forced && (!target.portraitKey || !forced.portraitKey || String(forced.portraitKey) === String(target.portraitKey));
@@ -647,7 +687,7 @@
       };
       logEvent("synthesis/pet-alternative-position-selected", {
         role: roleLabel,
-        forcedOptionIndex: Number(forcedOptionIndex),
+        forcedOptionIndex,
         optionCount: options.length,
         selected: { name: forced.name, level: forced.level, growth: forced.growth, portraitKey: forced.portraitKey },
       });

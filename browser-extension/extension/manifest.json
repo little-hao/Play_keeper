@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Play Keeper 自动捕捉 / 神宠自动合宠",
-  "version": "1.8.8",
-  "description": "口袋宠物 Windows 浏览器工具 v1.8.8：修复同身份宠物合成时副宠空列表恢复。",
+  "version": "1.8.9",
+  "description": "口袋宠物 Windows 浏览器工具 v1.8.9：修复主宠第二项选择并优化副宠空列表恢复等待。",
   "permissions": [
     "debugger",
     "tabs"

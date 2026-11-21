@@ -8,7 +8,8 @@ const root = __dirname;
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
 const tx = fs.readFileSync(path.join(root, "play-keeper-god-transactions.js"), "utf8");
 
-assert.equal(manifest.version, "1.8.8");
+const [, minor = 0, patch = 0] = manifest.version.split(".").map(Number);
+assert.ok(minor > 8 || (minor === 8 && patch >= 8), "manifest version must retain the v1.8.8 recovery");
 assert.match(tx, /synthesis\/empty-popup-close-candidates/);
 assert.match(tx, /不点击被遮罩的下拉触发框/);
 assert.match(tx, /waitForSynthesisMainRerender/);
