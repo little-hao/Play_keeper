@@ -5,6 +5,7 @@
   const config = window.PlayKeeperLicenseConfig || {};
   const TOKEN_KEY = "pk-license-token-v1";
   const INSTALLATION_KEY = "pk-license-installation-v1";
+  const DEVICE_PROFILE_KEY = "pk-license-device-profile-v1";
   const LICENSE_REQUEST_MESSAGE = "pk-license/request-v1";
   const LICENSE_VERIFY_MESSAGE = "pk-license/verify-v1";
 
@@ -31,6 +32,48 @@
       if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) - (b[i] || 0);
     }
     return 0;
+  };
+  const cleanText = (value, maxLength) => String(value || "").trim().slice(0, maxLength);
+  const deviceProfile = () => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(DEVICE_PROFILE_KEY) || "{}");
+      return { deviceName: cleanText(saved.deviceName, 80), note: cleanText(saved.note, 240) };
+    } catch (_) {
+      return { deviceName: "", note: "" };
+    }
+  };
+  const setDeviceProfile = (profile = {}) => {
+    const value = { deviceName: cleanText(profile.deviceName, 80), note: cleanText(profile.note, 240) };
+    localStorage.setItem(DEVICE_PROFILE_KEY, JSON.stringify(value));
+    return value;
+  };
+  const browserIdentity = () => {
+    const ua = String(navigator.userAgent || "");
+    const edge = ua.match(/Edg\/([\d.]+)/);
+    const chrome = ua.match(/Chrome\/([\d.]+)/);
+    return edge ? { name: "Microsoft Edge", version: edge[1] }
+      : chrome ? { name: "Google Chrome", version: chrome[1] }
+        : { name: navigator.userAgentData?.brands?.at(-1)?.brand || "Chromium", version: "" };
+  };
+  const collectDeviceMetadata = async () => {
+    const profile = deviceProfile();
+    let highEntropy = {};
+    try {
+      highEntropy = await navigator.userAgentData?.getHighEntropyValues?.(["platformVersion", "architecture", "bitness", "model"]) || {};
+    } catch (_) {}
+    const browser = browserIdentity();
+    return {
+      deviceName: profile.deviceName,
+      note: profile.note,
+      osName: navigator.userAgentData?.platform || (/Windows/i.test(navigator.userAgent) ? "Windows" : navigator.platform || "未知"),
+      osVersion: cleanText(highEntropy.platformVersion, 40),
+      browserName: cleanText(browser.name, 60),
+      browserVersion: cleanText(browser.version, 40),
+      extensionVersion: cleanText(config.extensionVersion, 24),
+      architecture: cleanText(highEntropy.architecture, 24),
+      bitness: cleanText(highEntropy.bitness, 12),
+      model: cleanText(highEntropy.model, 80),
+    };
   };
   const endpoint = (path) => `${String(config.serverBaseUrl || "").replace(/\/$/, "")}${path}`;
   const post = async (path, body) => {
@@ -65,15 +108,17 @@
     return payload;
   }
 
-  async function activate(activationCode) {
+  async function activate(activationCode, profile = null) {
     if (!config.enabled) return { disabled: true, message: "授权检查当前处于配置模式" };
     const code = String(activationCode || "").trim();
     if (!code) throw new Error("请输入激活码");
+    if (profile) setDeviceProfile(profile);
     const result = await post("/v1/activate", {
       activationCode: code,
       installationId: installationId(),
       productId: config.productId,
       extensionVersion: config.extensionVersion,
+      device: await collectDeviceMetadata(),
     });
     const payload = await verifyToken(result.token);
     if (Number(payload.expiresAt) <= Date.now()) throw new Error("服务器签发了已过期许可证");
@@ -87,6 +132,7 @@
       installationId: installationId(),
       productId: config.productId,
       extensionVersion: config.extensionVersion,
+      device: await collectDeviceMetadata(),
     });
     const payload = await verifyToken(result.token);
     if (Number(payload.expiresAt) <= Date.now()) throw new Error("服务器续签了已过期许可证");
@@ -129,5 +175,8 @@
     localStorage.removeItem(TOKEN_KEY);
   }
 
-  window.PlayKeeperLicense = Object.freeze({ config, activate, ensureValid, status, clear, installationId });
+  window.PlayKeeperLicense = Object.freeze({
+    config, activate, ensureValid, status, clear, installationId,
+    deviceProfile, setDeviceProfile, collectDeviceMetadata,
+  });
 })();

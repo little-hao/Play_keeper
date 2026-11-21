@@ -4,7 +4,7 @@
   if (window.__PK_GOD_TRANSACTIONS_V150__) return;
   window.__PK_GOD_TRANSACTIONS_V150__ = true;
 
-  const VERSION = "1.6.0";
+  const VERSION = "1.8.7";
   const TRUSTED_CLICK_MESSAGE = "pk-auto-capture/trusted-click-v1";
   const TRUSTED_CLICK_PING = "pk-auto-capture/ping-v1";
   const BROWSER_CONTEXT_MESSAGE = "pk-auto-capture/browser-context-v1";
@@ -29,7 +29,7 @@
     }
   }
   const runtime = { running: false, autoRunning: false, stopRequested: false, lastAction: "", startedAt: 0, lastResult: null, autoCycle: 0,
-    autoCheckpoint: readAutoCheckpoint(), autoStats: null };
+    autoCheckpoint: readAutoCheckpoint(), autoStats: null, mainCarriedIndex: null };
   function readPersistedDiagnosticLog() {
     try {
       const saved = JSON.parse(sessionStorage.getItem(DIAGNOSTIC_SESSION_KEY) || "null");
@@ -72,6 +72,8 @@
       evolutionAttempts: 0, evolutionSuccesses: 0, evolutionMaterialSkips: 0,
       synthesisAttempts: 0, synthesisSuccesses: 0, synthesisFailures: 0,
       foregroundRecoveries: 0, ccVerifications: 0, synthesisPageRecoveries: 0,
+      rankUpVerified: 0, rankUpUnchanged: 0, mainSwaps: 0,
+      rankUpRoundsStarted: 0, rankUpRoundsCompleted: 0,
       errors: 0,
     };
   }
@@ -91,11 +93,13 @@
     const stats = runtime.autoStats || createAutoStats(0, 0);
     const lines = [
       `自动循环${outcome}`,
-      `周期：启动 ${stats.cyclesStarted}，完成 ${stats.cyclesCompleted}`,
+      `合成步骤：启动 ${stats.cyclesStarted}，完成 ${stats.cyclesCompleted}`,
       `补级：牧场副宠 ${stats.pasturePetsLeveled} 只，携带主宠 ${stats.carriedMainPetsLeveled} 只，携带副宠 ${stats.carriedDeputyPetsLeveled} 只`,
       `取出副宠：${stats.deputiesWithdrawn} 只`,
       `进化：提交 ${stats.evolutionAttempts} 次，成功 ${stats.evolutionSuccesses} 次，材料不足跳过 ${stats.evolutionMaterialSkips} 次`,
       `合成：提交 ${stats.synthesisAttempts} 次，成功 ${stats.synthesisSuccesses} 次，失败 ${stats.synthesisFailures} 次`,
+      `升阶：确认升阶 ${stats.rankUpVerified} 次，成功但阶数未变 ${stats.rankUpUnchanged} 次，换主宠 ${stats.mainSwaps} 次`,
+      `完整升阶轮次：启动 ${stats.rankUpRoundsStarted}，完成 ${stats.rankUpRoundsCompleted}`,
       `恢复：切回前台 ${stats.foregroundRecoveries} 次，重进合成页 ${stats.synthesisPageRecoveries} 次；CC 核验 ${stats.ccVerifications} 次`,
       `耗时：${formatElapsed(Date.now() - stats.startedAt)}`,
     ];
@@ -370,11 +374,14 @@
       .find(isRendered);
     const activeText = String(activeCard?.innerText || activeCard?.textContent || "").trim();
     const activeName = activeText.match(/^([\s\S]*?)\s*Lv\s*\d+/i)?.[1]?.trim() || "";
+    const attributeText = String(document.querySelector(".user-right")?.innerText
+      || document.querySelector(".user-right")?.textContent || "");
+    const attributePet = core.parseMainPetText(attributeText);
     const candidates = petProgressTextCandidates();
     for (const candidate of candidates) {
       const progress = core.parsePetProgressText(candidate.text);
       if (!progress) continue;
-      const full = core.parseMainPetText(candidate.text) || core.parseMainPetText(bodyText());
+      const full = attributePet || core.parseMainPetText(candidate.text) || core.parseMainPetText(bodyText());
       return {
         pet: {
           ...(full || {}),
@@ -389,7 +396,7 @@
       };
     }
 
-    const full = core.parseMainPetText(bodyText());
+    const full = attributePet || core.parseMainPetText(bodyText());
     return full ? { pet: { ...full, name: activeName || full.name || "" }, source: "body fallback (no live experience fields)" } : null;
   }
 
@@ -599,7 +606,7 @@
     }));
   }
 
-  async function selectRecordedPetAttempt(slotIndex, target, roleLabel) {
+  async function selectRecordedPetAttempt(slotIndex, target, roleLabel, forcedOptionIndex = null) {
     const triggers = Array.from(document.querySelectorAll(".content-bor2 .pet-trigger")).filter(isInteractable);
     if (triggers.length !== 2) throw new Error(`合成页宠物下拉结构不一致：应为 2 个，实际 ${triggers.length} 个`);
     await trustedClick(triggers[slotIndex], `打开${roleLabel}下拉`);
@@ -622,7 +629,57 @@
       count: options.length,
       options: options.map(({ name, level, growth, portraitKey }) => ({ name, level, growth, portraitKey })),
     });
-    const selected = core.selectUniquePetOption(options, target);
+    let selected;
+    if (Number.isInteger(Number(forcedOptionIndex))) {
+      const forced = options[Number(forcedOptionIndex)];
+      const sameName = forced && normalize(forced.name) === normalize(target.name);
+      const sameLevel = forced && (!Number.isFinite(Number(target.level)) || Number(forced.level) === Number(target.level));
+      const samePortrait = forced && (!target.portraitKey || !forced.portraitKey || String(forced.portraitKey) === String(target.portraitKey));
+      if (!forced || !sameName || !sameLevel || !samePortrait) {
+        throw new Error(`${roleLabel}备用位置 ${forcedOptionIndex} 与目标宠物身份不一致；停止`);
+      }
+      selected = {
+        ok: true,
+        option: forced,
+        growthChanged: Number.isFinite(Number(target.cc)) && Number(forced.growth) !== Number(target.cc),
+        previousGrowth: Number.isFinite(Number(target.cc)) ? Number(target.cc) : null,
+        observedGrowth: Number(forced.growth),
+      };
+      logEvent("synthesis/pet-alternative-position-selected", {
+        role: roleLabel,
+        forcedOptionIndex: Number(forcedOptionIndex),
+        optionCount: options.length,
+        selected: { name: forced.name, level: forced.level, growth: forced.growth, portraitKey: forced.portraitKey },
+      });
+    } else selected = core.selectUniquePetOption(options, target);
+    if (!selected.ok && /有\s*\d+\s*个/.test(selected.reason || "")) {
+      const targetIndex = Number(target?.carriedIndex);
+      const carriedIndex = Number.isInteger(targetIndex) && targetIndex >= 0
+        ? targetIndex
+        : (/主宠/.test(roleLabel) ? Number(runtime.mainCarriedIndex) : NaN);
+      const positionalOption = Number.isInteger(carriedIndex) ? options[carriedIndex] : null;
+      const sameName = positionalOption && normalize(positionalOption.name) === normalize(target.name);
+      const sameLevel = positionalOption && (!Number.isFinite(Number(target.level))
+        || Number(positionalOption.level) === Number(target.level));
+      const samePortrait = positionalOption && (!target.portraitKey || !positionalOption.portraitKey
+        || String(positionalOption.portraitKey) === String(target.portraitKey));
+      if (positionalOption && sameName && sameLevel && samePortrait) {
+        selected = {
+          ok: true,
+          option: positionalOption,
+          growthChanged: Number.isFinite(Number(target.cc)) && Number(positionalOption.growth) !== Number(target.cc),
+          previousGrowth: Number.isFinite(Number(target.cc)) ? Number(target.cc) : null,
+          observedGrowth: Number(positionalOption.growth),
+        };
+        logEvent("synthesis/pet-position-disambiguated", {
+          role: roleLabel,
+          carriedIndex,
+          optionCount: options.length,
+          target: { name: target.name, level: target.level, portraitKey: target.portraitKey },
+          selected: { name: positionalOption.name, level: positionalOption.level, growth: positionalOption.growth, portraitKey: positionalOption.portraitKey },
+        });
+      }
+    }
     if (!selected.ok) throw new Error(`${roleLabel}匹配失败：${selected.reason}`);
     if (selected.growthChanged) {
       logEvent("synthesis/pet-growth-refreshed", {
@@ -644,11 +701,28 @@
     }, 2600, 120);
     if (!confirmed) throw new Error(`${roleLabel}选择后页面没有显示“${target.name}”及其等级；停止`);
     logEvent("synthesis/pet-selected", { role: roleLabel, name: target.name });
-    return { name: selected.option.name, level: selected.option.level, growth: selected.option.growth, portraitKey: selected.option.portraitKey, displayed: confirmed };
+    return { name: selected.option.name, level: selected.option.level, growth: selected.option.growth,
+      portraitKey: selected.option.portraitKey, displayed: confirmed, optionIndex: options.indexOf(selected.option), optionCount: options.length };
   }
 
   async function selectRecordedPet(slotIndex, target, roleLabel) {
     return selectRecordedPetAttempt(slotIndex, target, roleLabel);
+  }
+
+  async function closeSynthesisPetPopup(slotIndex, roleLabel) {
+    const popup = Array.from(document.querySelectorAll(".content-bor2 .pet-popup"))[slotIndex];
+    const overlay = popup?.querySelector(".pet-overlay");
+    if (!overlay || !isVisible(overlay)) return;
+    const closeButtons = Array.from(popup.querySelectorAll("button,uni-button,[role=button]"))
+      .filter(isInteractable).filter((node) => normalize(node.textContent) === normalize("关闭"));
+    if (closeButtons.length === 1) await trustedClick(closeButtons[0], `关闭${roleLabel}空选项窗口`);
+    else {
+      const triggers = Array.from(document.querySelectorAll(".content-bor2 .pet-trigger")).filter(isInteractable);
+      if (!triggers[slotIndex]) throw new Error(`${roleLabel}空选项窗口无法关闭，未执行备用主宠恢复`);
+      await trustedClick(triggers[slotIndex], `收起${roleLabel}空选项窗口`);
+    }
+    const closed = await waitUntil(() => !overlay.isConnected || !isVisible(overlay) ? true : null, 4000, 120);
+    if (!closed) throw new Error(`${roleLabel}空选项窗口关闭后仍遮挡页面，未执行备用主宠恢复`);
   }
 
   function synthesisPetSlotText(slotIndex) {
@@ -1638,10 +1712,33 @@
   }
 
   async function prepareSynthesisSelectionsAttempt(state, config) {
-    const selectedMain = await selectRecordedPet(0, state.mainPet, "主宠");
+    let selectedMain = await selectRecordedPet(0, state.mainPet, "主宠");
     if (!Number.isFinite(selectedMain.level) || selectedMain.level < 40) throw new Error(`合成页实时主宠等级为 Lv${selectedMain.level || "未知"}，必须达到 Lv40`);
     await activateSelectedSynthesisMain(state.mainPet);
-    const selectedDeputy = await selectRecordedPet(1, state.deputyPet, "副宠");
+    let selectedDeputy;
+    try {
+      selectedDeputy = await selectRecordedPet(1, state.deputyPet, "副宠");
+    } catch (firstDeputyError) {
+      const emptyDeputyOptions = /副宠下拉已打开但没有可选宠物（选项 0）/.test(firstDeputyError?.message || "");
+      const canSwitchMain = emptyDeputyOptions && Number(selectedMain.optionCount) > 1
+        && Number.isInteger(Number(selectedMain.optionIndex));
+      if (!canSwitchMain) throw firstDeputyError;
+      await closeSynthesisPetPopup(1, "副宠");
+      const alternativeIndex = Number(selectedMain.optionIndex) === 0 ? 1 : 0;
+      logEvent("synthesis/empty-deputy-options-main-fallback", {
+        firstError: firstDeputyError.message,
+        previousMainOptionIndex: selectedMain.optionIndex,
+        alternativeMainOptionIndex: alternativeIndex,
+        mainOptionCount: selectedMain.optionCount,
+      });
+      setTxStatus("副宠列表为空，当前主宠候选可能不是实际主战；正在改选主宠栏中的另一只宠物并重试一次…", "warn");
+      selectedMain = await selectRecordedPetAttempt(0, state.mainPet, "备用主宠", alternativeIndex);
+      await activateSelectedSynthesisMain(state.mainPet);
+      selectedDeputy = await selectRecordedPet(1, state.deputyPet, "副宠");
+      logEvent("synthesis/empty-deputy-options-recovered", {
+        selectedMain, selectedDeputy, alternativeMainOptionIndex: alternativeIndex,
+      });
+    }
     if (!Number.isFinite(selectedDeputy.level) || selectedDeputy.level < 40) throw new Error(`合成页实时副宠等级为 Lv${selectedDeputy.level || "未知"}，必须达到 Lv40`);
     logEvent("synthesis/live-levels-confirmed", { main: selectedMain, deputy: selectedDeputy });
     const guardPreferences = boundFirstMaterialPreferences(config.useSupremeStone
@@ -1740,7 +1837,13 @@
         setTxStatus(`已确认合成失败：${result.text}。正在按“进化→合成”刷新并恢复本次主副宠和材料选择…`, "warn");
         await refreshSynthesisAfterFailure(state, config);
       }
-      await refreshPlannerSnapshots();
+      try {
+        await refreshPlannerSnapshots();
+      } catch (refreshError) {
+        if (!result.success) throw refreshError;
+        logEvent("synthesis/post-success-refresh-deferred", { message: refreshError?.message || String(refreshError) });
+        setTxStatus("页面已明确返回合成成功；下拉刷新异常不覆盖成功结果，将回属性页核验真实阶数。", "warn");
+      }
       finish(`合成一次结果已验证：${result.success ? "成功" : "失败"}；页面消息“${result.text}”。${result.success ? "未自动继续。" : "合成页已刷新并恢复选择，未自动再次合成。"}`, result.success ? "success" : "warn");
     } catch (error) {
       finish(`合成事务停止：${error?.message || error}`, "error");
@@ -1814,6 +1917,13 @@
       return values.length ? values : null;
     }, 30000, 250);
     if (!cards) throw new Error(`${roleLabel}主战切换：宠物卡片 30 秒内未加载`);
+    const targetIndex = Number(target?.carriedIndex);
+    const deputyIndex = Number(planner.getState().deputyPet?.carriedIndex);
+    const positionalMatches = Number.isInteger(targetIndex) && targetIndex >= 0 && cards[targetIndex]
+      ? [cards[targetIndex]]
+      : (/主宠/.test(roleLabel) && Number.isInteger(deputyIndex)
+        ? cards.filter((_card, index) => index !== deputyIndex)
+        : []);
     const nameMatches = cards.filter((card) => normalize(card.textContent).includes(normalize(target.name)));
     const portraitMatches = nameMatches.filter((card) => {
       const text = normalize(card.textContent);
@@ -1822,13 +1932,24 @@
     });
     const identityMatches = portraitMatches.length ? portraitMatches : nameMatches;
     const levelMatches = identityMatches.filter((card) => normalize(card.textContent).includes(normalize(`Lv${target.level}`)));
-    const matches = levelMatches.length === 1 ? levelMatches : identityMatches;
+    // The game can carry two pets whose name, level and portrait id are all
+    // identical.  For a main-pet check the active card is the authoritative
+    // identity signal: it is the pet currently shown in the attribute pane
+    // and the one that was active when the planner snapshot was recorded.
+    const activeIdentityMatches = identityMatches.filter((card) => card.classList.contains("active"));
+    const matches = positionalMatches.length === 1
+      ? positionalMatches
+      : (levelMatches.length === 1
+        ? levelMatches
+        : (/主宠/.test(roleLabel) && activeIdentityMatches.length === 1 ? activeIdentityMatches : identityMatches));
     if (matches.length !== 1) {
       const observed = cards.map((card) => ({ text: String(card.textContent || "").trim().replace(/\s+/g, " "), portraitKey: portraitKeyFromElement(card) }));
-      logEvent("automation/carried-pet-match-failed", { role: roleLabel, target, observed, matchCount: matches.length });
+      logEvent("automation/carried-pet-match-failed", { role: roleLabel, target, observed, matchCount: matches.length, targetIndex, deputyIndex });
       throw new Error(`${roleLabel}主战切换无法唯一匹配 ${target.name}，找到 ${matches.length} 张卡片；页面卡片：${observed.map((item) => `${item.text}[${item.portraitKey || "无头像标识"}]`).join("、")}`);
     }
     const card = matches[0];
+    const selectedIndex = cards.indexOf(card);
+    if (/主宠/.test(roleLabel) && selectedIndex >= 0) runtime.mainCarriedIndex = selectedIndex;
     if (!card.classList.contains("active")) await trustedClick(card, `选中${roleLabel} ${target.name}`);
     const active = await waitUntil(() => card.isConnected && card.classList.contains("active") ? card : null, 5000, 150);
     if (!active) throw new Error(`${roleLabel} ${target.name} 点击后未成为当前选中宠物`);
@@ -1843,8 +1964,14 @@
     const refreshedCard = await waitUntil(() => {
       const refreshed = Array.from(document.querySelectorAll(".user-left .ul .li,.user-left .li"))
         .filter(isRendered)
-        .filter((item) => normalize(item.textContent).includes(normalize(target.name)));
-      return refreshed.length === 1 ? refreshed[0] : null;
+        .filter((item) => normalize(item.textContent).includes("Lv"));
+      const sameSlot = selectedIndex >= 0 ? refreshed[selectedIndex] : null;
+      if (sameSlot && normalize(sameSlot.textContent).includes(normalize(target.name))) return sameSlot;
+      const activeMatches = refreshed.filter((item) => item.classList.contains("active")
+        && normalize(item.textContent).includes(normalize(target.name)));
+      if (activeMatches.length === 1) return activeMatches[0];
+      const identity = refreshed.filter((item) => normalize(item.textContent).includes(normalize(target.name)));
+      return identity.length === 1 ? identity[0] : null;
     }, 5000, 150);
     if (!refreshedCard) throw new Error(`${roleLabel} ${target.name} 主战切换后未重新加载唯一宠物卡片`);
     const refreshedLevel = Number(String(refreshedCard.innerText || refreshedCard.textContent || "").match(/Lv\s*(\d+)/i)?.[1]);
@@ -1875,6 +2002,33 @@
       throw new Error(`培养停止值复核失败：预期主宠 ${locked?.name || "未知"}，实际读取 ${liveMain?.name || "未知"}`);
     }
     return liveMain;
+  }
+
+  async function readRankUpMainAfterSynthesis(beforeTier) {
+    await openPetAttributes();
+    const attributePet = currentPet();
+    const tabs = Array.from(document.querySelectorAll('uni-button[name="带领的宠物"],button[name="带领的宠物"],[role=button][name="带领的宠物"]'))
+      .filter(isInteractable);
+    if (tabs.length !== 1) throw new Error(`合成后阶数核验：需要唯一“带领的宠物”标签，实际找到 ${tabs.length} 个`);
+    if (!tabs[0].classList.contains("active")) await trustedClick(tabs[0], "打开带领的宠物页核验合成后阶数");
+    const overview = await waitUntil(() => {
+      const activeCard = Array.from(document.querySelectorAll(".user-left .ul .li.active,.user-left .li.active")).find(isRendered);
+      const cardText = String(activeCard?.innerText || activeCard?.textContent || "");
+      const name = cardText.match(/^([\s\S]*?)\s*Lv\s*\d+/i)?.[1]?.trim() || attributePet?.name || "";
+      const rightText = String(document.querySelector(".user-right")?.innerText || document.querySelector(".user-right")?.textContent || "");
+      const parsed = core.parseMainPetText(rightText) || core.parseMainPetText(bodyText());
+      return parsed && Number.isInteger(Number(parsed.tier))
+        ? { ...attributePet, ...parsed, name, tier: Number(parsed.tier), tierText: parsed.tierText || `${parsed.tier}阶` }
+        : null;
+    }, 20000, 250);
+    if (!overview) {
+      logEvent("rankup/tier-overview-timeout", { beforeTier, attributePet, page: currentPageKind() });
+      throw new Error("合成成功后已打开“带领的宠物”页，但 20 秒内仍未读取到新主宠阶数；停止，避免用空阶数筛选牧场");
+    }
+    const stored = planner.storeMainPet ? planner.storeMainPet(overview) : planner.scanMainPet();
+    if (!Number.isInteger(Number(stored?.tier))) throw new Error("合成后主宠阶数已在页面出现，但保存快照时丢失；停止");
+    logEvent("rankup/tier-read-from-overview", { beforeTier, main: stored });
+    return stored;
   }
 
   function targetCcReached(main, stopCc, phase, cycle = runtime.autoCycle) {
@@ -1959,7 +2113,9 @@
 
   function deputyEligibleForMode(pet, config) {
     const tier = Number(pet?.tier);
-    if (!Number.isInteger(tier) || tier < 1 || tier > Number(config.pastureMaxTier || 8)) return false;
+    if (!Number.isInteger(tier) || tier < 1) return false;
+    if (config.mode === "rankup") return tier === Number(planner.getState().mainPet?.tier);
+    if (tier > Number(config.pastureMaxTier || 8)) return false;
     if (config.mode === "partial") return tier === 10;
     if (config.mode === "full") return tier <= 8;
     return true;
@@ -2221,7 +2377,8 @@
       const plan = core.planPastureUpgrades({
         pasturePets: pets,
         inventory,
-        maxTier: config.pastureMaxTier,
+        minTier: config.pastureUpgradeMinTier,
+        maxTier: config.pastureUpgradeMaxTier,
         count: 1,
         targetW: config.level1To40ExpW,
       });
@@ -2277,7 +2434,7 @@
       logEvent("automation/pasture-candidates-empty", { mode: config.mode, rowCount: rows.length, rows: rows.slice(0, 12).map((entry) => entry.pet) });
       throw new Error(`牧场已加载 ${rows.length} 行，但没有符合当前模式的副宠候选`);
     }
-    const chosen = entry.pet;
+    let chosen = entry.pet;
     const beforeCount = await waitUntil(() => {
       const value = carriedPetCount();
       return Number.isInteger(value) ? { value } : null;
@@ -2316,6 +2473,14 @@
       pet: chosen, beforeCount, afterCount: beforeCount + 1, beforeRows,
       afterRows: confirmed.liveRows, beforePastureCount, afterPastureCount: confirmed.livePastureCount,
       beforeIdentityCount, afterIdentityCount: confirmed.liveIdentityCount,
+    });
+    chosen = { ...chosen, carriedIndex: beforeCount, withdrawnAt: new Date().toISOString() };
+    // 数量和牧场行变化一经确认，就先持久化“已取出”，避免后续属性核验失败时重复取宠。
+    saveAutoCheckpoint("deputy-withdrawn", chosen, {
+      beforeCarriedCount: beforeCount,
+      afterCarriedCount: beforeCount + 1,
+      beforePastureCount,
+      afterPastureCount: confirmed.livePastureCount,
     });
     const verified = await verifyCarriedDeputyLevel40(chosen);
     logEvent("automation/deputy-withdrawn", { pet: verified, beforeCount, afterCount: beforeCount + 1 });
@@ -2622,7 +2787,7 @@
   }
 
   function carriedDeputyLevel40Matches(target) {
-    return Array.from(document.querySelectorAll(".user-left .ul .li,.user-left .li"))
+    const cards = Array.from(document.querySelectorAll(".user-left .ul .li,.user-left .li"))
       .filter(isRendered)
       .filter((card) => {
         const text = String(card.innerText || card.textContent || "");
@@ -2632,21 +2797,164 @@
         const key = portraitKeyFromElement(card);
         return !target.portraitKey || !key || key === target.portraitKey;
       });
+    const expectedIndex = Number(target?.carriedIndex);
+    if (Number.isInteger(expectedIndex) && expectedIndex >= 0) {
+      const allCards = Array.from(document.querySelectorAll(".user-left .ul .li,.user-left .li"))
+        .filter(isRendered).filter((card) => normalize(card.textContent).includes("Lv"));
+      const expectedCard = allCards[expectedIndex];
+      return expectedCard && cards.includes(expectedCard) ? [expectedCard] : [];
+    }
+    return cards;
   }
 
   async function verifyCarriedDeputyLevel40(target) {
     await openPetAttributes();
     const matches = carriedDeputyLevel40Matches(target);
-    if (matches.length !== 1) throw new Error(`携带宠物中无法唯一确认副宠 ${target.name} 为 Lv40，匹配到 ${matches.length} 张卡片`);
+    if (matches.length !== 1) throw new Error(`携带宠物中无法按事务位置确认副宠 ${target.name} 为 Lv40，匹配到 ${matches.length} 张卡片`);
     const verifiedLevel = Number(String(matches[0].innerText || matches[0].textContent || "").match(/Lv\s*(\d+)/i)?.[1]);
     const verified = { ...target, level: verifiedLevel, displayLevel: verifiedLevel, effectiveLevel: verifiedLevel,
       portraitKey: target.portraitKey || portraitKeyFromElement(matches[0]) };
     planner.storeDeputyPet(verified);
-    logEvent("automation/deputy-level-verified-without-main-switch", { deputy: verified });
+    logEvent("automation/deputy-level-verified-without-main-switch", {
+      deputy: verified, carriedIndex: verified.carriedIndex, identityMethod: Number.isInteger(Number(verified.carriedIndex)) ? "withdrawal-card-index" : "unique-visible-card",
+    });
     return verified;
   }
 
+  async function identifyCarriedPets() {
+    await openPetAttributes();
+    const cards = await waitUntil(() => {
+      const values = Array.from(document.querySelectorAll(".user-left .ul .li,.user-left .li"))
+        .filter(isRendered).filter((card) => normalize(card.textContent).includes("Lv"));
+      return values.length ? values : null;
+    }, 30000, 250);
+    if (!cards) throw new Error("身份核验：携带宠物卡片未加载");
+    const identities = [];
+    for (let index = 0; index < cards.length; index += 1) {
+      const liveCards = Array.from(document.querySelectorAll(".user-left .ul .li,.user-left .li"))
+        .filter(isRendered).filter((card) => normalize(card.textContent).includes("Lv"));
+      const card = liveCards[index];
+      if (!card) throw new Error(`身份核验：第 ${index + 1} 张携带卡片刷新后消失`);
+      if (!card.classList.contains("active")) await trustedClick(card, `读取第 ${index + 1} 只携带宠物身份`);
+      const pet = await waitForStableCurrentPet(null, 15000);
+      if (!pet?.name || !Number.isInteger(Number(pet.tier))) throw new Error(`身份核验：第 ${index + 1} 只宠物属性未完整加载`);
+      identities.push({ ...pet, carriedIndex: index, portraitKey: portraitKeyFromElement(card) });
+    }
+    logEvent("rankup/carried-identities", { identities });
+    return identities;
+  }
+
+  function uniqueIdentityMatch(pets, target, label) {
+    const matches = pets.filter((pet) => normalize(pet.name) === normalize(target.name)
+      && Number(pet.tier) === Number(target.tier)
+      && (!Number.isFinite(Number(target.cc)) || Math.abs(Number(pet.cc) - Number(target.cc)) < 0.06)
+      && (!target.portraitKey || !pet.portraitKey || String(pet.portraitKey) === String(target.portraitKey)));
+    if (matches.length !== 1) throw new Error(`${label}身份无法唯一确认：匹配到 ${matches.length} 只`);
+    return matches[0];
+  }
+
+  async function swapCompletedRankMain(oldMain) {
+    const config = planner.getConfig();
+    const replacementTier = Number(config.rankUpMinTier);
+    await openPasture();
+    planner.scanPasture();
+    const candidates = pastureRows().filter(({ pet }) => Number(pet.tier) === replacementTier)
+      .sort((a, b) => Number(a.pet.tier) - Number(b.pet.tier)
+        || Number(a.pet.cc) - Number(b.pet.cc)
+        || Number(a.pastureIndex) - Number(b.pastureIndex));
+    if (!candidates.length) throw new Error(`牧场没有 ${replacementTier} 阶的新主宠候选，无法继续生产 ${config.rankUpMaxTier} 阶宠物`);
+    let nextMain = candidates[0].pet;
+    if (Number(nextMain.level) < 40) {
+      const inventory = { ...(planner.getState().inventory || {}) };
+      const upgraded = await upgradePasturePet(nextMain, inventory);
+      nextMain = upgraded.pet;
+      planner.storeBagInventory(inventory);
+      if (upgraded.upgraded) bumpAutoStat("pasturePetsLeveled");
+    }
+    const beforeCarried = carriedPetCount();
+    if (beforeCarried !== 1) throw new Error(`终止阶换宠前应只携带成品主宠 1 只，实际为 ${beforeCarried} 只`);
+    nextMain = await withdrawNextDeputy(nextMain);
+    bumpAutoStat("deputiesWithdrawn");
+    await openPasture();
+    const carriedCards = Array.from(document.querySelectorAll(".page-box .cont-box")[1]?.querySelectorAll(".chongwu-cont .li") || []).filter(isRendered);
+    const nextCard = carriedCards[Number(nextMain.carriedIndex)];
+    if (!nextCard) throw new Error(`牧场携带栏未找到新主宠位置 ${nextMain.carriedIndex}`);
+    const nextCardPortrait = portraitKeyFromElement(nextCard);
+    if (nextMain.portraitKey && nextCardPortrait && String(nextMain.portraitKey) !== String(nextCardPortrait)) {
+      throw new Error(`牧场新主宠卡位头像不一致：预期 ${nextMain.portraitKey}，实际 ${nextCardPortrait}`);
+    }
+    await trustedClick(nextCard, `在牧场选择待设为主战的 ${replacementTier} 阶宠物 ${nextMain.name}`);
+    const mainBattleButton = exactAction(["主战"]);
+    if (!mainBattleButton) throw new Error("牧场未找到唯一“主战”按钮，未执行终止阶换宠");
+    await trustedClick(mainBattleButton, `在牧场将 ${nextMain.name} 设置为主战`);
+    const switchModal = await waitUntil(() => Array.from(document.querySelectorAll(".custom-modal,.sell-modal,.modal,.dialog,[role=dialog]"))
+      .filter(isRendered)
+      .find((node) => /设置主战宠物|确定要设置[\s\S]*为主战宠物/.test(node.innerText || node.textContent)) || null, 10000, 150);
+    if (!switchModal) throw new Error(`点击“主战”后未出现 ${nextMain.name} 的设置主战确认框，已停止以免跳过确认`);
+    const primaryConfirmButtons = Array.from(switchModal.querySelectorAll(".custom-modal-btn.confirm"))
+      .filter(isInteractable);
+    const confirmButtons = primaryConfirmButtons.length ? primaryConfirmButtons
+      : Array.from(switchModal.querySelectorAll("button,uni-button,[role=button]"))
+        .filter(isInteractable).filter((node) => normalize(node.textContent) === normalize("确认"));
+    if (confirmButtons.length !== 1) throw new Error(`设置主战确认框中“确认”按钮数量异常：${confirmButtons.length}`);
+    logEvent("rankup/main-switch-modal-detected", {
+      target: nextMain,
+      modalClass: String(switchModal.className || ""),
+      confirmClass: String(confirmButtons[0].className || "")
+    });
+    await trustedClick(confirmButtons[0], `确认将 ${nextMain.name} 设为主战`);
+    const modalClosed = await waitUntil(() => !switchModal.isConnected || !isRendered(switchModal) ? true : null, 12000, 200);
+    if (!modalClosed) throw new Error("设置主战确认框在点击确认后仍未关闭，未继续导航或存放宠物");
+    const blockingModal = Array.from(document.querySelectorAll(".custom-modal,.sell-modal,.modal,.dialog,[role=dialog]"))
+      .filter(isRendered).find((node) => /设置主战宠物|确定要设置[\s\S]*为主战宠物/.test(node.innerText || node.textContent));
+    if (blockingModal) throw new Error("设置主战确认框仍遮挡页面，未继续导航或存放宠物");
+    await sleep(800);
+    const selectedAsMain = await readRankUpMainAfterSynthesis(oldMain.tier);
+    if (normalize(selectedAsMain.name) !== normalize(nextMain.name)
+      || Number(selectedAsMain.tier) !== replacementTier
+      || Math.abs(Number(selectedAsMain.cc) - Number(nextMain.cc)) >= 0.06) {
+      throw new Error(`牧场主战切换验证失败：预期 ${nextMain.name}/${replacementTier}阶/CC${nextMain.cc}，实际 ${selectedAsMain.name}/${selectedAsMain.tier}阶/CC${selectedAsMain.cc}`);
+    }
+    logEvent("rankup/new-main-selected-in-pasture", { selectedAsMain, carriedIndex: nextMain.carriedIndex });
+
+    await openPasture();
+    const pastureBefore = pastureRows().length;
+    const carriedBeforeStore = carriedPetCount();
+    const pastureCards = Array.from(document.querySelectorAll(".page-box .cont-box")[1]?.querySelectorAll(".chongwu-cont .li") || []).filter(isRendered);
+    const oldPortraitMatches = oldMain.portraitKey
+      ? pastureCards.filter((card) => portraitKeyFromElement(card) === String(oldMain.portraitKey)) : [];
+    const newPortraitMatches = nextMain.portraitKey
+      ? pastureCards.filter((card) => portraitKeyFromElement(card) === String(nextMain.portraitKey)) : [];
+    const oldCard = oldPortraitMatches.length === 1
+      ? oldPortraitMatches[0]
+      : (pastureCards.length === 2 && newPortraitMatches.length === 1
+        ? pastureCards.find((card) => card !== newPortraitMatches[0]) : null);
+    if (!oldCard) throw new Error(`返回牧场后无法按头像唯一定位已完成的 ${oldMain.tier} 阶主宠；旧头像匹配 ${oldPortraitMatches.length}，新头像匹配 ${newPortraitMatches.length}`);
+    await trustedClick(oldCard, `选中待存放的 ${oldMain.tier} 阶成品主宠 ${oldMain.name}`);
+    const store = exactAction(["存放"]);
+    if (!store) throw new Error("牧场未找到唯一“存放”按钮");
+    await trustedClick(store, `存放 ${oldMain.tier} 阶成品主宠 ${oldMain.name}`);
+    const stored = await waitUntil(() => {
+      const rows = pastureRows();
+      const oldVisible = rows.some(({ pet }) => normalize(pet.name) === normalize(oldMain.name)
+        && Number(pet.tier) === Number(oldMain.tier)
+        && Math.abs(Number(pet.cc) - Number(oldMain.cc)) < 0.06);
+      return carriedPetCount() === carriedBeforeStore - 1 && rows.length === pastureBefore + 1 && oldVisible
+        ? { rows: rows.length, carried: carriedPetCount() } : null;
+    }, 20000, 300);
+    if (!stored) throw new Error("点击存放后未同时验证携带数减少、牧场数增加和已完成宠物出现");
+    if (carriedPetCount() !== beforeCarried) throw new Error(`换主宠完成后携带数量异常：预期 ${beforeCarried}，实际 ${carriedPetCount()}`);
+
+    const locked = selectedAsMain;
+    bumpAutoStat("mainSwaps");
+    const clearedDeputy = planner.clearDeputyPet("终止阶主战交接完成");
+    saveAutoCheckpoint("start", null, { swappedFrom: oldMain, swappedTo: locked });
+    logEvent("rankup/main-swapped", { oldMain, nextMain: locked, stored, clearedDeputy });
+    return locked;
+  }
+
   async function runAutoCycle(maxSynthesisRetries) {
+    const mainTierBeforeCycle = Number(planner.getState().mainPet?.tier);
     let checkpoint = runtime.autoCheckpoint || { stage: "start", deputy: null };
     let deputy = checkpoint.deputy;
     if (checkpoint.stage === "deputy-evolved") {
@@ -2688,11 +2996,28 @@
       const knownDeputy = planner.getState().deputyPet;
       const carriedCards = Array.from(document.querySelectorAll(".user-left .ul .li,.user-left .li"))
         .filter(isRendered).filter((card) => normalize(card.textContent).includes("Lv"));
-      const knownCarried = knownDeputy?.name && carriedCards.some((card) => normalize(card.textContent).includes(normalize(knownDeputy.name)));
-      if (knownCarried) {
-        deputy = knownDeputy;
+      const nonMainMatches = knownDeputy?.name && carriedCards.length > 1
+        ? carriedCards.map((card, carriedIndex) => ({ card, carriedIndex })).slice(1).filter(({ card }) => {
+          const text = String(card.innerText || card.textContent || "");
+          const name = text.match(/^([\s\S]*?)\s*Lv\s*\d+/i)?.[1]?.trim() || "";
+          if (normalize(name) !== normalize(knownDeputy.name)) return false;
+          const portraitKey = portraitKeyFromElement(card);
+          return !knownDeputy.portraitKey || !portraitKey || String(portraitKey) === String(knownDeputy.portraitKey);
+        }) : [];
+      if (nonMainMatches.length === 1) {
+        const recovered = nonMainMatches[0];
+        const liveLevel = Number(String(recovered.card.innerText || recovered.card.textContent || "").match(/Lv\s*(\d+)/i)?.[1]);
+        deputy = { ...knownDeputy, carriedIndex: recovered.carriedIndex };
+        if (Number.isInteger(liveLevel)) deputy = { ...deputy, level: liveLevel, displayLevel: liveLevel, effectiveLevel: liveLevel };
         checkpoint = saveAutoCheckpoint(Number(deputy.level) >= 40 ? "deputy-levelled" : "deputy-withdrawn", deputy);
-        logEvent("automation/checkpoint-recovered", { checkpoint, carriedCardCount: carriedCards.length });
+        logEvent("automation/checkpoint-recovered", { checkpoint, carriedCardCount: carriedCards.length, identityMethod: "unique-non-main-card" });
+      } else if (knownDeputy?.name) {
+        logEvent("automation/stale-deputy-snapshot-ignored", {
+          knownDeputy,
+          carriedCardCount: carriedCards.length,
+          nonMainMatchCount: nonMainMatches.length,
+          reason: carriedCards.length <= 1 ? "only-main-carried" : "non-main-identity-not-unique",
+        });
       }
     }
     if (checkpoint.stage === "start") {
@@ -2703,7 +3028,33 @@
     }
 
     if (checkpoint.stage === "pasture-prepared") {
-      await openPasture();
+      if (currentPageKind() !== "pasture") await openPasture();
+      else planner.scanPasture();
+      // 兼容 v1.7.1：取出已完成但检查点尚未来得及推进时，携带栏会多出一张末尾卡片。
+      // 先按新增位置恢复副宠，禁止再次从牧场取出同类宠物。
+      const recoveryCarriedCount = carriedPetCount();
+      if (Number.isInteger(recoveryCarriedCount) && recoveryCarriedCount > 1 && !Number.isInteger(Number(deputy?.carriedIndex))) {
+        const recoveredTarget = { ...deputy, carriedIndex: recoveryCarriedCount - 1 };
+        try {
+          deputy = await verifyCarriedDeputyLevel40(recoveredTarget);
+          checkpoint = saveAutoCheckpoint("deputy-levelled", deputy, {
+            reconciledFrom: "v1.7.1-pasture-prepared-after-withdrawal",
+            reconciledAt: new Date().toISOString(),
+          });
+          logEvent("automation/pasture-prepared-reconciled", {
+            result: "recovered-by-appended-carried-index", deputy, recoveryCarriedCount,
+          });
+          setTxStatus(`检测到副宠 ${deputy.name} 已实际取出，已按新增卡片位置恢复事务并跳过重复取出。`, "warn");
+        } catch (recoveryError) {
+          logEvent("automation/pasture-prepared-index-recovery-rejected", {
+            target: recoveredTarget, message: recoveryError?.message || String(recoveryError),
+          });
+          await openPasture();
+        }
+      }
+      if (checkpoint.stage !== "pasture-prepared") {
+        // 已成功恢复到 deputy-levelled，直接进入后续主宠/合成检查点。
+      } else {
       const checkpointEntry = resolveCheckpointPastureEntry(pastureRows(), deputy);
       if (!checkpointEntry) {
         await openPetAttributes();
@@ -2740,6 +3091,7 @@
       } else {
         deputy = checkpointEntry.pet;
       }
+      }
       if (checkpoint.stage === "pasture-prepared") {
         deputy = await withdrawNextDeputy(deputy);
         if (Number(deputy.level) < 40) throw new Error(`取出前副宠 ${deputy.name} 仅 Lv${deputy.level}，停止`);
@@ -2775,7 +3127,7 @@
         throw new Error(`进化前锁定公式主宠 ${mainBeforeEvolution.name || "未知"} 为 Lv${mainBeforeEvolution.level || "未知"}，必须至少达到 Lv40`);
       }
       const evolutionConfig = planner.getConfig();
-      const requestedEvolutions = Math.max(0, Math.min(10, Number(evolutionConfig.evolutionPerCycle) || 0));
+      const requestedEvolutions = evolutionConfig.mode === "rankup" ? 0 : Math.max(0, Math.min(10, Number(evolutionConfig.evolutionPerCycle) || 0));
       const verifyBatchSize = Math.max(1, Math.min(10, Number(evolutionConfig.evolutionVerifyBatchSize) || 5));
       const verifyCc = evolutionConfig.verifyCcDuringEvolutionBatch !== false;
       let evolutionsDone = Math.max(0, Number(checkpoint.evolutionsDone) || 0);
@@ -2877,7 +3229,7 @@
       if (result?.level === "success") {
         bumpAutoStat("synthesisSuccesses");
         saveAutoCheckpoint("complete", null);
-        return { success: true, attempt, result };
+        return { success: true, attempt, result, mainTierBefore: mainTierBeforeCycle };
       }
       if (result?.level === "warn" && /合成.*失败/.test(result.message || "") && attempt < maxSynthesisRetries) {
         bumpAutoStat("synthesisFailures");
@@ -2912,12 +3264,23 @@
     runtime.autoStats = createAutoStats(maxCycles, maxSynthesisRetries);
     let outcome = "正常结束";
     let finalReason = "";
-    const stopCc = Number(planner.getConfig().targetCc);
+    const runConfig = planner.getConfig();
+    const rankUpMode = runConfig.mode === "rankup";
+    const stopCc = Number(runConfig.targetCc);
     logEvent("automation/start", { maxCycles, maxSynthesisRetries, main: state.mainPet, config: planner.getConfig() });
     try {
       await requireValidLicense({ forceRefresh: true });
-      const initialMain = await readLockedMainLive("启动前培养停止值复核");
-      if (targetCcReached(initialMain, stopCc, "before-start", 0)) {
+      let initialMain = await readLockedMainLive(rankUpMode ? "启动前升阶主宠复核" : "启动前培养停止值复核");
+      if (rankUpMode && Number(initialMain.tier) >= Number(runConfig.rankUpMaxTier)) {
+        setTxStatus(`检测到锁定主宠已达到中止 ${runConfig.rankUpMaxTier} 阶，先执行成品交接，再开始新循环…`, "warn");
+        initialMain = await swapCompletedRankMain(initialMain);
+      }
+      const rankUpSourceFloor = Number(runConfig.rankUpMinTier);
+      const rankUpSourceCeiling = Number(runConfig.rankUpMaxTier) - 1;
+      if (rankUpMode && (Number(initialMain.tier) < rankUpSourceFloor || Number(initialMain.tier) > rankUpSourceCeiling)) {
+        throw new Error(`目标 ${runConfig.rankUpMinTier}→${runConfig.rankUpMaxTier} 阶时，起始主宠必须为 ${rankUpSourceFloor}–${rankUpSourceCeiling} 阶；当前为 ${initialMain.tier}阶`);
+      }
+      if (!rankUpMode && targetCcReached(initialMain, stopCc, "before-start", 0)) {
         outcome = "已达到培养目标";
         finalReason = `主宠 ${initialMain.name} CC ${initialMain.cc} 已达到培养停止值 ${stopCc}`;
         logEvent("automation/stop-cc-reached", { phase: "before-start", cycle: 0, main: initialMain, stopCc });
@@ -2925,45 +3288,79 @@
       }
       await ensureLockedMainReady();
       await refreshBagSnapshot("automation/preflight");
-      await openPasture();
-      planner.scanPasture();
-      for (let cycle = 1; cycle <= maxCycles && !runtime.stopRequested; cycle += 1) {
-        runtime.autoCycle = cycle;
-        if (cycle > 1) {
+      let synthesisStep = 0;
+      let rankUpRound = rankUpMode ? 1 : 0;
+      if (rankUpMode) bumpAutoStat("rankUpRoundsStarted");
+      while (!runtime.stopRequested && (rankUpMode
+        ? runtime.autoStats.rankUpRoundsCompleted < maxCycles
+        : synthesisStep < maxCycles)) {
+        synthesisStep += 1;
+        runtime.autoCycle = rankUpMode ? rankUpRound : synthesisStep;
+        if (synthesisStep > 1 && !rankUpMode) {
           const beforeCycleMain = await readLockedMainLive("下一轮前培养停止值复核");
-          if (targetCcReached(beforeCycleMain, stopCc, "before-cycle", cycle)) {
+          if (targetCcReached(beforeCycleMain, stopCc, "before-cycle", synthesisStep)) {
             outcome = "已达到培养目标";
             finalReason = `主宠 ${beforeCycleMain.name} CC ${beforeCycleMain.cc} 已达到培养停止值 ${stopCc}`;
             logEvent("automation/stop-cc-reached", {
-              phase: "before-cycle", cycle, main: beforeCycleMain, stopCc,
+              phase: "before-cycle", cycle: synthesisStep, main: beforeCycleMain, stopCc,
             });
             break;
           }
         }
         if (runtime.autoCheckpoint?.stage === "complete") saveAutoCheckpoint("start", null);
-        if (cycle > 1) {
-          setTxStatus(`自动循环 ${cycle}/${maxCycles}：先复核上一轮合成后的主宠等级，必要时自动补到 Lv40…`);
+        if (synthesisStep > 1) {
+          setTxStatus(rankUpMode
+            ? `完整升阶轮次 ${rankUpRound}/${maxCycles}：复核当前主宠等级，必要时补到 Lv40…`
+            : `自动循环 ${synthesisStep}/${maxCycles}：先复核上一轮合成后的主宠等级，必要时自动补到 Lv40…`);
           await ensureLockedMainReady();
         }
-        setTxStatus(`自动循环 ${cycle}/${maxCycles}：主宠已确认 Lv40，准备从牧场取出下一只副宠…`);
+        setTxStatus(rankUpMode
+          ? `完整升阶轮次 ${rankUpRound}/${maxCycles}：主宠已确认 Lv40，准备选择同阶副宠…`
+          : `自动循环 ${synthesisStep}/${maxCycles}：主宠已确认 Lv40，准备从牧场取出下一只副宠…`);
         bumpAutoStat("cyclesStarted");
-        logEvent("automation/cycle-begin", { cycle });
+        logEvent("automation/cycle-begin", { cycle: runtime.autoCycle, synthesisStep, rankUpRound: rankUpMode ? rankUpRound : null });
         const result = await runAutoCycle(maxSynthesisRetries);
-        logEvent("automation/cycle-finish", { cycle, result });
+        logEvent("automation/cycle-finish", { cycle: runtime.autoCycle, synthesisStep, rankUpRound: rankUpMode ? rankUpRound : null, result });
         if (result?.stopped) break;
         if (result?.success) bumpAutoStat("cyclesCompleted");
-        if (result?.success) {
+        if (result?.success && rankUpMode) {
+          const beforeTier = Number(result.mainTierBefore || planner.getState().mainPet?.tier);
+          const observedMain = await readRankUpMainAfterSynthesis(beforeTier);
+          const afterTier = Number(observedMain.tier);
+          if (!Number.isInteger(afterTier)) throw new Error("合成成功后未能从“带领的宠物”页读取主宠阶数");
+          if (afterTier > beforeTier) bumpAutoStat("rankUpVerified");
+          else bumpAutoStat("rankUpUnchanged");
+          logEvent("rankup/tier-verified", { beforeTier, afterTier, main: observedMain });
+          setTxStatus(afterTier > beforeTier
+            ? `升阶核验完成：${beforeTier}阶 → ${afterTier}阶。`
+            : `合成成功但阶数仍为 ${afterTier}阶，将继续选择同阶副宠。`, afterTier > beforeTier ? "success" : "warn");
+          if (afterTier >= Number(runConfig.rankUpMaxTier)) {
+            logEvent("rankup/target-reached", { main: observedMain });
+            setTxStatus(`主宠 ${observedMain.name} 已达到本轮中止 ${runConfig.rankUpMaxTier} 阶，正在换入新的 ${runConfig.rankUpMinTier} 阶主宠并存放已完成主宠…`, "warn");
+            const newMain = await swapCompletedRankMain(observedMain);
+            bumpAutoStat("rankUpRoundsCompleted");
+            setTxStatus(`升阶循环换宠完成：新主宠 ${newMain.name} ${newMain.tier}阶 Lv${newMain.level}；已完成的 ${observedMain.tier} 阶主宠已存入牧场。`, "success");
+            finalReason = `已完成 ${runtime.autoStats.rankUpRoundsCompleted} 次 ${runConfig.rankUpMinTier}→${runConfig.rankUpMaxTier} 阶交接，新主宠为 ${newMain.name} ${newMain.tier}阶`;
+            if (runtime.autoStats.rankUpRoundsCompleted < maxCycles) {
+              rankUpRound += 1;
+              bumpAutoStat("rankUpRoundsStarted");
+            }
+          }
+        } else if (result?.success) {
           const afterSynthesisMain = await readLockedMainLive("合成后培养停止值复核");
-          if (targetCcReached(afterSynthesisMain, stopCc, "after-synthesis", cycle)) {
+          if (targetCcReached(afterSynthesisMain, stopCc, "after-synthesis", synthesisStep)) {
             outcome = "已达到培养目标";
             finalReason = `主宠 ${afterSynthesisMain.name} CC ${afterSynthesisMain.cc} 已达到培养停止值 ${stopCc}`;
             logEvent("automation/stop-cc-reached", {
-              phase: "after-synthesis", cycle, main: afterSynthesisMain, stopCc,
+              phase: "after-synthesis", cycle: synthesisStep, main: afterSynthesisMain, stopCc,
             });
             break;
           }
         }
-        if (result?.success && cycle < maxCycles) saveAutoCheckpoint("start", null);
+        const shouldContinue = rankUpMode
+          ? runtime.autoStats.rankUpRoundsCompleted < maxCycles
+          : synthesisStep < maxCycles;
+        if (result?.success && shouldContinue) saveAutoCheckpoint("start", null, { mainTierBefore: planner.getState().mainPet?.tier });
       }
       if (runtime.stopRequested) {
         outcome = "已安全停止";
@@ -3053,33 +3450,30 @@
     const section = document.createElement("section");
     section.className = "tx-section";
     section.innerHTML = `
-      <div class="box warn"><b>阶段 2 · 单次事务 v${VERSION}</b><br>
-        每次只执行一个事务；不会自动串联下一步。进化会直接读取属性页“进化次数”并核验 +1；公式神宠使用已锁定主宠且不限制阶级；合成失败只刷新页面并恢复选择，不会自动重试。
-      </div>
-      <div class="box license-box"><b>许可证</b><br>
+      <details class="ui-section"><summary>许可证</summary><div class="ui-content license-box">
         <span class="license-status">正在读取授权状态…</span>
         <div class="row"><label>激活码</label><input class="license-code" type="password" autocomplete="off" placeholder="输入授权服务器发放的激活码"></div>
+        <div class="row"><label>设备名称</label><input class="license-device-name" maxlength="80" placeholder="例如：家用台式机"></div>
+        <div class="row"><label>设备备注（可选）</label><input class="license-device-note" maxlength="240" placeholder="仅用于授权后台辨认设备"></div>
         <div class="buttons"><button class="license-activate">激活/换机授权</button><button class="license-refresh secondary">检查/续签</button></div>
         <button class="license-clear secondary" style="width:100%">清除本机许可证</button>
-      </div>
-      <div class="checks">
-        <label><input class="tx-confirm" type="checkbox">我已核对当前目标宠物、页面和本次资源选择</label>
-      </div>
-      <div class="buttons tx-buttons">
-        <button class="tx-read secondary">读取经验状态（只读）</button>
-        <button class="tx-level">补当前宠到 Lv40</button>
-        <button class="tx-evolve secondary">进化一次</button>
-        <button class="tx-synth secondary">合成一次</button>
+      </div></details>
+      <details class="ui-section"><summary>导出事务诊断</summary><div class="ui-content">
+        <div class="buttons tx-buttons">
         <button class="tx-self-test secondary">DOM 结构检查（只读）</button>
         <button class="tx-diagnostics secondary">导出事务诊断</button>
-      </div>
-      <div class="box"><b>阶段 3 · 自动合宠循环</b><br>
-        每次启动先复核锁定主宠、完整背包和牧场。每轮先在牧场把低阶/低CC优先副宠补到 Lv40，再取出；不会把副宠设为主战。随后按面板设置仅给锁定主宠进化 0–10 次；强化丹 A/B 耗尽时跳过剩余进化并进入合成。复核主副宠等级与身份后合成一次，其他无法验证的检查点仍会暂停并保留接管日志。
-        <div class="row" style="margin-top:8px"><label>最多周期</label><input class="auto-cycles" type="number" min="1" max="50" value="10"></div>
+        </div>
+      </div></details>
+      <details class="ui-section auto-loop-section" open><summary>自动合宠循环</summary><div class="ui-content">
+        <div class="box warn">启动前请锁定主宠、记录背包和牧场。升阶模式会按目标区间选择同阶副宠，到达中止阶后自动更换主宠。</div>
+        <div class="row" style="margin-top:8px"><label>最多轮次（升阶为完整交接）</label><input class="auto-cycles" type="number" min="1" max="50" value="10"></div>
         <div class="row"><label>单只合成上限</label><input class="auto-retries" type="number" min="1" max="10" value="3"></div>
-        <div class="checks"><label><input class="auto-fresh-start" type="checkbox">清除旧检查点，从当前牧场重新开始</label></div>
+        <div class="checks">
+          <label><input class="tx-confirm" type="checkbox">我已核对主宠、背包、牧场和本次设置</label>
+          <label><input class="auto-fresh-start" type="checkbox">清除旧检查点，从当前牧场重新开始</label>
+        </div>
         <div class="buttons"><button class="auto-start">开始自动循环</button><button class="auto-stop secondary" disabled>安全停止</button></div>
-      </div>
+      </div></details>
       <div class="status tx-status" style="display:none">属性页经验按累计经验读取；Lv1 页面若直接显示约 563.3W 总阈值也可安全识别。背包会自动滚动到计划使用的经验道具。</div>`;
     const body = shadow.querySelector(".panel-body") || panel;
     const danger = shadow.querySelector(".danger-note");
@@ -3088,6 +3482,17 @@
     confirmNode = section.querySelector(".tx-confirm");
     setTxStatus(txStatus.textContent, "normal");
     const licenseStatus = section.querySelector(".license-status");
+    const deviceNameNode = section.querySelector(".license-device-name");
+    const deviceNoteNode = section.querySelector(".license-device-note");
+    const savedDeviceProfile = license?.deviceProfile?.() || {};
+    deviceNameNode.value = savedDeviceProfile.deviceName || "";
+    deviceNoteNode.value = savedDeviceProfile.note || "";
+    const persistDeviceProfile = () => license?.setDeviceProfile?.({
+      deviceName: deviceNameNode.value,
+      note: deviceNoteNode.value,
+    });
+    deviceNameNode.addEventListener("change", persistDeviceProfile);
+    deviceNoteNode.addEventListener("change", persistDeviceProfile);
     const renderLicenseStatus = async () => {
       const status = license ? await license.status() : { valid: false, message: "许可证组件未加载" };
       const expires = status.payload?.expiresAt ? new Date(Number(status.payload.expiresAt)).toLocaleString() : "";
@@ -3097,7 +3502,10 @@
     };
     section.querySelector(".license-activate").addEventListener("click", async () => {
       try {
-        const activation = await license.activate(section.querySelector(".license-code").value);
+        const activation = await license.activate(section.querySelector(".license-code").value, {
+          deviceName: deviceNameNode.value,
+          note: deviceNoteNode.value,
+        });
         section.querySelector(".license-code").value = "";
         await renderLicenseStatus();
         setTxStatus(activation?.disabled
@@ -3107,6 +3515,7 @@
     });
     section.querySelector(".license-refresh").addEventListener("click", async () => {
       try {
+        persistDeviceProfile();
         await license.ensureValid({ forceRefresh: true });
         await renderLicenseStatus();
         setTxStatus("许可证检查和续签完成。", "success");
@@ -3118,10 +3527,6 @@
       setTxStatus("已清除当前浏览器保存的许可证。", "warn");
     });
     renderLicenseStatus().catch(() => {});
-    section.querySelector(".tx-read").addEventListener("click", readPetProgressOnce);
-    section.querySelector(".tx-level").addEventListener("click", levelTo40Once);
-    section.querySelector(".tx-evolve").addEventListener("click", evolveOnce);
-    section.querySelector(".tx-synth").addEventListener("click", synthesizeOnce);
     section.querySelector(".tx-self-test").addEventListener("click", runDomSelfTest);
     section.querySelector(".tx-diagnostics").addEventListener("click", exportDiagnostics);
     const autoStart = section.querySelector(".auto-start");

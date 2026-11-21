@@ -4,7 +4,7 @@
   if (window.__PK_GOD_PLANNER_V150__) return;
   window.__PK_GOD_PLANNER_V150__ = true;
 
-  const VERSION = "1.6.0";
+  const VERSION = "1.8.7";
   const core = globalThis.PlayKeeperGodPlannerCore;
   if (!core) {
     console.error("[PK God Planner] core 未加载");
@@ -34,6 +34,10 @@
     useSupremeStone: false,
     pastureUpgradeCount: 1,
     pastureMaxTier: 8,
+    pastureUpgradeMinTier: 1,
+    pastureUpgradeMaxTier: 8,
+    rankUpMinTier: 8,
+    rankUpMaxTier: 9,
     evolutionPerCycle: 1,
     evolutionVerifyBatchSize: 5,
     verifyCcDuringEvolutionBatch: true,
@@ -57,6 +61,10 @@
   let supremeNode;
   let pastureUpgradeCountNode;
   let pastureMaxTierNode;
+  let pastureUpgradeMinTierNode;
+  let pastureUpgradeMaxTierNode;
+  let rankUpMinTierNode;
+  let rankUpMaxTierNode;
   let evolutionPerCycleNode;
   let evolutionVerifyBatchSizeNode;
   let verifyCcDuringEvolutionBatchNode;
@@ -169,6 +177,20 @@
     return pet;
   }
 
+  function storeMainPet(pet) {
+    if (!pet?.name || !Number.isFinite(Number(pet.level)) || !Number.isInteger(Number(pet.tier))) {
+      throw new Error("主宠快照缺少名称、等级或阶数");
+    }
+    const stored = mergePetSnapshot(state.mainPet, pet);
+    state.mainPet = stored;
+    state.scans.mainPet = new Date().toISOString();
+    saveState();
+    setStatus(`已保存主宠：${stored.name} Lv${stored.level} / ${stored.tier}阶 / CC ${stored.cc ?? "?"}`);
+    renderAll();
+    autoBuildPlanIfReady();
+    return JSON.parse(JSON.stringify(stored));
+  }
+
   function scanDeputyPet() {
     const stats = smallestVisibleMatching((text) => /等级\s*[：:]?\s*\d+/.test(text)
       && (/阶(?:级|数)?\s*[：:]?\s*[一二三四五六七八九十\d]+阶?/.test(text) || /进化次数\s*[：:]?\s*\d+/.test(text))
@@ -199,6 +221,16 @@
     renderAll();
     autoBuildPlanIfReady();
     return JSON.parse(JSON.stringify(state.deputyPet));
+  }
+
+  function clearDeputyPet(reason = "副宠事务已结束") {
+    const previous = state.deputyPet ? JSON.parse(JSON.stringify(state.deputyPet)) : null;
+    state.deputyPet = null;
+    state.scans.deputyPet = null;
+    saveState();
+    setStatus(`${reason}，已清除旧副宠快照。`);
+    renderAll();
+    return previous;
   }
 
   function scanPasture() {
@@ -339,8 +371,12 @@
 
   function readConfig() {
     const selectedMode = modeNode?.value;
+    const pastureUpgradeMinTier = Math.max(1, Math.min(10, Math.floor(Number(pastureUpgradeMinTierNode?.value) || 1)));
+    const pastureUpgradeMaxTier = Math.max(pastureUpgradeMinTier, Math.min(10, Math.floor(Number(pastureUpgradeMaxTierNode?.value) || 8)));
+    const rankUpMinTier = Math.max(2, Math.min(9, Math.floor(Number(rankUpMinTierNode?.value) || 8)));
+    const rankUpMaxTier = Math.max(rankUpMinTier + 1, Math.min(10, Math.floor(Number(rankUpMaxTierNode?.value) || 9)));
     return {
-      mode: selectedMode === "partial" || selectedMode === "formula" ? selectedMode : "full",
+      mode: ["partial", "formula", "rankup"].includes(selectedMode) ? selectedMode : "full",
       targetCc: Number(targetCcNode?.value || 57.6),
       fullQualificationCc: Number(qualificationCcNode?.value || 60),
       level1To40ExpW: Number(expTargetNode?.value || 563.3),
@@ -349,6 +385,10 @@
       useSupremeStone: Boolean(supremeNode?.checked),
       pastureUpgradeCount: Math.max(1, Math.floor(Number(pastureUpgradeCountNode?.value) || 1)),
       pastureMaxTier: Math.max(1, Math.min(10, Math.floor(Number(pastureMaxTierNode?.value) || 8))),
+      pastureUpgradeMinTier,
+      pastureUpgradeMaxTier,
+      rankUpMinTier,
+      rankUpMaxTier,
       evolutionPerCycle: Math.max(0, Math.min(10, Math.floor(Number(evolutionPerCycleNode?.value) || 0))),
       evolutionVerifyBatchSize: Math.max(1, Math.min(10, Math.floor(Number(evolutionVerifyBatchSizeNode?.value) || 5))),
       verifyCcDuringEvolutionBatch: Boolean(verifyCcDuringEvolutionBatchNode?.checked),
@@ -553,21 +593,25 @@
     const shadow = panelHost.attachShadow({ mode: "open" });
     shadow.innerHTML = `
       <style>
-        :host{all:initial}.panel{width:350px;max-height:calc(100vh - 20px);overflow:auto;box-sizing:border-box;padding:11px;border-radius:12px;color:#eef5ff;background:rgba(18,24,34,.97);border:1px solid #42536a;box-shadow:0 10px 30px rgba(0,0,0,.42);font:12px/1.5 system-ui,"Microsoft YaHei",sans-serif;overscroll-behavior:contain}
-        h3{margin:0 0 4px;font-size:15px;color:#ffd479}.sub{color:#8da1ba;margin-bottom:8px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}.row{margin:6px 0}.row label{display:block;color:#aebed3;margin-bottom:3px}input,select{width:100%;box-sizing:border-box;padding:6px 7px;border-radius:6px;border:1px solid #42536a;background:#0a1018;color:#fff;font:inherit}.checks label{display:flex;gap:6px;align-items:flex-start;margin:5px 0;color:#c8d5e5}.checks input{width:auto;margin-top:2px}.buttons{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0}.buttons button{min-height:34px}button{padding:7px;border:0;border-radius:6px;background:#ffd479;color:#241b08;font:600 12px system-ui,"Microsoft YaHei",sans-serif;cursor:pointer}button.secondary{background:#2d394b;color:#edf4ff}.status,.summary{margin-top:8px;padding:8px;border-radius:7px;background:#0d1520}.status[data-level=warn]{color:#ffd479}.status[data-level=error]{color:#ff9191}.plan-section{margin-top:8px;border:1px solid #314158;border-radius:8px;background:#0b131e}.plan-section>summary{cursor:pointer;padding:8px 10px;color:#ffd479;font-weight:700;user-select:none}.plan-output{max-height:330px;overflow:auto;padding:0 8px 8px;color:#eef5ff}.box{margin:7px 0;padding:7px;border-radius:6px;background:#111d2b;color:#eef5ff}.box.good{border-left:3px solid #54d585}.box.warn{border-left:3px solid #ffd479}.box.bad{border-left:3px solid #ff7979}.box ul,.box ol{margin:5px 0 0;padding-left:18px}.muted{color:#8295ac}.phase{padding:5px 7px;border-radius:5px;background:#281f0d;color:#ffd479;margin-bottom:8px}.danger-note{color:#ffb2b2;font-size:11px;margin-top:7px}.compact .panel-body{display:none}.panel-head{display:flex;justify-content:space-between;gap:8px;align-items:center;cursor:move;user-select:none}.panel-head button{padding:5px 8px;cursor:pointer}.tx-section{margin-top:8px}
+        :host{all:initial}.panel{width:330px;max-height:calc(100vh - 20px);overflow:auto;box-sizing:border-box;padding:11px;border-radius:14px;color:#eef5ff;background:rgba(15,22,32,.96);backdrop-filter:blur(10px);border:1px solid #42536a;box-shadow:0 10px 30px rgba(0,0,0,.42);font:12px/1.5 system-ui,"Microsoft YaHei",sans-serif;overscroll-behavior:contain}
+        h3{margin:0 0 4px;font-size:15px;color:#ffd479}.sub{color:#8da1ba;margin-bottom:8px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:7px}.row{margin:6px 0}.row label{display:block;color:#aebed3;margin-bottom:3px}input,select{width:100%;box-sizing:border-box;padding:7px;border-radius:7px;border:1px solid #42536a;background:#0a1018;color:#fff;font:inherit}.checks label{display:flex;gap:6px;align-items:flex-start;margin:5px 0;color:#c8d5e5}.checks input{width:auto;margin-top:2px}.buttons{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0}.buttons button{min-height:34px}button{padding:7px;border:0;border-radius:7px;background:#ffd479;color:#241b08;font:600 12px system-ui,"Microsoft YaHei",sans-serif;cursor:pointer}button.secondary{background:#2d394b;color:#edf4ff}.status,.summary{margin-top:8px;padding:8px;border-radius:7px;background:#0d1520}.status[data-level=warn]{color:#ffd479}.status[data-level=error]{color:#ff9191}.plan-section,.ui-section{margin-top:8px;border:1px solid #314158;border-radius:9px;background:#0b131e}.plan-section>summary,.ui-section>summary{cursor:pointer;padding:9px 10px;color:#ffd479;font-weight:700;user-select:none}.ui-content{padding:0 9px 9px}.plan-output{max-height:280px;overflow:auto;padding:0 8px 8px;color:#eef5ff}.box{margin:7px 0;padding:7px;border-radius:6px;background:#111d2b;color:#eef5ff}.box.good{border-left:3px solid #54d585}.box.warn{border-left:3px solid #ffd479}.box.bad{border-left:3px solid #ff7979}.box ul,.box ol{margin:5px 0 0;padding-left:18px}.muted{color:#8295ac}.phase{padding:6px 8px;border-radius:7px;background:#281f0d;color:#ffd479;margin-bottom:8px}.danger-note{color:#ffb2b2;font-size:11px;margin-top:7px}.compact .panel-body{display:none}.panel-head{display:flex;justify-content:space-between;gap:8px;align-items:center;cursor:move;user-select:none}.panel-head button{padding:5px 8px;cursor:pointer}.tx-section{margin-top:8px}.rankup-only{display:none}.rankup-mode .rankup-only{display:block}.rankup-mode .cultivation-only{display:none}
       </style>
       <section class="panel">
         <div class="panel-head"><h3>神宠规划器 v${VERSION}</h3><button class="compact-toggle secondary">收起</button></div>
         <div class="panel-body">
-        <div class="sub">阶段 1 · Planner（v1.6.0 后台看门狗与持久诊断）</div>
-        <div class="phase">规划器本身只读；下方阶段2单次事务会在明确确认后执行。</div>
+        <div class="sub">v1.8.7 · 设备授权信息扩展</div>
+        <div class="phase">常用模块按需展开；先准备快照，再启动自动循环。</div>
+        <details class="ui-section" open><summary>核心设置</summary><div class="ui-content">
         <div class="grid">
-          <div class="row"><label>模式</label><select class="mode"><option value="full">满神</option><option value="partial">残神</option><option value="formula">公式神宠</option></select></div>
+          <div class="row"><label>模式</label><select class="mode"><option value="full">满神</option><option value="partial">残神</option><option value="formula">公式神宠</option><option value="rankup">合成升阶</option></select></div>
           <div class="row"><label>Lv1→40 经验(W)</label><input class="exp-target" type="number" min="1" step="0.1"></div>
-          <div class="row"><label>普通培养停止 CC</label><input class="target-cc" type="number" step="0.1"></div>
-          <div class="row"><label>满神资格 CC &gt;</label><input class="qualification-cc" type="number" step="0.1"></div>
-          <div class="row"><label>牧场升级数量</label><input class="pasture-upgrade-count" type="number" min="1" max="60" step="1"></div>
-          <div class="row"><label>牧场最高阶数</label><input class="pasture-max-tier" type="number" min="1" max="10" step="1"></div>
+          <div class="row cultivation-only"><label>普通培养停止 CC</label><input class="target-cc" type="number" step="0.1"></div>
+          <div class="row cultivation-only"><label>满神资格 CC &gt;</label><input class="qualification-cc" type="number" step="0.1"></div>
+          <div class="row rankup-only"><label>目标起始阶</label><input class="rankup-min-tier" type="number" min="2" max="9" step="1"></div>
+          <div class="row rankup-only"><label>本轮中止阶</label><input class="rankup-max-tier" type="number" min="2" max="10" step="1"></div>
+        </div></div></details>
+        <details class="ui-section"><summary>高级设置</summary><div class="ui-content"><div class="grid">
+          <div class="row"><label>普通模式副宠最高阶</label><input class="pasture-max-tier" type="number" min="1" max="10" step="1"></div>
           <div class="row"><label>每周期主宠进化次数</label><input class="evolution-per-cycle" type="number" min="0" max="10" step="1"></div>
           <div class="row"><label>连续进化核验间隔</label><input class="evolution-verify-batch-size" type="number" min="1" max="10" step="1"></div>
           <div class="row"><label>守护材料</label><input class="guard-material" maxlength="30"></div>
@@ -579,20 +623,28 @@
           <label><input class="supreme" type="checkbox">满足最终条件时规划使用至尊神石</label>
           <label><input class="verify-cc-batch" type="checkbox">连续进化期间核验 CC</label>
           <label><input class="allow-background" type="checkbox">允许尝试后台运行（实验，默认关闭）</label>
-        </div>
+        </div></div></details>
+        <details class="ui-section"><summary>牧场副宠补级</summary><div class="ui-content">
+        <div class="grid">
+          <div class="row"><label>补级数量</label><input class="pasture-upgrade-count" type="number" min="1" max="60" step="1"></div>
+          <div class="row"><label>补级最低阶</label><input class="pasture-upgrade-min-tier" type="number" min="1" max="10" step="1"></div>
+          <div class="row"><label>补级最高阶</label><input class="pasture-upgrade-max-tier" type="number" min="1" max="10" step="1"></div>
+        </div><div class="buttons"><button class="pasture-prelevel">执行牧场副宠补级</button><button class="pasture secondary">记录牧场</button></div>
+        </div></details>
+        <details class="ui-section"><summary>自动规划</summary><div class="ui-content">
         <div class="buttons">
           <button class="auto-scan">扫描当前页</button><button class="main secondary">锁定主宠</button>
           <button class="deputy secondary">记录当前为副宠</button><button class="pasture secondary">记录牧场</button>
-          <button class="bag secondary">记录背包</button><button class="pasture-prelevel secondary">牧场副宠补级</button>
-          <button class="plan-button">生成规划</button><button class="copy secondary">复制规划</button>
-          <button class="clear secondary">清空快照</button><button class="capture-toggle secondary">显示自动捕捉</button>
-          <button class="dock secondary">复位/换侧</button><button class="hide secondary">隐藏规划器</button>
+          <button class="bag secondary">记录背包</button><button class="plan-button">生成规划</button>
+          <button class="copy secondary">复制规划</button><button class="clear secondary">清空快照</button>
+          <button class="capture-toggle secondary">显示自动捕捉</button><button class="dock secondary">复位/换侧</button>
+          <button class="hide secondary">隐藏规划器</button>
         </div>
-        <div class="box warn"><b>自动循环前置操作</b><br>请依次锁定主宠、记录背包、记录牧场；建议先点“牧场副宠补级”，把计划使用的低阶副宠提前升到 Lv40，可明显缩短循环时间。</div>
         <div class="status" style="display:none">请手动打开宠物资料、牧场、背包并分别扫描一次。</div>
         <div class="summary"></div>
-        <details class="plan-section" open><summary>自动规划结果</summary><div class="plan-output"></div></details>
-        <div class="danger-note">阶段 2 保留单次事务；阶段 3 自动循环已开放，运行前必须勾选确认项。</div>
+        <div class="plan-output"></div>
+        </div></details>
+        <div class="danger-note">自动循环运行前必须锁定主宠、记录背包和牧场，并勾选确认项。</div>
         </div>
       </section>`;
     document.documentElement.appendChild(panelHost);
@@ -609,6 +661,10 @@
     supremeNode = shadow.querySelector(".supreme");
     pastureUpgradeCountNode = shadow.querySelector(".pasture-upgrade-count");
     pastureMaxTierNode = shadow.querySelector(".pasture-max-tier");
+    pastureUpgradeMinTierNode = shadow.querySelector(".pasture-upgrade-min-tier");
+    pastureUpgradeMaxTierNode = shadow.querySelector(".pasture-upgrade-max-tier");
+    rankUpMinTierNode = shadow.querySelector(".rankup-min-tier");
+    rankUpMaxTierNode = shadow.querySelector(".rankup-max-tier");
     evolutionPerCycleNode = shadow.querySelector(".evolution-per-cycle");
     evolutionVerifyBatchSizeNode = shadow.querySelector(".evolution-verify-batch-size");
     verifyCcDuringEvolutionBatchNode = shadow.querySelector(".verify-cc-batch");
@@ -625,6 +681,10 @@
     supremeNode.checked = Boolean(config.useSupremeStone);
     pastureUpgradeCountNode.value = String(config.pastureUpgradeCount || 1);
     pastureMaxTierNode.value = String(config.pastureMaxTier || 8);
+    pastureUpgradeMinTierNode.value = String(config.pastureUpgradeMinTier || 1);
+    pastureUpgradeMaxTierNode.value = String(config.pastureUpgradeMaxTier ?? config.pastureMaxTier ?? 8);
+    rankUpMinTierNode.value = String(config.rankUpMinTier || 8);
+    rankUpMaxTierNode.value = String(config.rankUpMaxTier || 9);
     evolutionPerCycleNode.value = String(config.evolutionPerCycle ?? 1);
     evolutionVerifyBatchSizeNode.value = String(config.evolutionVerifyBatchSize ?? 5);
     verifyCcDuringEvolutionBatchNode.checked = config.verifyCcDuringEvolutionBatch !== false;
@@ -632,10 +692,13 @@
     guardMaterialNode.value = String(config.guardMaterialName || "天神之石");
     auxiliaryMaterialNode.value = String(config.auxiliaryMaterialName || "★★★成长魂石");
 
+    const syncModeUi = () => shadow.querySelector(".panel").classList.toggle("rankup-mode", modeNode.value === "rankup");
+    syncModeUi();
+    modeNode.addEventListener("change", syncModeUi);
     shadow.querySelector(".auto-scan").addEventListener("click", () => safeAction(autoScan));
     shadow.querySelector(".main").addEventListener("click", () => safeAction(scanMainPet));
     shadow.querySelector(".deputy").addEventListener("click", () => safeAction(scanDeputyPet));
-    shadow.querySelector(".pasture").addEventListener("click", () => safeAction(scanPasture));
+    shadow.querySelectorAll(".pasture").forEach((node) => node.addEventListener("click", () => safeAction(scanPasture)));
     shadow.querySelector(".bag").addEventListener("click", () => safeAction(scanBag));
     shadow.querySelector(".plan-button").addEventListener("click", () => safeAction(buildPlan));
     shadow.querySelector(".copy").addEventListener("click", copyPlan);
@@ -663,7 +726,7 @@
     });
     shadow.querySelector(".hide").addEventListener("click", () => { panelHost.style.display = "none"; });
     for (const node of [modeNode, targetCcNode, qualificationCcNode, expTargetNode, pastureUpgradeCountNode,
-      pastureMaxTierNode, evolutionPerCycleNode, evolutionVerifyBatchSizeNode, guardMaterialNode, auxiliaryMaterialNode,
+      pastureMaxTierNode, pastureUpgradeMinTierNode, pastureUpgradeMaxTierNode, rankUpMinTierNode, rankUpMaxTierNode, evolutionPerCycleNode, evolutionVerifyBatchSizeNode, guardMaterialNode, auxiliaryMaterialNode,
       evolutionMaterialNode, directEvolutionNode, supremeNode, verifyCcDuringEvolutionBatchNode, allowBackgroundAttemptNode]) {
       node.addEventListener("change", () => { saveConfig(); if (state.lastPlan) buildPlan(); });
     }
@@ -679,8 +742,10 @@
     value: Object.freeze({
       version: VERSION,
       scanMainPet,
+      storeMainPet,
       scanDeputyPet,
       storeDeputyPet,
+      clearDeputyPet,
       scanPasture,
       scanBag,
       readVisibleBagInventory,

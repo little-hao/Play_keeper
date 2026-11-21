@@ -435,7 +435,8 @@
     ]));
   }
 
-  function planPastureUpgrades({ pasturePets, inventory, maxTier = 8, count = 1, targetW = 563.3 } = {}) {
+  function planPastureUpgrades({ pasturePets, inventory, minTier = 1, maxTier = 8, count = 1, targetW = 563.3 } = {}) {
+    const tierFloor = Math.max(1, Math.min(10, Math.floor(Number(minTier) || 1)));
     const tierLimit = Math.max(1, Math.min(10, Math.floor(Number(maxTier) || 8)));
     const requested = Math.max(1, Math.floor(Number(count) || 1));
     const remainingInventory = Object.fromEntries(EXP_ITEMS.map((item) => [
@@ -443,7 +444,7 @@
       Math.max(0, Math.floor(Number(inventory?.[item.id]) || 0)),
     ]));
     const candidates = (Array.isArray(pasturePets) ? pasturePets : [])
-      .filter((pet) => Number(pet?.tier) >= 1 && Number(pet.tier) <= tierLimit && Number(pet.level) < 40)
+      .filter((pet) => Number(pet?.tier) >= tierFloor && Number(pet.tier) <= tierLimit && Number(pet.level) < 40)
       .map((pet, index) => ({ ...pet, pastureIndex: Number.isInteger(pet.pastureIndex) ? pet.pastureIndex : index }))
       .sort((a, b) => Number(a.tier) - Number(b.tier)
         || Number(a.cc) - Number(b.cc)
@@ -461,6 +462,7 @@
     }
     return {
       ok: candidates.length >= requested && plans.length >= requested,
+      minTier: tierFloor,
       maxTier: tierLimit,
       requested,
       targetW: Number(targetW) || 563.3,
@@ -470,16 +472,24 @@
       selectedPlans: plans.slice(0, requested),
       remainingInventory,
       reason: candidates.length === 0
-        ? `牧场没有 ${tierLimit} 阶及以下且低于 Lv40 的宠物`
+        ? `牧场没有 ${tierFloor}–${tierLimit} 阶且低于 Lv40 的宠物`
         : (candidates.length < requested
           ? `符合条件的牧场宠物只有 ${candidates.length} 只，少于请求的 ${requested} 只`
           : (plans.length < requested ? `白名单经验道具最多可供 ${plans.length} 只候选宠物补到 Lv40` : "")),
     };
   }
 
-  function selectCandidates(pets, mode) {
-    const normalizedMode = mode === "partial" || mode === "formula" ? mode : "full";
+  function selectCandidates(pets, mode, options = {}) {
+    const normalizedMode = ["partial", "formula", "rankup"].includes(mode) ? mode : "full";
     return dedupePets(Array.isArray(pets) ? pets : []).filter((pet) => {
+      if (normalizedMode === "rankup") {
+        const mainTier = Number(options.mainTier);
+        const minTier = Math.max(1, Math.min(9, Number(options.minTier) || 7));
+        const maxTier = Math.max(minTier, Math.min(9, Number(options.maxTier) || 9));
+        return Number.isFinite(mainTier)
+          ? Number(pet.tier) === mainTier
+          : Number(pet.tier) >= minTier && Number(pet.tier) <= maxTier;
+      }
       if (normalizedMode === "formula") return true;
       if (normalizedMode === "partial") return pet.tier === 10;
       return pet.tier <= 8;
@@ -562,14 +572,26 @@
   }
 
   function validateSynthesisTransaction({ mainPet, deputyPet, inventory, config }) {
-    const mode = config?.mode === "partial" || config?.mode === "formula" ? config.mode : "full";
+    const mode = ["partial", "formula", "rankup"].includes(config?.mode) ? config.mode : "full";
     const useSupremeStone = Boolean(config?.useSupremeStone);
     const qualificationCc = Number(config?.fullQualificationCc ?? 60);
     if (!mainPet) return { ok: false, reason: "未读取到锁定主宠资料" };
     if (!deputyPet) return { ok: false, reason: "尚未记录本次副宠；合成前必须先记录并确认副宠达到 Lv40" };
     if (Number(mainPet.level) < 40) return { ok: false, reason: `主宠仅 Lv${mainPet.level}，合成前必须达到 Lv40` };
     if (Number(deputyPet.level) < 40) return { ok: false, reason: `副宠仅 Lv${deputyPet.level}，合成前必须达到 Lv40` };
-    if (mode !== "formula" && Number(mainPet.tier) !== 10) {
+    if (mode === "rankup") {
+      const startTier = Math.max(2, Math.min(9, Number(config?.rankUpMinTier) || 8));
+      const stopTier = Math.max(startTier + 1, Math.min(10, Number(config?.rankUpMaxTier) || 9));
+      const sourceFloor = startTier - 1;
+      const sourceCeiling = stopTier - 1;
+      if (Number(mainPet.tier) < sourceFloor || Number(mainPet.tier) > sourceCeiling) {
+        return { ok: false, reason: `升阶主宠必须为 ${sourceFloor}–${sourceCeiling} 阶（目标 ${startTier}→${stopTier} 阶）；当前为 ${mainPet.tier || "?"}阶` };
+      }
+      if (Number(deputyPet.tier) !== Number(mainPet.tier)) {
+        return { ok: false, reason: `升阶模式要求同阶合成；主宠 ${mainPet.tier}阶，副宠 ${deputyPet.tier}阶` };
+      }
+    }
+    if (mode !== "formula" && mode !== "rankup" && Number(mainPet.tier) !== 10) {
       return { ok: false, reason: `主宠当前 ${mainPet.tier || "?"}阶；${mode === "partial" ? "残神" : "满神"}合成要求主宠为十阶` };
     }
     if (mode === "full" && Number(deputyPet.tier) > 8) {
@@ -587,7 +609,8 @@
     }
     return {
       ok: true, mode, mainPet, deputyPet,
-      deputyTierRule: mode === "formula" ? "公式神宠不限制副宠阶级，但必须 Lv40"
+      deputyTierRule: mode === "rankup" ? "副宠必须与主宠同阶且 Lv40"
+        : mode === "formula" ? "公式神宠不限制副宠阶级，但必须 Lv40"
         : (mode === "partial" ? "副宠必须十阶且 Lv40" : "副宠必须八阶及以下且 Lv40"),
       useSupremeStone,
     };
@@ -595,7 +618,7 @@
 
   function buildPlan({ mainPet, deputyPet, pasturePets, inventory, config }) {
     const cfg = {
-      mode: config?.mode === "partial" || config?.mode === "formula" ? config.mode : "full",
+      mode: ["partial", "formula", "rankup"].includes(config?.mode) ? config.mode : "full",
       targetCc: Number(config?.targetCc ?? 57.6),
       fullQualificationCc: Number(config?.fullQualificationCc ?? 60),
       level1To40ExpW: Number(config?.level1To40ExpW ?? 563.3),
@@ -604,29 +627,44 @@
       useSupremeStone: Boolean(config?.useSupremeStone),
       pastureUpgradeCount: Math.max(1, Math.floor(Number(config?.pastureUpgradeCount) || 1)),
       pastureMaxTier: Math.max(1, Math.min(10, Math.floor(Number(config?.pastureMaxTier) || 8))),
+      pastureUpgradeMinTier: Math.max(1, Math.min(10, Math.floor(Number(config?.pastureUpgradeMinTier) || 1))),
+      pastureUpgradeMaxTier: Math.max(1, Math.min(10, Math.floor(Number(config?.pastureUpgradeMaxTier ?? config?.pastureMaxTier) || 8))),
       evolutionPerCycle: Math.max(0, Math.min(10, Math.floor(Number(config?.evolutionPerCycle) || 0))),
+      rankUpMinTier: Math.max(2, Math.min(9, Math.floor(Number(config?.rankUpMinTier) || 8))),
+      rankUpMaxTier: Math.max(2, Math.min(10, Math.floor(Number(config?.rankUpMaxTier) || 9))),
       guardMaterialName: String(config?.guardMaterialName || "天神之石").trim() || "天神之石",
       auxiliaryMaterialName: String(config?.auxiliaryMaterialName || "★★★成长魂石").trim() || "★★★成长魂石",
     };
+    cfg.pastureUpgradeMaxTier = Math.max(cfg.pastureUpgradeMinTier, cfg.pastureUpgradeMaxTier);
+    cfg.rankUpMaxTier = Math.max(cfg.rankUpMinTier + 1, cfg.rankUpMaxTier);
     const warnings = [];
     const blockers = [];
     const steps = [];
-    const candidates = selectCandidates(pasturePets, cfg.mode);
+    const candidates = selectCandidates(pasturePets, cfg.mode, {
+      mainTier: cfg.mode === "rankup" ? Number(mainPet?.tier) : undefined,
+      minTier: cfg.rankUpMinTier,
+      maxTier: cfg.rankUpMaxTier,
+    });
 
     if (!mainPet) blockers.push("尚未扫描到主宠资料");
+    if (cfg.mode === "rankup" && mainPet) {
+      if (Number(mainPet.tier) >= cfg.rankUpMaxTier) steps.push({ type: "rankup-swap", text: `主宠已达到本轮中止 ${cfg.rankUpMaxTier} 阶：下一步返回牧场，换入 ${cfg.rankUpMinTier} 阶新主宠并存放已完成主宠` });
+      else steps.push({ type: "rankup-main", text: `升阶主宠：${mainPet.name || "未识别名称"} ${mainPet.tier}阶；目标区间 ${cfg.rankUpMinTier}→${cfg.rankUpMaxTier} 阶，本轮只选择与当前主宠同阶的副宠` });
+    }
     if (cfg.mode === "formula" && mainPet) steps.push({ type: "formula-main", text: `已锁定公式主宠：${mainPet.name || "未识别名称"} Lv${mainPet.level} / ${mainPet.tier}阶 / CC ${mainPet.cc}（公式模式不限制阶级）` });
     if (!Array.isArray(pasturePets) || !pasturePets.length) warnings.push("尚未扫描到牧场宠物，无法评估副宠库存");
     if (!inventory) warnings.push("尚未扫描背包，无法评估经验/强化丹/至尊神石库存");
     if (!deputyPet) warnings.push("尚未记录本次副宠；合成前必须记录副宠并确认达到 Lv40");
     else {
-      const deputyRuleOk = cfg.mode === "formula" ? true
+      const deputyRuleOk = cfg.mode === "rankup" ? Number(deputyPet.tier) === Number(mainPet?.tier)
+        : cfg.mode === "formula" ? true
         : (cfg.mode === "partial" ? Number(deputyPet.tier) === 10 : Number(deputyPet.tier) <= 8);
       steps.push({
         type: "deputy",
         text: `已记录副宠：${deputyPet.name || "未识别名称"} Lv${deputyPet.level} / ${deputyPet.tier}阶 / CC ${deputyPet.cc}`,
       });
       if (Number(deputyPet.level) < 40) warnings.push(`副宠当前仅 Lv${deputyPet.level}，合成前必须补到 Lv40`);
-      if (!deputyRuleOk) warnings.push(cfg.mode === "partial" ? "残神模式副宠必须十阶" : "满神模式副宠必须八阶及以下");
+      if (!deputyRuleOk) warnings.push(cfg.mode === "rankup" ? "升阶模式副宠必须与主宠同阶" : (cfg.mode === "partial" ? "残神模式副宠必须十阶" : "满神模式副宠必须八阶及以下"));
     }
 
     if (Number.isFinite(cfg.targetCc) && Number.isFinite(cfg.fullQualificationCc)
@@ -672,7 +710,7 @@
     if (pasturePets?.length) {
       steps.push({
         type: "candidates",
-        text: `${cfg.mode === "full" ? "满神" : (cfg.mode === "partial" ? "残神" : "公式神宠")}副宠候选 ${candidates.length} 只：Lv40 ${readyCandidates.length}，Lv1 ${lv1Candidates.length}，中间等级 ${midLevelCandidates.length}`,
+        text: `${cfg.mode === "full" ? "满神" : (cfg.mode === "partial" ? "残神" : (cfg.mode === "rankup" ? "同阶升阶" : "公式神宠"))}副宠候选 ${candidates.length} 只：Lv40 ${readyCandidates.length}，Lv1 ${lv1Candidates.length}，中间等级 ${midLevelCandidates.length}`,
       });
       if (!candidates.length) blockers.push(cfg.mode === "full" ? "牧场没有八阶及以下副宠候选"
         : (cfg.mode === "partial" ? "牧场没有十阶副宠候选" : "牧场没有可用副宠候选"));
@@ -687,14 +725,15 @@
     const pastureUpgradePlan = planPastureUpgrades({
       pasturePets,
       inventory,
-      maxTier: cfg.pastureMaxTier,
+      minTier: cfg.pastureUpgradeMinTier,
+      maxTier: cfg.pastureUpgradeMaxTier,
       count: cfg.pastureUpgradeCount,
       targetW: cfg.level1To40ExpW,
     });
     if (pasturePets?.length && inventory) {
       steps.push({
         type: "pasture-upgrade",
-        text: `牧场预升级：${cfg.pastureMaxTier}阶及以下按低阶/低CC优先；请求 ${cfg.pastureUpgradeCount} 只，当前白名单经验可供 ${pastureUpgradePlan.capacity} 只`,
+        text: `牧场预升级：${cfg.pastureUpgradeMinTier}–${cfg.pastureUpgradeMaxTier}阶按低阶/低CC优先；请求 ${cfg.pastureUpgradeCount} 只，当前白名单经验可供 ${pastureUpgradePlan.capacity} 只`,
       });
       if (pastureUpgradePlan.capacity < cfg.pastureUpgradeCount) warnings.push(pastureUpgradePlan.reason);
     }
