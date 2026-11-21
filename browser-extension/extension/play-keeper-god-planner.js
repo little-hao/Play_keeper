@@ -4,7 +4,7 @@
   if (window.__PK_GOD_PLANNER_V150__) return;
   window.__PK_GOD_PLANNER_V150__ = true;
 
-  const VERSION = "1.8.7";
+  const VERSION = "1.8.8";
   const core = globalThis.PlayKeeperGodPlannerCore;
   if (!core) {
     console.error("[PK God Planner] core 未加载");
@@ -599,7 +599,7 @@
       <section class="panel">
         <div class="panel-head"><h3>神宠规划器 v${VERSION}</h3><button class="compact-toggle secondary">收起</button></div>
         <div class="panel-body">
-        <div class="sub">v1.8.7 · 设备授权信息扩展</div>
+        <div class="sub">v1.8.8 · 同身份宠物合成恢复</div>
         <div class="phase">常用模块按需展开；先准备快照，再启动自动循环。</div>
         <details class="ui-section" open><summary>核心设置</summary><div class="ui-content">
         <div class="grid">

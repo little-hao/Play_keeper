@@ -4,7 +4,7 @@
   if (window.__PK_GOD_TRANSACTIONS_V150__) return;
   window.__PK_GOD_TRANSACTIONS_V150__ = true;
 
-  const VERSION = "1.8.7";
+  const VERSION = "1.8.8";
   const TRUSTED_CLICK_MESSAGE = "pk-auto-capture/trusted-click-v1";
   const TRUSTED_CLICK_PING = "pk-auto-capture/ping-v1";
   const BROWSER_CONTEXT_MESSAGE = "pk-auto-capture/browser-context-v1";
@@ -713,16 +713,26 @@
     const popup = Array.from(document.querySelectorAll(".content-bor2 .pet-popup"))[slotIndex];
     const overlay = popup?.querySelector(".pet-overlay");
     if (!overlay || !isVisible(overlay)) return;
-    const closeButtons = Array.from(popup.querySelectorAll("button,uni-button,[role=button]"))
-      .filter(isInteractable).filter((node) => normalize(node.textContent) === normalize("关闭"));
-    if (closeButtons.length === 1) await trustedClick(closeButtons[0], `关闭${roleLabel}空选项窗口`);
-    else {
-      const triggers = Array.from(document.querySelectorAll(".content-bor2 .pet-trigger")).filter(isInteractable);
-      if (!triggers[slotIndex]) throw new Error(`${roleLabel}空选项窗口无法关闭，未执行备用主宠恢复`);
-      await trustedClick(triggers[slotIndex], `收起${roleLabel}空选项窗口`);
+    const closeButtons = Array.from(document.querySelectorAll("button,uni-button,[role=button],uni-view,view,div,span"))
+      .filter(isExposedInteractable)
+      .filter((node) => normalize(node.textContent) === normalize("关闭"))
+      .sort((a, b) => {
+        const ar = a.getBoundingClientRect();
+        const br = b.getBoundingClientRect();
+        return ar.width * ar.height - br.width * br.height;
+      });
+    logEvent("synthesis/empty-popup-close-candidates", {
+      role: roleLabel,
+      count: closeButtons.length,
+      candidates: closeButtons.slice(0, 6).map(elementDiagnostic),
+    });
+    if (!closeButtons.length) {
+      throw new Error(`${roleLabel}空选项窗口没有可见“关闭”按钮；保留窗口并停止，不点击被遮罩的下拉触发框`);
     }
+    await trustedClick(closeButtons[0], `关闭${roleLabel}空选项窗口`);
     const closed = await waitUntil(() => !overlay.isConnected || !isVisible(overlay) ? true : null, 4000, 120);
     if (!closed) throw new Error(`${roleLabel}空选项窗口关闭后仍遮挡页面，未执行备用主宠恢复`);
+    logEvent("synthesis/empty-popup-closed", { role: roleLabel, slotIndex });
   }
 
   function synthesisPetSlotText(slotIndex) {
@@ -751,6 +761,41 @@
       if (!selectedText.startsWith(String(target.name || ""))) throw new Error("主战切换后主宠曾变为未指定，重新选择仍未恢复目标主宠");
     }
     logEvent("synthesis/main-battle-selected", { name: target.name, selectedText, recoveredSelection });
+  }
+
+  async function waitForSynthesisMainRerender(target, phase) {
+    let signature = "";
+    let stableHits = 0;
+    const stable = await waitUntil(() => {
+      const text = synthesisPetSlotText(0);
+      const overlays = Array.from(document.querySelectorAll(".content-bor2 .pet-overlay")).filter(isVisible);
+      const triggers = Array.from(document.querySelectorAll(".content-bor2 .pet-trigger")).filter(isExposedInteractable);
+      if (!text.startsWith(String(target.name || "")) || overlays.length || triggers.length !== 2) {
+        signature = "";
+        stableHits = 0;
+        return null;
+      }
+      const next = `${text}|${triggers.map((node) => normalize(node.textContent)).join("|")}`;
+      stableHits = next === signature ? stableHits + 1 : 1;
+      signature = next;
+      return stableHits >= 3 ? { text, triggerCount: triggers.length } : null;
+    }, 10000, 180);
+    logEvent("synthesis/main-rerender-check", { phase, stable, target: { name: target.name, level: target.level, cc: target.cc } });
+    if (!stable) throw new Error(`选择主宠后合成页在等待期内未稳定重渲染（阶段：${phase}）`);
+    return stable;
+  }
+
+  function isEmptyDeputyOptionsError(error) {
+    return /副宠下拉已打开但没有可选宠物（选项 0）/.test(error?.message || "");
+  }
+
+  async function rebuildSynthesisSelectionPage() {
+    logEvent("synthesis/empty-deputy-options-page-rebuild", { phase: "start" });
+    await openGodTempleTab("进化");
+    if (!await waitForStableEvolutionPage(10000)) throw new Error("副宠列表为空后重建页面：进化页未稳定加载");
+    await openGodTempleTab("合成");
+    if (!await waitForStableSynthesisPage(15000)) throw new Error("副宠列表为空后重建页面：合成页未稳定加载");
+    logEvent("synthesis/empty-deputy-options-page-rebuild", { phase: "complete" });
   }
 
   async function selectMaterial(slotIndex, preferredNames, roleLabel) {
@@ -1715,29 +1760,58 @@
     let selectedMain = await selectRecordedPet(0, state.mainPet, "主宠");
     if (!Number.isFinite(selectedMain.level) || selectedMain.level < 40) throw new Error(`合成页实时主宠等级为 Lv${selectedMain.level || "未知"}，必须达到 Lv40`);
     await activateSelectedSynthesisMain(state.mainPet);
+    await waitForSynthesisMainRerender(state.mainPet, "initial-main");
     let selectedDeputy;
     try {
       selectedDeputy = await selectRecordedPet(1, state.deputyPet, "副宠");
     } catch (firstDeputyError) {
-      const emptyDeputyOptions = /副宠下拉已打开但没有可选宠物（选项 0）/.test(firstDeputyError?.message || "");
-      const canSwitchMain = emptyDeputyOptions && Number(selectedMain.optionCount) > 1
-        && Number.isInteger(Number(selectedMain.optionIndex));
-      if (!canSwitchMain) throw firstDeputyError;
+      if (!isEmptyDeputyOptionsError(firstDeputyError)) throw firstDeputyError;
       await closeSynthesisPetPopup(1, "副宠");
-      const alternativeIndex = Number(selectedMain.optionIndex) === 0 ? 1 : 0;
-      logEvent("synthesis/empty-deputy-options-main-fallback", {
+      logEvent("synthesis/empty-deputy-options-retry", {
+        phase: "reopen-same-page",
         firstError: firstDeputyError.message,
-        previousMainOptionIndex: selectedMain.optionIndex,
-        alternativeMainOptionIndex: alternativeIndex,
-        mainOptionCount: selectedMain.optionCount,
       });
-      setTxStatus("副宠列表为空，当前主宠候选可能不是实际主战；正在改选主宠栏中的另一只宠物并重试一次…", "warn");
-      selectedMain = await selectRecordedPetAttempt(0, state.mainPet, "备用主宠", alternativeIndex);
-      await activateSelectedSynthesisMain(state.mainPet);
-      selectedDeputy = await selectRecordedPet(1, state.deputyPet, "副宠");
-      logEvent("synthesis/empty-deputy-options-recovered", {
-        selectedMain, selectedDeputy, alternativeMainOptionIndex: alternativeIndex,
-      });
+      setTxStatus("副宠列表为空，已关闭窗口；等待页面稳定后重新打开副宠列表…", "warn");
+      await waitForSynthesisMainRerender(state.mainPet, "before-deputy-reopen");
+      try {
+        selectedDeputy = await selectRecordedPet(1, state.deputyPet, "副宠");
+        logEvent("synthesis/empty-deputy-options-recovered", { phase: "reopen-same-page", selectedMain, selectedDeputy });
+      } catch (secondDeputyError) {
+        if (!isEmptyDeputyOptionsError(secondDeputyError)) throw secondDeputyError;
+        await closeSynthesisPetPopup(1, "副宠");
+        setTxStatus("副宠列表再次为空，正在切换进化/合成标签重建合成页并恢复原主宠…", "warn");
+        await rebuildSynthesisSelectionPage();
+        selectedMain = await selectRecordedPet(0, state.mainPet, "主宠");
+        await activateSelectedSynthesisMain(state.mainPet);
+        await waitForSynthesisMainRerender(state.mainPet, "after-page-rebuild");
+        try {
+          selectedDeputy = await selectRecordedPet(1, state.deputyPet, "副宠");
+          logEvent("synthesis/empty-deputy-options-recovered", { phase: "after-page-rebuild", selectedMain, selectedDeputy });
+        } catch (thirdDeputyError) {
+          if (!isEmptyDeputyOptionsError(thirdDeputyError)) throw thirdDeputyError;
+          const canSwitchMain = Number(selectedMain.optionCount) > 1
+            && Number.isInteger(Number(selectedMain.optionIndex));
+          if (!canSwitchMain) throw thirdDeputyError;
+          await closeSynthesisPetPopup(1, "副宠");
+          const alternativeIndex = Number(selectedMain.optionIndex) === 0 ? 1 : 0;
+          logEvent("synthesis/empty-deputy-options-main-fallback", {
+            firstError: firstDeputyError.message,
+            secondError: secondDeputyError.message,
+            thirdError: thirdDeputyError.message,
+            previousMainOptionIndex: selectedMain.optionIndex,
+            alternativeMainOptionIndex: alternativeIndex,
+            mainOptionCount: selectedMain.optionCount,
+          });
+          setTxStatus("重建合成页后副宠仍为空，正在把另一只同身份宠物改为主宠，让原主宠成为唯一剩余副宠…", "warn");
+          selectedMain = await selectRecordedPetAttempt(0, state.mainPet, "备用主宠", alternativeIndex);
+          await activateSelectedSynthesisMain(state.mainPet);
+          await waitForSynthesisMainRerender(state.mainPet, "after-alternative-main");
+          selectedDeputy = await selectRecordedPet(1, state.deputyPet, "副宠");
+          logEvent("synthesis/empty-deputy-options-recovered", {
+            phase: "after-alternative-main", selectedMain, selectedDeputy, alternativeMainOptionIndex: alternativeIndex,
+          });
+        }
+      }
     }
     if (!Number.isFinite(selectedDeputy.level) || selectedDeputy.level < 40) throw new Error(`合成页实时副宠等级为 Lv${selectedDeputy.level || "未知"}，必须达到 Lv40`);
     logEvent("synthesis/live-levels-confirmed", { main: selectedMain, deputy: selectedDeputy });
