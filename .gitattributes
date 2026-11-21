@@ -1,1 +1,2 @@
 browser-extension/** text eol=lf
+browser-extension/dist/*.zip -text
