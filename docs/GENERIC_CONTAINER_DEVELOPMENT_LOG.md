@@ -70,7 +70,7 @@
 
 ## 2026-11-23 · 步骤 4 · 清单生命周期与诊断
 
-实现提交：见本步骤完成后的 Git 提交。
+实现提交：`f95027f`（`feat: manage imported automation manifest lifecycle`）
 
 实现：
 
