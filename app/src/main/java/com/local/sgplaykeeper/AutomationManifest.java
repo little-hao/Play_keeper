@@ -19,16 +19,18 @@ final class AutomationManifest {
     final String version;
     final List<String> allowedOrigins;
     final List<String> capabilities;
+    final AutomationWorkflow workflow;
     final String canonicalJson;
 
     private AutomationManifest(String id, String name, String version,
                                List<String> allowedOrigins, List<String> capabilities,
-                               String canonicalJson) {
+                               AutomationWorkflow workflow, String canonicalJson) {
         this.id = id;
         this.name = name;
         this.version = version;
         this.allowedOrigins = List.copyOf(allowedOrigins);
         this.capabilities = List.copyOf(capabilities);
+        this.workflow = workflow;
         this.canonicalJson = canonicalJson;
     }
 
@@ -57,14 +59,18 @@ final class AutomationManifest {
                     throw new IllegalArgumentException("当前阶段不允许的脚本能力：" + capability);
                 }
             }
+            AutomationWorkflow workflow = json.has("workflow")
+                    ? AutomationWorkflow.parse(json.getJSONObject("workflow"), Set.copyOf(capabilities))
+                    : null;
             JSONObject canonical = new JSONObject();
             canonical.put("id", id);
             canonical.put("name", name);
             canonical.put("version", version);
             canonical.put("allowedOrigins", new JSONArray(normalizedOrigins));
             canonical.put("capabilities", new JSONArray(capabilities));
+            if (workflow != null) canonical.put("workflow", workflow.canonicalJson);
             return new AutomationManifest(id, name, version, normalizedOrigins,
-                    capabilities, canonical.toString());
+                    capabilities, workflow, canonical.toString());
         } catch (JSONException error) {
             throw new IllegalArgumentException("脚本清单不是有效 JSON", error);
         }

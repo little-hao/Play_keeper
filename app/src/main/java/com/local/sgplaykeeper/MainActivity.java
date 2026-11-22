@@ -765,6 +765,8 @@ public final class MainActivity extends Activity {
                 + "\n来源：" + String.join(", ", imported.allowedOrigins)
                 + "\n权限 ID：" + String.join(", ", imported.capabilities)
                 + "\n权限说明：" + imported.toDescriptor().capabilitySummary()
+                + "\n只读流程：" + (imported.workflow == null ? "未提供"
+                : imported.workflow.steps.size() + " 个步骤（仅校验，不执行）")
                 + (downgrade ? "\n\n警告：这是版本降级，旧版本可能缺少修复。" : "")
                 + "\n\n导入后保持未启用，不会执行脚本。";
         new AlertDialog.Builder(this)

@@ -10,5 +10,14 @@
     "dom.wait",
     "dom.text.read",
     "log.sanitized"
-  ]
+  ],
+  "workflow": {
+    "steps": [
+      { "id": "title", "action": "readTitle" },
+      { "id": "wait_main", "action": "waitFor", "selector": "main", "timeoutMs": 5000 },
+      { "id": "read_heading", "action": "readText", "selector": "h1" },
+      { "id": "check_heading", "action": "assertText", "selector": "h1", "expectedText": "Example Domain" },
+      { "id": "finish_log", "action": "writeSanitizedLog", "message": "页面只读检查完成" }
+    ]
+  }
 }
