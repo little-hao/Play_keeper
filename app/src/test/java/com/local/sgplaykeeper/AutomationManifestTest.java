@@ -24,4 +24,13 @@ public final class AutomationManifestTest {
         assertThrows(IllegalArgumentException.class, () -> AutomationManifest.parse(
                 VALID.replace("io.example.readonly", "com.playkeeper.custom")));
     }
+
+    @Test public void comparesVersionsForUpgradeAndDowngradePrompts() {
+        AutomationManifest one = AutomationManifest.parse(VALID);
+        AutomationManifest two = AutomationManifest.parse(VALID.replace("1.0.0", "2.0.0"));
+        AutomationManifest preview = AutomationManifest.parse(VALID.replace("1.0.0", "2.0.0-rc1"));
+        assertTrue(two.compareVersion(one) > 0);
+        assertTrue(one.compareVersion(two) < 0);
+        assertTrue(preview.compareVersion(two) < 0);
+    }
 }

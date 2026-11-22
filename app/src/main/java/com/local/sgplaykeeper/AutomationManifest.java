@@ -79,7 +79,20 @@ final class AutomationManifest {
 
     AutomationPackageDescriptor toDescriptor() {
         return new AutomationPackageDescriptor(id, name, version,
-                String.join(", ", allowedOrigins), capabilityLabels(), false, false);
+                String.join(", ", allowedOrigins), capabilityLabels(), false, false, true);
+    }
+
+    int compareVersion(AutomationManifest other) {
+        String[] left = version.split("[-+]", 2)[0].split("\\.");
+        String[] right = other.version.split("[-+]", 2)[0].split("\\.");
+        for (int i = 0; i < 3; i++) {
+            int compared = Integer.compare(Integer.parseInt(left[i]), Integer.parseInt(right[i]));
+            if (compared != 0) return compared;
+        }
+        boolean leftPre = version.contains("-");
+        boolean rightPre = other.version.contains("-");
+        if (leftPre != rightPre) return leftPre ? -1 : 1;
+        return version.compareTo(other.version);
     }
 
     private List<String> capabilityLabels() {

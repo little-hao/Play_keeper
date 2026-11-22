@@ -5,6 +5,8 @@ import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
@@ -698,15 +700,19 @@ public final class MainActivity extends Activity {
     }
 
     private void showAutomationPackageDetails(AutomationPackageDescriptor descriptor) {
-        new AlertDialog.Builder(this)
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
                 .setTitle(descriptor.name)
                 .setMessage("脚本 ID：" + descriptor.id
                         + "\n版本：" + descriptor.version
                         + "\n适用来源：" + descriptor.origin
                         + "\n所需能力：" + descriptor.capabilitySummary()
                         + "\n\n当前版本只展示清单和权限，不执行任意 JavaScript。")
-                .setPositiveButton("确定", null)
-                .show();
+                .setPositiveButton("确定", null);
+        if (descriptor.removable) {
+            builder.setNegativeButton("删除清单", (dialog, which) ->
+                    confirmDeleteImportedAutomation(descriptor));
+        }
+        builder.show();
     }
 
     private void launchAutomationManifestPicker(int accountIndex) {
@@ -740,18 +746,92 @@ public final class MainActivity extends Activity {
             if (!manifest.supportsUrl(instanceStartUrl(accountIndex))) {
                 throw new IllegalArgumentException("脚本允许来源与当前实例首页不匹配");
             }
-            saveImportedAutomation(manifest);
-            new AlertDialog.Builder(this)
-                    .setTitle("脚本清单已导入（未启用）")
-                    .setMessage(manifest.name + "  v" + manifest.version
-                            + "\n来源：" + String.join(", ", manifest.allowedOrigins)
-                            + "\n能力：" + manifest.toDescriptor().capabilitySummary()
-                            + "\n\n当前版本只保存和展示清单，不执行脚本。")
-                    .setPositiveButton("确定", null)
-                    .show();
+            confirmAutomationImport(manifest);
         } catch (IOException | RuntimeException error) {
-            showToast(error.getMessage() == null ? "脚本清单导入失败" : error.getMessage());
+            showAutomationImportError(error);
         }
+    }
+
+    private void confirmAutomationImport(AutomationManifest imported) {
+        AutomationManifest existing = findImportedAutomation(imported.id);
+        boolean downgrade = existing != null && imported.compareVersion(existing) < 0;
+        String title = existing == null ? "确认导入脚本清单"
+                : downgrade ? "确认降级脚本清单" : "确认更新脚本清单";
+        String versionChange = existing == null ? imported.version
+                : existing.version + " → " + imported.version;
+        String message = "脚本：" + imported.name
+                + "\nID：" + imported.id
+                + "\n版本：" + versionChange
+                + "\n来源：" + String.join(", ", imported.allowedOrigins)
+                + "\n权限 ID：" + String.join(", ", imported.capabilities)
+                + "\n权限说明：" + imported.toDescriptor().capabilitySummary()
+                + (downgrade ? "\n\n警告：这是版本降级，旧版本可能缺少修复。" : "")
+                + "\n\n导入后保持未启用，不会执行脚本。";
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(message)
+                .setNegativeButton("取消", null)
+                .setPositiveButton(downgrade ? "仍然降级" : "确认保存", (dialog, which) -> {
+                    saveImportedAutomation(imported);
+                    showToast("脚本清单已保存（未启用）");
+                })
+                .show();
+    }
+
+    private AutomationManifest findImportedAutomation(String id) {
+        JSONArray saved = importedAutomationJson();
+        for (int i = 0; i < saved.length(); i++) {
+            try {
+                AutomationManifest manifest = AutomationManifest.parse(saved.getString(i));
+                if (manifest.id.equals(id)) return manifest;
+            } catch (RuntimeException | JSONException ignored) {
+                // Ignore damaged entries.
+            }
+        }
+        return null;
+    }
+
+    private void confirmDeleteImportedAutomation(AutomationPackageDescriptor descriptor) {
+        new AlertDialog.Builder(this)
+                .setTitle("删除脚本清单")
+                .setMessage("确定删除 “" + descriptor.name + "” 的本地清单？\n"
+                        + "当前清单未启用，删除不会修改网页数据。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("删除", (dialog, which) -> {
+                    removeImportedAutomation(descriptor.id);
+                    showToast("脚本清单已删除");
+                })
+                .show();
+    }
+
+    private void removeImportedAutomation(String id) {
+        JSONArray current = importedAutomationJson();
+        JSONArray updated = new JSONArray();
+        for (int i = 0; i < current.length(); i++) {
+            try {
+                AutomationManifest existing = AutomationManifest.parse(current.getString(i));
+                if (!existing.id.equals(id)) updated.put(existing.canonicalJson);
+            } catch (RuntimeException | JSONException ignored) {
+                // Drop invalid entries during cleanup.
+            }
+        }
+        preferences.edit().putString(PREF_IMPORTED_AUTOMATION, updated.toString()).apply();
+    }
+
+    private void showAutomationImportError(Throwable error) {
+        String message = error.getMessage() == null ? "未知导入错误" : error.getMessage();
+        new AlertDialog.Builder(this)
+                .setTitle("脚本清单导入失败")
+                .setMessage(message)
+                .setNegativeButton("关闭", null)
+                .setPositiveButton("复制诊断", (dialog, which) -> {
+                    ClipboardManager clipboard = (ClipboardManager) getSystemService(
+                            Context.CLIPBOARD_SERVICE);
+                    clipboard.setPrimaryClip(ClipData.newPlainText(
+                            "Play Keeper 脚本导入诊断", message));
+                    showToast("诊断已复制");
+                })
+                .show();
     }
 
     private List<AutomationPackageDescriptor> importedAutomationPackages(int accountIndex) {
