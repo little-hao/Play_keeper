@@ -34,6 +34,7 @@ import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.webkit.CookieManager;
 import android.webkit.JsResult;
+import android.webkit.PermissionRequest;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -43,6 +44,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
+import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -50,6 +52,7 @@ import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -76,6 +79,7 @@ public final class MainActivity extends Activity {
     private static final String PREF_ACTIVE_ACCOUNT = "active_account";
     private static final String PREF_DESKTOP_PREFIX = "desktop_mode_";
     private static final String PREF_LAST_URL_PREFIX = "last_url_";
+    private static final String PREF_START_URL_PREFIX = "start_url_";
     private static final String PREF_ACCOUNT_OPENED_PREFIX = "account_opened_";
     private static final String PREF_LANDSCAPE_PREFIX = "landscape_mode_";
     private static final String PREF_ACCOUNT_LABEL_PREFIX = "account_label_";
@@ -86,6 +90,7 @@ public final class MainActivity extends Activity {
     private static final String PREF_FAILURE_SCREENSHOT_PREFIX = "automation_failure_screenshot_";
     private static final String PREF_CONFIGURED_ACCOUNTS = "configured_accounts";
     private static final String PREF_HIGH_PERFORMANCE = "high_performance_accounts";
+    private static final String PREF_ENVIRONMENT_PRESET = "environment_preset";
     private static final int LEGACY_ACCOUNT_COUNT = 4;
     private static final int MAX_ACCOUNTS = 8;
     private static final long PAGE_LOAD_TIMEOUT_MS = 60_000L;
@@ -245,7 +250,7 @@ public final class MainActivity extends Activity {
 
         for (int i = 0; i < MAX_ACCOUNTS; i++) {
             final int accountIndex = i;
-            accountButtons[i] = makeButton("账号" + (i + 1),
+            accountButtons[i] = makeButton("实例" + (i + 1),
                     view -> selectAccount(accountIndex, true));
             accountButtons[i].setOnLongClickListener(view -> {
                 showAccountNameDialog(accountIndex);
@@ -260,8 +265,8 @@ public final class MainActivity extends Activity {
         orientationButton = makeButton("横屏", view -> toggleOrientation());
         batteryButton = makeButton("电量 --", view -> showBatteryDetails());
         remoteButton = makeButton("远程", view -> showRemoteSettings());
-        automationButton = makeButton("脚本", view -> showAutomationSettings(activeAccount));
-        accountsButton = makeButton("账号", view -> showAccountManagement());
+        automationButton = makeButton("自动化", view -> showAutomationHub(activeAccount));
+        accountsButton = makeButton("实例", view -> showAccountManagement());
         rebuildToolbar();
 
         progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -621,6 +626,78 @@ public final class MainActivity extends Activity {
                 .show();
     }
 
+    private void showAutomationHub(int accountIndex) {
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(20), dp(8), dp(20), dp(12));
+        scroll.addView(content, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView intro = formLabel("当前实例：" + accountDisplayName(accountIndex)
+                + "\n脚本只在声明的网页来源和能力范围内运行。启用自定义脚本前会显示权限变化。");
+        intro.setTextColor(Color.rgb(70, 74, 82));
+        content.addView(intro);
+
+        for (AutomationPackageDescriptor descriptor : AutomationPackageRegistry.packages()) {
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setPadding(dp(12), dp(8), dp(12), dp(10));
+            card.setBackground(coloredButtonBackground(Color.rgb(238, 240, 244)));
+
+            TextView title = formLabel(descriptor.name + "  v" + descriptor.version
+                    + (descriptor.enabled ? "  · 已启用" : "  · 未启用"));
+            title.setTextColor(descriptor.enabled
+                    ? Color.rgb(31, 117, 63) : Color.rgb(91, 96, 105));
+            card.addView(title);
+
+            TextView details = formLabel("来源：" + descriptor.origin
+                    + "\n能力：" + descriptor.capabilitySummary());
+            details.setTextColor(Color.rgb(70, 74, 82));
+            details.setTextSize(12);
+            card.addView(details);
+
+            Button action = makeButton(descriptor.configurable ? "配置现有自动化" : "查看脚本说明",
+                    view -> {
+                        if (descriptor.configurable) {
+                            showAutomationSettings(accountIndex);
+                        } else {
+                            showAutomationPackageDetails(descriptor);
+                        }
+                    });
+            card.addView(action, automationActionParams());
+
+            LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            cardParams.setMargins(0, dp(8), 0, 0);
+            content.addView(card, cardParams);
+        }
+
+        Button importButton = makeButton("导入自定义脚本（下一阶段）",
+                view -> showToast("脚本导入尚未开放；先完成权限和格式验证"));
+        importButton.setEnabled(false);
+        importButton.setAlpha(0.55f);
+        content.addView(importButton, automationActionParams());
+
+        new AlertDialog.Builder(this)
+                .setTitle("自动化中心")
+                .setView(scroll)
+                .setNegativeButton("关闭", null)
+                .show();
+    }
+
+    private void showAutomationPackageDetails(AutomationPackageDescriptor descriptor) {
+        new AlertDialog.Builder(this)
+                .setTitle(descriptor.name)
+                .setMessage("脚本 ID：" + descriptor.id
+                        + "\n版本：" + descriptor.version
+                        + "\n适用来源：" + descriptor.origin
+                        + "\n所需能力：" + descriptor.capabilitySummary()
+                        + "\n\n当前版本只展示清单和权限，不执行任意 JavaScript。")
+                .setPositiveButton("确定", null)
+                .show();
+    }
+
     private void showAutomationSettings(int accountIndex) {
         ScrollView scroll = new ScrollView(this);
         LinearLayout form = new LinearLayout(this);
@@ -961,23 +1038,39 @@ public final class MainActivity extends Activity {
     }
 
     private void showAccountNameDialog(int accountIndex) {
+        LinearLayout fields = new LinearLayout(this);
+        fields.setOrientation(LinearLayout.VERTICAL);
         EditText input = new EditText(this);
         input.setSingleLine(true);
         input.setSelectAllOnFocus(true);
         input.setText(accountDisplayName(accountIndex));
         input.setHint("登录用户名或自定义名称");
         int padding = dp(20);
-        FrameLayout holder = new FrameLayout(this);
-        holder.setPadding(padding, 0, padding, 0);
-        holder.addView(input, new FrameLayout.LayoutParams(
+        fields.setPadding(padding, 0, padding, 0);
+        fields.addView(input, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        EditText startUrlInput = new EditText(this);
+        startUrlInput.setSingleLine(true);
+        startUrlInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        startUrlInput.setHint("HTTPS 自定义首页；留空使用 sgplay.cc");
+        startUrlInput.setText(preferences.getString(startUrlKey(accountIndex), ""));
+        fields.addView(startUrlInput, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         new AlertDialog.Builder(this)
-                .setTitle("账号" + (accountIndex + 1) + "名称")
-                .setMessage("网页会尝试自动识别登录用户名；识别不准时可在这里手动设置。留空会恢复自动识别。")
-                .setView(holder)
+                .setTitle("实例" + (accountIndex + 1) + "设置")
+                .setMessage("名称留空会恢复自动识别。自定义首页仅接受 HTTPS，并把该实例导航限制在同一来源。")
+                .setView(fields)
                 .setNegativeButton("取消", null)
                 .setPositiveButton("保存", (dialog, which) -> {
+                    String customStart;
+                    try {
+                        customStart = InstanceUrlPolicy.normalizeStartUrl(
+                                startUrlInput.getText().toString(), "");
+                    } catch (IllegalArgumentException error) {
+                        showToast(error.getMessage());
+                        return;
+                    }
                     String label = sanitizeAccountLabel(input.getText().toString());
                     SharedPreferences.Editor editor = preferences.edit();
                     if (label.isBlank()) {
@@ -987,11 +1080,17 @@ public final class MainActivity extends Activity {
                         editor.putString(accountLabelKey(accountIndex), label);
                         editor.putBoolean(accountLabelManualKey(accountIndex), true);
                     }
+                    if (customStart.isBlank()) editor.remove(startUrlKey(accountIndex));
+                    else editor.putString(startUrlKey(accountIndex), customStart);
                     editor.apply();
                     updateToolbarState();
                     Session session = sessions[accountIndex];
                     if (label.isBlank() && session != null) {
                         detectAccountName(session);
+                    }
+                    if (session != null
+                            && !isAllowedUrl(accountIndex, session.webView.getUrl())) {
+                        session.webView.loadUrl(instanceStartUrl(accountIndex));
                     }
                     pushTelemetry();
                 })
@@ -1006,32 +1105,37 @@ public final class MainActivity extends Activity {
         TextView summary = new TextView(this);
         summary.setTextColor(Color.LTGRAY);
         summary.setTextSize(14);
-        summary.setText("当前配置 " + configuredAccountCount() + " 个账号；标准模式同时保留4个网页，"
-                + "高性能模式最多同时保留8个网页。原账号1–4的登录资料不会重建。");
+        summary.setText("当前配置 " + configuredAccountCount() + " 个实例；"
+                + environmentPreset().label + "环境同时驻留 " + residentSessionLimit()
+                + " 个网页。切换环境不会重建既有登录资料。");
         content.addView(summary, formFieldParams());
 
         EditText countInput = new EditText(this);
         countInput.setInputType(InputType.TYPE_CLASS_NUMBER);
         countInput.setText(String.valueOf(configuredAccountCount()));
         countInput.setHint("4–8");
-        content.addView(formLabel("已配置账号数量（4–8）"));
+        content.addView(formLabel("已配置实例数量（4–8）"));
         content.addView(countInput, formFieldParams());
 
-        CheckBox highPerformance = new CheckBox(this);
-        highPerformance.setText("高性能模式：允许同时运行8个账号");
-        highPerformance.setTextColor(Color.WHITE);
-        highPerformance.setChecked(isHighPerformanceMode());
-        content.addView(highPerformance, formFieldParams());
+        content.addView(formLabel("配置环境"));
+        Spinner environmentInput = new Spinner(this);
+        ArrayAdapter<String> environmentAdapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item, EnvironmentPreset.labels());
+        environmentAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        environmentInput.setAdapter(environmentAdapter);
+        environmentInput.setSelection(environmentPreset().ordinal());
+        content.addView(environmentInput, formFieldParams());
 
         TextView warning = new TextView(this);
         warning.setTextColor(Color.rgb(255, 183, 77));
         warning.setTextSize(13);
-        warning.setText("高性能模式可能显著增加内存、耗电和温度；网页进程连续被系统回收时会自动退回标准模式。"
-                + "APP只记录网站的同IP限制，不尝试绕过限制。");
+        warning.setText("省电/均衡/高性能分别驻留2/4/8个网页；非驻留实例保留独立 Profile，"
+                + "再次打开时恢复。高性能环境可能显著增加内存、耗电和温度，连续回收时自动退回均衡。"
+                + "这些环境不伪造硬件身份，也不绕过网站同IP或服务端限制。");
         content.addView(warning, formFieldParams());
 
         new AlertDialog.Builder(this)
-                .setTitle("多账号与性能模式")
+                .setTitle("实例与配置环境")
                 .setView(content)
                 .setNegativeButton("取消", null)
                 .setPositiveButton("保存", (dialog, which) -> {
@@ -1039,20 +1143,21 @@ public final class MainActivity extends Activity {
                     try {
                         requested = Integer.parseInt(countInput.getText().toString().trim());
                     } catch (NumberFormatException error) {
-                        showToast("账号数量必须为4–8");
+                        showToast("实例数量必须为4–8");
                         return;
                     }
                     if (requested < LEGACY_ACCOUNT_COUNT || requested > MAX_ACCOUNTS) {
-                        showToast("账号数量必须为4–8");
+                        showToast("实例数量必须为4–8");
                         return;
                     }
                     for (int i = requested; i < configuredAccountCount(); i++) {
                         if (automationCoordinator != null && automationCoordinator.isBusy(i)) {
-                            showToast("账号" + (i + 1) + "仍在运行，暂不能减少账号数量");
+                            showToast("实例" + (i + 1) + "仍在运行，暂不能减少实例数量");
                             return;
                         }
                     }
-                    boolean high = highPerformance.isChecked();
+                    EnvironmentPreset preset = EnvironmentPreset.values()[
+                            environmentInput.getSelectedItemPosition()];
                     for (int i = requested; i < configuredAccountCount(); i++) {
                         Session session = sessions[i];
                         if (session != null) {
@@ -1062,7 +1167,8 @@ public final class MainActivity extends Activity {
                     }
                     preferences.edit()
                             .putInt(PREF_CONFIGURED_ACCOUNTS, requested)
-                            .putBoolean(PREF_HIGH_PERFORMANCE, high)
+                            .putString(PREF_ENVIRONMENT_PRESET, preset.id)
+                            .remove(PREF_HIGH_PERFORMANCE)
                             .apply();
                     if (activeAccount >= requested) {
                         selectAccount(requested - 1, false);
@@ -1071,8 +1177,8 @@ public final class MainActivity extends Activity {
                     rebuildToolbar();
                     updateToolbarState();
                     pushTelemetry();
-                    showToast(high ? "已开启高性能模式，最多同时运行8个账号"
-                            : "已使用标准模式，最多同时运行4个账号");
+                    showToast("已使用" + preset.label + "环境，同时驻留"
+                            + preset.residentLimit + "个网页");
                 })
                 .show();
     }
@@ -1083,11 +1189,17 @@ public final class MainActivity extends Activity {
     }
 
     private boolean isHighPerformanceMode() {
-        return preferences.getBoolean(PREF_HIGH_PERFORMANCE, false);
+        return environmentPreset() == EnvironmentPreset.HIGH_PERFORMANCE;
     }
 
     private int residentSessionLimit() {
-        return isHighPerformanceMode() ? MAX_ACCOUNTS : LEGACY_ACCOUNT_COUNT;
+        return environmentPreset().residentLimit;
+    }
+
+    private EnvironmentPreset environmentPreset() {
+        return EnvironmentPreset.fromId(
+                preferences.getString(PREF_ENVIRONMENT_PRESET, null),
+                preferences.getBoolean(PREF_HIGH_PERFORMANCE, false));
     }
 
     private void showRemoteSettings() {
@@ -2165,8 +2277,7 @@ public final class MainActivity extends Activity {
             app.put("remoteState", remoteState.name().toLowerCase(Locale.ROOT));
             app.put("configuredAccounts", configuredAccountCount());
             app.put("maxConcurrentAccounts", residentSessionLimit());
-            app.put("accountPerformanceMode", isHighPerformanceMode()
-                    ? "high_performance" : "standard");
+            app.put("accountPerformanceMode", environmentPreset().id);
             ActivityManager activityManager = (ActivityManager) getSystemService(
                     Context.ACTIVITY_SERVICE);
             ActivityManager.MemoryInfo memoryInfo = new ActivityManager.MemoryInfo();
@@ -2202,7 +2313,7 @@ public final class MainActivity extends Activity {
                     account.put("failed", session.failedForCurrentLoad);
                     account.put("retryAttempt", session.retryAttempt);
                     String url = session.webView.getUrl();
-                    account.put("url", isAllowedUrl(url) ? url : JSONObject.NULL);
+                    account.put("url", isAllowedUrl(i, url) ? url : JSONObject.NULL);
                 }
                 if (automationCoordinator != null) {
                     automationCoordinator.appendAccountTelemetry(account, i);
@@ -2266,7 +2377,7 @@ public final class MainActivity extends Activity {
         }
 
         if (userInitiated) {
-            showToast("已切换到账号" + (accountIndex + 1));
+            showToast("已切换到实例" + (accountIndex + 1));
         }
         pushTelemetry();
     }
@@ -2288,7 +2399,8 @@ public final class MainActivity extends Activity {
     private boolean createSession(int accountIndex) {
         if (accountIndex < 0 || accountIndex >= configuredAccountCount()) return false;
         if (!ensureResidentCapacity(accountIndex)) {
-            showToast("标准模式已有4个账号正在执行任务；请等待任务结束或开启高性能模式");
+            showToast(environmentPreset().label + "环境已有" + residentSessionLimit()
+                    + "个实例驻留且无法回收；请等待任务结束或调整配置环境");
             return false;
         }
         WebView view;
@@ -2333,6 +2445,10 @@ public final class MainActivity extends Activity {
         settings.setAllowContentAccess(false);
         settings.setAllowFileAccessFromFileURLs(false);
         settings.setAllowUniversalAccessFromFileURLs(false);
+        settings.setMediaPlaybackRequiresUserGesture(true);
+        settings.setGeolocationEnabled(false);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        if (Build.VERSION.SDK_INT >= 26) settings.setSafeBrowsingEnabled(true);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         settings.setTextZoom(100);
         applyUserAgent(session);
@@ -2346,7 +2462,7 @@ public final class MainActivity extends Activity {
                 throw new UnsupportedOperationException("WebView multi-profile unavailable");
             }
             session.cookieManager.setAcceptCookie(true);
-            session.cookieManager.setAcceptThirdPartyCookies(view, true);
+            session.cookieManager.setAcceptThirdPartyCookies(view, false);
         } catch (RuntimeException error) {
             removeAndDestroySession(session);
             showToast("账号存储初始化失败，请更新系统网页组件");
@@ -2354,6 +2470,10 @@ public final class MainActivity extends Activity {
         }
 
         view.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onPermissionRequest(PermissionRequest request) {
+                request.deny();
+            }
             @Override
             public void onProgressChanged(WebView currentView, int newProgress) {
                 session.progress = newProgress;
@@ -2382,8 +2502,9 @@ public final class MainActivity extends Activity {
         });
 
         view.setWebViewClient(new SessionWebViewClient(session));
-        String savedUrl = preferences.getString(lastUrlKey(accountIndex), START_URL);
-        view.loadUrl(isAllowedUrl(savedUrl) ? savedUrl : START_URL);
+        String startUrl = instanceStartUrl(accountIndex);
+        String savedUrl = preferences.getString(lastUrlKey(accountIndex), startUrl);
+        view.loadUrl(isAllowedUrl(accountIndex, savedUrl) ? savedUrl : startUrl);
         preferences.edit().putBoolean(accountOpenedKey(accountIndex), true).apply();
         return true;
     }
@@ -2446,13 +2567,13 @@ public final class MainActivity extends Activity {
 
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-            return shouldBlockNavigation(request.getUrl());
+            return shouldBlockNavigation(session.index, request.getUrl());
         }
 
         @Override
         @SuppressWarnings("deprecation")
         public boolean shouldOverrideUrlLoading(WebView view, String url) {
-            return shouldBlockNavigation(Uri.parse(url));
+            return shouldBlockNavigation(session.index, Uri.parse(url));
         }
 
         @Override
@@ -2509,8 +2630,11 @@ public final class MainActivity extends Activity {
             lastRenderProcessGoneAt[session.index] = now;
             renderProcessGoneCounts[session.index]++;
             if (isHighPerformanceMode() && renderProcessGoneCounts[session.index] >= 2) {
-                preferences.edit().putBoolean(PREF_HIGH_PERFORMANCE, false).apply();
-                showToast("检测到网页进程连续退出，已自动退回4账号标准模式");
+                preferences.edit()
+                        .putString(PREF_ENVIRONMENT_PRESET, EnvironmentPreset.BALANCED.id)
+                        .remove(PREF_HIGH_PERFORMANCE)
+                        .apply();
+                showToast("检测到网页进程连续退出，已自动退回均衡环境");
             }
             recoverSession(session, detail.didCrash()
                     ? "网页进程崩溃，正在恢复"
@@ -2563,10 +2687,10 @@ public final class MainActivity extends Activity {
 
     private void reloadSession(Session session) {
         String currentUrl = session.webView.getUrl();
-        if (isAllowedUrl(currentUrl)) {
+        if (isAllowedUrl(session.index, currentUrl)) {
             session.webView.reload();
         } else {
-            session.webView.loadUrl(START_URL);
+            session.webView.loadUrl(instanceStartUrl(session.index));
         }
     }
 
@@ -2602,7 +2726,7 @@ public final class MainActivity extends Activity {
         if (session != null) {
             session.retryAttempt = 0;
             cancelRetry(session);
-            session.webView.loadUrl(START_URL);
+            session.webView.loadUrl(instanceStartUrl(session.index));
         }
     }
 
@@ -2679,36 +2803,29 @@ public final class MainActivity extends Activity {
         progressBar.setVisibility(progress > 0 && progress < 100 ? View.VISIBLE : View.INVISIBLE);
     }
 
-    private boolean shouldBlockNavigation(Uri uri) {
+    private boolean shouldBlockNavigation(int accountIndex, Uri uri) {
         if (uri == null) {
             return true;
         }
         String scheme = uri.getScheme();
-        String host = uri.getHost();
         if ("about".equalsIgnoreCase(scheme)) {
             return false;
         }
-        if (("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))
-                && host != null
-                && (host.equalsIgnoreCase("sgplay.cc")
-                || host.toLowerCase(Locale.ROOT).endsWith(".sgplay.cc"))) {
+        if (isAllowedUrl(accountIndex, uri.toString())) {
             return false;
         }
         showToast("已阻止跳转到外部网站");
         return true;
     }
 
-    private boolean isAllowedUrl(String url) {
-        if (url == null || url.isBlank()) {
-            return false;
-        }
-        Uri uri = Uri.parse(url);
-        String scheme = uri.getScheme();
-        String host = uri.getHost();
-        return ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))
-                && host != null
-                && (host.equalsIgnoreCase("sgplay.cc")
-                || host.toLowerCase(Locale.ROOT).endsWith(".sgplay.cc"));
+    private boolean isAllowedUrl(int accountIndex, String url) {
+        return InstanceUrlPolicy.isAllowed(url,
+                preferences.getString(startUrlKey(accountIndex), ""));
+    }
+
+    private String instanceStartUrl(int accountIndex) {
+        String configured = preferences.getString(startUrlKey(accountIndex), "");
+        return configured == null || configured.isBlank() ? START_URL : configured;
     }
 
     private void registerNetworkRecovery() {
@@ -2910,7 +3027,7 @@ public final class MainActivity extends Activity {
 
     private void saveLastUrl(Session session) {
         String url = session.webView.getUrl();
-        if (isAllowedUrl(url)) {
+        if (isAllowedUrl(session.index, url)) {
             preferences.edit().putString(lastUrlKey(session.index), url).apply();
         }
     }
@@ -2925,6 +3042,10 @@ public final class MainActivity extends Activity {
 
     private String lastUrlKey(int accountIndex) {
         return PREF_LAST_URL_PREFIX + accountIndex;
+    }
+
+    private String startUrlKey(int accountIndex) {
+        return PREF_START_URL_PREFIX + accountIndex;
     }
 
     private String accountOpenedKey(int accountIndex) {
@@ -2944,7 +3065,7 @@ public final class MainActivity extends Activity {
     }
 
     private String accountDisplayName(int accountIndex) {
-        String fallback = "账号" + (accountIndex + 1);
+        String fallback = "实例" + (accountIndex + 1);
         String saved = preferences.getString(accountLabelKey(accountIndex), fallback);
         String sanitized = sanitizeAccountLabel(saved);
         return sanitized.isBlank() ? fallback : sanitized;
