@@ -178,6 +178,7 @@ public final class MainActivity extends Activity {
     private RemoteConfigStore remoteConfigStore;
     private RemoteConnectionManager remoteConnectionManager;
     private AutomationCoordinator automationCoordinator;
+    private boolean readOnlyWorkflowRunning;
     private RemoteConnectionManager.State remoteState = RemoteConnectionManager.State.DISABLED;
     private String remoteStateMessage = "远程连接未启用";
 
@@ -677,7 +678,7 @@ public final class MainActivity extends Activity {
                         if (descriptor.configurable) {
                             showAutomationSettings(accountIndex);
                         } else {
-                            showAutomationPackageDetails(descriptor);
+                            showAutomationPackageDetails(accountIndex, descriptor);
                         }
                     });
             card.addView(action, automationActionParams());
@@ -699,20 +700,92 @@ public final class MainActivity extends Activity {
                 .show();
     }
 
-    private void showAutomationPackageDetails(AutomationPackageDescriptor descriptor) {
+    private void showAutomationPackageDetails(int accountIndex,
+                                              AutomationPackageDescriptor descriptor) {
         AlertDialog.Builder builder = new AlertDialog.Builder(this)
                 .setTitle(descriptor.name)
                 .setMessage("脚本 ID：" + descriptor.id
                         + "\n版本：" + descriptor.version
                         + "\n适用来源：" + descriptor.origin
                         + "\n所需能力：" + descriptor.capabilitySummary()
-                        + "\n\n当前版本只展示清单和权限，不执行任意 JavaScript。")
+                        + (descriptor.removable
+                        ? "\n\n带有 workflow 的导入清单可在逐次授权后运行固定只读动作；"
+                        + "不接受任意 JavaScript。"
+                        : "\n\n内置自动化沿用其独立配置与权限边界。"))
                 .setPositiveButton("确定", null);
+        AutomationManifest imported = descriptor.removable
+                ? findImportedAutomation(descriptor.id) : null;
+        if (imported != null && imported.workflow != null) {
+            builder.setNeutralButton("运行只读流程", (dialog, which) ->
+                    confirmReadOnlyWorkflow(accountIndex, imported));
+        }
         if (descriptor.removable) {
             builder.setNegativeButton("删除清单", (dialog, which) ->
                     confirmDeleteImportedAutomation(descriptor));
         }
         builder.show();
+    }
+
+    private void confirmReadOnlyWorkflow(int accountIndex, AutomationManifest manifest) {
+        Session session = sessions[accountIndex];
+        String currentUrl = session == null ? "" : session.webView.getUrl();
+        if (session == null || currentUrl == null || !manifest.supportsUrl(currentUrl)) {
+            showToast("请先在该实例打开脚本授权来源内的页面");
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("授权本次只读运行")
+                .setMessage("脚本：" + manifest.name
+                        + "\n当前页面：" + currentUrl
+                        + "\n步骤数：" + manifest.workflow.steps.size()
+                        + "\n\n本次只读取标题和指定元素文本，不点击、不输入、不读取 Cookie。"
+                        + "页面跳转时会立即停止。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("运行一次", (dialog, which) ->
+                        runReadOnlyWorkflow(session, manifest))
+                .show();
+    }
+
+    private void runReadOnlyWorkflow(Session session, AutomationManifest manifest) {
+        if (readOnlyWorkflowRunning) {
+            showToast("已有只读流程正在运行");
+            return;
+        }
+        readOnlyWorkflowRunning = true;
+        new ReadOnlyWorkflowRunner(manifest, new ReadOnlyWorkflowRunner.Bridge() {
+            @Override public String currentUrl() {
+                String url = session.webView.getUrl();
+                return url == null ? "" : url;
+            }
+
+            @Override public void evaluateJavascript(String script,
+                                                     ReadOnlyWorkflowRunner.EvaluationCallback callback) {
+                session.webView.evaluateJavascript(script, callback::onResult);
+            }
+
+            @Override public void postDelayed(Runnable action, long delayMs) {
+                mainHandler.postDelayed(action, delayMs);
+            }
+        }, result -> {
+            readOnlyWorkflowRunning = false;
+            showReadOnlyWorkflowResult(manifest, result);
+        }).start();
+    }
+
+    private void showReadOnlyWorkflowResult(AutomationManifest manifest,
+                                            ReadOnlyWorkflowRunner.Result result) {
+        StringBuilder details = new StringBuilder(result.message);
+        for (ReadOnlyWorkflowRunner.StepResult step : result.steps) {
+            details.append("\n\n")
+                    .append(step.passed ? "✓ " : "✗ ")
+                    .append(step.id).append(" · ").append(step.action);
+            if (!step.detail.isEmpty()) details.append("\n").append(step.detail);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(manifest.name + (result.passed ? " · 已完成" : " · 已停止"))
+                .setMessage(details.toString())
+                .setPositiveButton("关闭", null)
+                .show();
     }
 
     private void launchAutomationManifestPicker(int accountIndex) {
