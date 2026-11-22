@@ -42,7 +42,7 @@
 
 ## 2026-11-23 · 步骤 3 · 受限脚本清单导入
 
-提交：见本步骤完成后的 Git 提交。
+实现提交：`5961b34`（`feat: import validated read-only automation manifests`）
 
 实现：
 
@@ -64,6 +64,7 @@
 动作与验证：
 
 - 新增 manifest 正常解析、exact-origin、写能力拒绝和内置 ID 冲突测试。
+- 首次编译检查发现 `MainActivity` 缺少 `java.util.List` 导入；补齐后重新执行完整测试并通过。该问题未进入提交或制品。
 - 完成后运行 Android 全 build type 单元测试和差异检查。
 - 本步骤按小步节奏不生成 APK。
 
