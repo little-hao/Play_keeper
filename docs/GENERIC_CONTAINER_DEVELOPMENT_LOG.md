@@ -121,8 +121,40 @@
 - Android Candidate、Debug、MacParallel、Release 全 build type 单元测试通过。
 - 本步骤按小步节奏不生成 APK。
 
+## 2026-11-23 · 步骤 6 · 用户授权的 WebView 只读执行层
+
+实现提交：`fc84121eb9738924c8350ddb726bad5f8be6126a`（`feat: run authorized read-only workflows in WebView`）
+
+版本提交：`ffce33666545738d27b55b5e9609fa7369ac9856`（`chore: version read-only WebView candidate`）
+
+实现：
+
+- 导入且带有 workflow 的清单，在详情页提供“运行只读流程”。
+- 每次运行前展示脚本、当前完整 URL、步骤数和只读边界，由用户点击“运行一次”授权。
+- 执行器按顺序支持读取标题、轮询等待元素、读取文本、精确文本断言和静态脱敏日志。
+- WebView 只执行应用生成的固定代码片段；selector 和期望文本通过 JSON 字符串编码，不执行清单提供的 JavaScript。
+- 任一步失败即停止并展示结构化结果；运行期间完整 URL 变化也立即停止。
+- 同一时间只允许一个通用只读 workflow 运行。
+
+安全边界：
+
+- 不点击、不输入、不访问 Cookie/localStorage/IndexedDB、密码值、Android 文件或原生接口。
+- 清单不能提供 JavaScript；执行器仅使用 `document.title`、`querySelector` 和 `textContent`。
+- 读取结果只显示在本次结果对话框，当前不持久化、不上传。
+- 本步骤没有开放后台自动运行、定时运行或跨来源执行。
+
+动作与验证：
+
+- 新增离线桥接重放测试，覆盖五动作顺序、脚本边界、失败中止、未授权来源拒绝和导航中止。
+- Android Candidate、Debug、MacParallel、Release 全 build type 单元测试通过。
+- Candidate lintVital 和 APK 组装通过。
+- 生成本地 `2.0.8-rc4-candidate`：包名 `com.local.sgplaykeeper.candidate`，versionCode `2000804`。
+- APK 大小 `2649738` 字节，SHA-256：`d55650efc854a10ae089d7b24e8663246f44faaf7641c03de0f39fb8ca5eaf78`。
+- 当前环境缺少历史 Candidate keystore；本地 APK 使用证书 SHA-256 `0cd3ad11938904decf64b396d4b89d88a347e931bfa24ddff0b4e93c0f434c86`，不能覆盖历史签名版本，因此不作为共享升级包发布。
+
 ## 下一步候选
 
-- 先实现完全离线的 DOM 夹具重放器和结构化结果模型。
-- 夹具测试稳定后，再评审 WebView 只读桥接层、用户逐次授权和页面生命周期边界。
-- 在上述测试通过前，不开放点击、输入或任意 JavaScript。
+- 增加显式取消、Activity/WebView 销毁清理和执行总超时。
+- 使用本地 DOM 夹具完成 Android WebView 设备级重放测试。
+- 取得历史 Candidate keystore 后重建可覆盖升级的共享测试包。
+- 继续禁止点击、输入、任意 JavaScript 和后台自动执行。
