@@ -161,6 +161,23 @@ public class EquipmentTransferAuditTest {
         assertEquals(expected, result.items().stream().map(item -> item.expectedName).toList());
     }
 
+    @Test
+    public void twelveItemsCanOccupyTenEquipmentAndTwoCardSlots() {
+        List<String> expected = List.of("头盔", "铠甲", "鞋子", "武器", "项链", "戒指",
+                "翅膀", "手镯", "宝石", "印记", "卡片甲", "卡片乙");
+        String[] slots = {"头部", "身体", "脚部", "武器", "项链", "戒指", "翅膀", "手镯", "宝石", "道具", "卡片1", "卡片2"};
+        Map<String, String> actual = new LinkedHashMap<>();
+        for (int index = 0; index < expected.size(); index++) actual.put(slots[index], expected.get(index));
+
+        EquipmentTransferAudit.Result result = EquipmentTransferAudit.evaluate(
+                EquipmentTransferAudit.PetScope.MAIN, expected, actual, Collections.emptySet());
+
+        assertTrue(result.allTransferred());
+        assertEquals(12, result.items().size());
+        assertEquals("卡片1", result.items().get(10).slot);
+        assertEquals("卡片2", result.items().get(11).slot);
+    }
+
     private static Map<String, String> completeTargetSet() {
         Map<String, String> actual = new LinkedHashMap<>();
         actual.put("头部", "厄菲斯神冠");

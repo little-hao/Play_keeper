@@ -768,7 +768,7 @@ public final class MainActivity extends Activity {
         prestigeItems.setText(automationCoordinator.prestigeItemsText(accountIndex));
         form.addView(prestigeItems, formFieldParams());
 
-        form.addView(formLabel("装备定向转移（最多10件，每5件自动分批）"));
+        form.addView(formLabel("装备定向转移（最多12件：10装备槽+2卡片槽，每5件自动分批）"));
         EditText equipmentItems = new EditText(this);
         equipmentItems.setSingleLine(true);
         equipmentItems.setHint(AutomationCoordinator.DEFAULT_EQUIPMENT_ITEMS);
@@ -1620,6 +1620,14 @@ public final class MainActivity extends Activity {
                     automationCoordinator.runDailyTasksNow(index);
                     success = true;
                     resultMessage = "已启动一键接受日常任务";
+                    break;
+                }
+                case "run_completed_tasks": {
+                    int index = requiredAccountIndex(parameters);
+                    requireAutomationIdle(index);
+                    automationCoordinator.runCompletedTasksNow(index);
+                    success = true;
+                    resultMessage = "已启动完成任务奖励领取";
                     break;
                 }
                 case "run_seller_cleanup": {

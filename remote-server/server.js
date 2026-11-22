@@ -151,6 +151,7 @@ const commandValidators = {
   run_auto_capture: accountParameters,
   run_tower_battle: accountParameters,
   run_daily_tasks: accountParameters,
+  run_completed_tasks: accountParameters,
   configure_prestige_items(parameters) {
     return accountParameters(parameters)
       && typeof parameters.enabled === "boolean"
@@ -170,7 +171,7 @@ const commandValidators = {
     return accountParameters(parameters)
       && Array.isArray(parameters.items)
       && parameters.items.length >= 1
-      && parameters.items.length <= 10
+      && parameters.items.length <= 12
       && parameters.items.every((item) => typeof item === "string"
         && item.trim().length >= 1 && item.trim().length <= 30)
       && Number.isInteger(parameters.price)
@@ -289,7 +290,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.8-rc1" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.8-rc2" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -365,8 +366,8 @@ function normalizePlanOptions(value) {
     throw new Error("装备路线必须首尾为同一主号，且参与账号不能重复");
   }
   if (equipmentItems !== undefined
-      && (!validItemList(equipmentItems, 10) || new Set(equipmentItems).size !== equipmentItems.length)) {
-    throw new Error("装备套装必须包含1–10件不重复装备");
+      && (!validItemList(equipmentItems, 12) || new Set(equipmentItems).size !== equipmentItems.length)) {
+    throw new Error("装备套装必须包含1–12件不重复装备");
   }
   if (!Number.isInteger(equipmentPrice) || equipmentPrice < 1 || equipmentPrice > 9_999_999) {
     throw new Error("装备定向转移单价无效");
@@ -1263,7 +1264,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
           const price = Number(message.price);
           const returnMap = String(message.returnMap || "圣兽云殿").trim();
           if (!validAccountLabel(sellerLabel) || !validAccountLabel(buyerLabel)
-              || !validItemList(items, 10) || !Number.isInteger(price)
+              || !validItemList(items, 12) || !Number.isInteger(price)
               || price < 1 || price > 9_999_999 || !returnMap || returnMap.length > 30) {
             throw new Error("请检查卖方、买方、装备组合、价格和返回挂机地图");
           }

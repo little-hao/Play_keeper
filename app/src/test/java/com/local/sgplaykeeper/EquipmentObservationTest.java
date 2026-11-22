@@ -63,4 +63,11 @@ public class EquipmentObservationTest {
                 new LinkedHashSet<>(Arrays.asList("厄菲斯神剑", "厄菲斯神冠")),
                 Collections.emptySet(), 1));
     }
+
+    @Test public void workflowAcceptsTwelvePurchasedAndFilledItems() {
+        java.util.List<String> expected = Arrays.asList("装1", "装2", "装3", "装4", "装5", "装6",
+                "装7", "装8", "装9", "装10", "卡片1", "卡片2");
+        assertTrue(EquipmentTransferAudit.workflowCompleted(expected,
+                new LinkedHashSet<>(expected), Collections.emptySet(), 12));
+    }
 }

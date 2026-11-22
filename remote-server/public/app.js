@@ -894,11 +894,20 @@ function renderAccountDailyRoutine() {
   status.className = `state ${["running", "awaiting_auction"].includes(accountDaily.status) ? "online" : "offline"}`;
   document.querySelector(".account-daily-routine-panel").open = ["running", "awaiting_auction", "error"].includes(accountDaily.status);
   progress.replaceChildren();
+  const accountStatusLabels = {
+    queued: "等待", running: "运行中", ok: "已完成", error: "错误",
+    unverified: "待核验", inventory_pending: "背包汇总", returning: "返回挂机",
+    skipped: "已跳过", cancelled: "已中断"
+  };
   for (const account of accountDaily.accounts || []) {
-    const row = document.createElement("div"); row.className = `routine-account ${account.status || "queued"}`;
+    const accountStatus = account.status || "queued";
+    const row = document.createElement("div"); row.className = `routine-account ${accountStatus}`;
     const strong = document.createElement("strong"); strong.textContent = account.accountLabel || "账号";
-    const text = document.createElement("span"); text.textContent = `${account.status || "queued"} · ${account.message || ""}`;
-    row.append(strong, text); progress.append(row);
+    const state = document.createElement("span"); state.className = "routine-state";
+    state.textContent = accountStatusLabels[accountStatus] || accountStatus;
+    const text = document.createElement("span"); text.className = "routine-message";
+    text.textContent = account.message || "等待执行"; text.title = text.textContent;
+    row.append(strong, state, text); progress.append(row);
   }
   const pending = ["running", "awaiting_auction"].includes(accountDaily.status)
     && accountDaily.auctionDecision === "pending";
@@ -970,9 +979,9 @@ function readPlanOptions() {
       || routeLabels.slice(0, -1).some((label) => !label || label.length > 30 || /[→,，\r\n\t]/.test(label))) {
     addLog("装备路线必须首尾为同一主号，且中间账号不能重复"); return null;
   }
-  if (equipmentItems.length < 1 || equipmentItems.length > 10
+  if (equipmentItems.length < 1 || equipmentItems.length > 12
       || new Set(equipmentItems).size !== equipmentItems.length) {
-    addLog("装备转移清单必须包含1–10件不重复装备"); return null;
+    addLog("装备转移清单必须包含1–12件不重复装备"); return null;
   }
   if (!Number.isInteger(equipmentPrice) || equipmentPrice < 1 || equipmentPrice > 9_999_999) {
     addLog("装备定向转移单价无效"); return null;
@@ -1590,9 +1599,9 @@ function renderDevices() {
       }
       if (!Number.isInteger(itemAuctionPrice) || itemAuctionPrice < 1
           || itemAuctionPrice > 9_999_999) return addLog("拍卖单价无效");
-      if (!equipmentItems.length || equipmentItems.length > 10
+      if (!equipmentItems.length || equipmentItems.length > 12
           || equipmentItems.some((item) => item.length > 30)) {
-        return addLog("装备名称需填写1–10种，每项不超过30字");
+        return addLog("装备名称需填写1–12种，每项不超过30字");
       }
       if (!Number.isInteger(equipmentPrice) || equipmentPrice < 1 || equipmentPrice > 9_999_999) {
         return addLog("装备单价需为1–9999999金币");
@@ -1710,6 +1719,10 @@ function renderDevices() {
     card.querySelector(".run-daily-tasks").addEventListener("click", () => {
       sendCommand(device.deviceId, "run_daily_tasks", { accountIndex: activeAccountIndex });
     });
+    card.querySelector(".run-completed-tasks").addEventListener("click", () => {
+      sendCommand(device.deviceId, "run_completed_tasks", { accountIndex: activeAccountIndex });
+      addLog(`${accountLabel(accounts, activeAccountIndex)} 已开始单独领取完成任务奖励`);
+    });
     card.querySelector(".run-prestige").addEventListener("click", () => {
       if (saveAutomation()) sendCommand(device.deviceId, "run_prestige_items", { accountIndex: activeAccountIndex });
     });
@@ -1730,7 +1743,7 @@ function renderDevices() {
       const price = Number.parseInt(equipmentPriceInput.value, 10);
       if (!seller) return addLog(`卖方账号 ${equipmentSellerInput.value || "--"} 当前不在线`);
       if (!buyerLabel) return addLog("上架装备前请选择或填写指定买家");
-      if (!items.length || items.length > 10 || !Number.isInteger(price)) return addLog("请检查装备组合和单价");
+      if (!items.length || items.length > 12 || !Number.isInteger(price)) return addLog("请检查装备组合和单价");
       if (!buyer) return addLog(`买方账号 ${buyerLabel} 当前不在线，无法自动衔接购买和卖方返回挂机`);
       socket.send(JSON.stringify({ type: "equipment.transfer.start",
         sellerLabel: seller.label, buyerLabel: buyer.label, items, price,
@@ -1742,7 +1755,7 @@ function renderDevices() {
       const items = equipmentItemsInput.value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
       const price = Number.parseInt(equipmentPriceInput.value, 10);
       if (!buyer) return addLog(`买方账号 ${equipmentBuyerInput.value || "--"} 当前不在线`);
-      if (!items.length || items.length > 10 || !Number.isInteger(price)) return addLog("请检查装备组合和单价");
+      if (!items.length || items.length > 12 || !Number.isInteger(price)) return addLog("请检查装备组合和单价");
       sendCommand(buyer.deviceId, "configure_equipment_transfer", {
         accountIndex: buyer.accountIndex, items, price, buyer: "" });
       sendCommand(buyer.deviceId, "run_equipment_buy", { accountIndex: buyer.accountIndex });

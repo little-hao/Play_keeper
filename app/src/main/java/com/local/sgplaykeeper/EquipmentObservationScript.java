@@ -15,7 +15,7 @@ final class EquipmentObservationScript {
           const panel = panels[0];
           const main = panel.getAttribute('data-pet-scope') === 'main'
             || !!panel.closest('[data-main-pet="true"]');
-          const labels = ['头部','身体','脚部','武器','项链','戒指','翅膀','手镯','宝石','道具'];
+          const labels = ['头部','身体','脚部','武器','项链','戒指','翅膀','手镯','宝石','道具','卡片1','卡片2'];
           const observed = {};
           for (let i = 0; i < labels.length; i++) {
             const slots = Array.from(panel.querySelectorAll('.item' + (i + 1))).filter(visible);
