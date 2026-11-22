@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageInfo;
@@ -68,8 +69,12 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Locale;
 
 public final class MainActivity extends Activity {
@@ -92,6 +97,9 @@ public final class MainActivity extends Activity {
     private static final String PREF_CONFIGURED_ACCOUNTS = "configured_accounts";
     private static final String PREF_HIGH_PERFORMANCE = "high_performance_accounts";
     private static final String PREF_ENVIRONMENT_PRESET = "environment_preset";
+    private static final String PREF_IMPORTED_AUTOMATION = "imported_automation_manifests";
+    private static final int REQUEST_IMPORT_AUTOMATION = 701;
+    private static final int MAX_MANIFEST_BYTES = 64 * 1024;
     private static final int LEGACY_ACCOUNT_COUNT = 4;
     private static final int MAX_ACCOUNTS = 8;
     private static final long PAGE_LOAD_TIMEOUT_MS = 60_000L;
@@ -183,6 +191,7 @@ public final class MainActivity extends Activity {
     private Runnable previewRunnable;
     private float brightnessBeforeBlack = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
     private long lastBackPressedAt;
+    private int automationImportAccount = -1;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -640,7 +649,10 @@ public final class MainActivity extends Activity {
         intro.setTextColor(Color.rgb(70, 74, 82));
         content.addView(intro);
 
-        for (AutomationPackageDescriptor descriptor : AutomationPackageRegistry.packages()) {
+        List<AutomationPackageDescriptor> displayedPackages = new ArrayList<>(
+                AutomationPackageRegistry.packages());
+        displayedPackages.addAll(importedAutomationPackages(accountIndex));
+        for (AutomationPackageDescriptor descriptor : displayedPackages) {
             LinearLayout card = new LinearLayout(this);
             card.setOrientation(LinearLayout.VERTICAL);
             card.setPadding(dp(12), dp(8), dp(12), dp(10));
@@ -674,10 +686,8 @@ public final class MainActivity extends Activity {
             content.addView(card, cardParams);
         }
 
-        Button importButton = makeButton("导入自定义脚本（下一阶段）",
-                view -> showToast("脚本导入尚未开放；先完成权限和格式验证"));
-        importButton.setEnabled(false);
-        importButton.setAlpha(0.55f);
+        Button importButton = makeButton("导入只读脚本清单",
+                view -> launchAutomationManifestPicker(accountIndex));
         content.addView(importButton, automationActionParams());
 
         new AlertDialog.Builder(this)
@@ -697,6 +707,101 @@ public final class MainActivity extends Activity {
                         + "\n\n当前版本只展示清单和权限，不执行任意 JavaScript。")
                 .setPositiveButton("确定", null)
                 .show();
+    }
+
+    private void launchAutomationManifestPicker(int accountIndex) {
+        automationImportAccount = accountIndex;
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/json");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/json", "text/json"});
+        startActivityForResult(intent, REQUEST_IMPORT_AUTOMATION);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQUEST_IMPORT_AUTOMATION || resultCode != RESULT_OK
+                || data == null || data.getData() == null) return;
+        int accountIndex = automationImportAccount;
+        automationImportAccount = -1;
+        if (accountIndex < 0 || accountIndex >= configuredAccountCount()) {
+            showToast("导入目标实例已失效");
+            return;
+        }
+        try (InputStream input = getContentResolver().openInputStream(data.getData())) {
+            if (input == null) throw new IllegalArgumentException("无法读取脚本清单");
+            byte[] bytes = readManifestBytes(input);
+            if (bytes.length > MAX_MANIFEST_BYTES) {
+                throw new IllegalArgumentException("脚本清单不能超过 64KB");
+            }
+            AutomationManifest manifest = AutomationManifest.parse(
+                    new String(bytes, StandardCharsets.UTF_8));
+            if (!manifest.supportsUrl(instanceStartUrl(accountIndex))) {
+                throw new IllegalArgumentException("脚本允许来源与当前实例首页不匹配");
+            }
+            saveImportedAutomation(manifest);
+            new AlertDialog.Builder(this)
+                    .setTitle("脚本清单已导入（未启用）")
+                    .setMessage(manifest.name + "  v" + manifest.version
+                            + "\n来源：" + String.join(", ", manifest.allowedOrigins)
+                            + "\n能力：" + manifest.toDescriptor().capabilitySummary()
+                            + "\n\n当前版本只保存和展示清单，不执行脚本。")
+                    .setPositiveButton("确定", null)
+                    .show();
+        } catch (IOException | RuntimeException error) {
+            showToast(error.getMessage() == null ? "脚本清单导入失败" : error.getMessage());
+        }
+    }
+
+    private List<AutomationPackageDescriptor> importedAutomationPackages(int accountIndex) {
+        List<AutomationPackageDescriptor> result = new ArrayList<>();
+        JSONArray saved = importedAutomationJson();
+        for (int i = 0; i < saved.length(); i++) {
+            try {
+                AutomationManifest manifest = AutomationManifest.parse(saved.getString(i));
+                if (manifest.supportsUrl(instanceStartUrl(accountIndex))) {
+                    result.add(manifest.toDescriptor());
+                }
+            } catch (RuntimeException | JSONException ignored) {
+                // Ignore obsolete or damaged entries instead of weakening validation.
+            }
+        }
+        return result;
+    }
+
+    private void saveImportedAutomation(AutomationManifest imported) {
+        JSONArray current = importedAutomationJson();
+        JSONArray updated = new JSONArray();
+        for (int i = 0; i < current.length(); i++) {
+            try {
+                AutomationManifest existing = AutomationManifest.parse(current.getString(i));
+                if (!existing.id.equals(imported.id)) updated.put(existing.canonicalJson);
+            } catch (RuntimeException | JSONException ignored) {
+                // Drop entries that no longer pass the current schema.
+            }
+        }
+        updated.put(imported.canonicalJson);
+        preferences.edit().putString(PREF_IMPORTED_AUTOMATION, updated.toString()).apply();
+    }
+
+    private JSONArray importedAutomationJson() {
+        try {
+            return new JSONArray(preferences.getString(PREF_IMPORTED_AUTOMATION, "[]"));
+        } catch (JSONException ignored) {
+            return new JSONArray();
+        }
+    }
+
+    private byte[] readManifestBytes(InputStream input) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[4096];
+        int read;
+        while ((read = input.read(buffer)) != -1) {
+            output.write(buffer, 0, read);
+            if (output.size() > MAX_MANIFEST_BYTES) break;
+        }
+        return output.toByteArray();
     }
 
     private void showAutomationSettings(int accountIndex) {

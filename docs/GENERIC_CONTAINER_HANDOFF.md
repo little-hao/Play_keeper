@@ -7,6 +7,7 @@
 - Android 测试版本：`2.0.8-rc3-candidate`
 - applicationId：`com.local.sgplaykeeper.candidate`
 - versionCode：`2000803`
+- 逐步实现记录：`docs/GENERIC_CONTAINER_DEVELOPMENT_LOG.md`
 
 Windows 或其他 Codex 环境继续开发时：
 

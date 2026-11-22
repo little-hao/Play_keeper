@@ -1,0 +1,14 @@
+{
+  "id": "io.example.pagecheck",
+  "name": "页面只读检查",
+  "version": "1.0.0",
+  "allowedOrigins": [
+    "https://example.com"
+  ],
+  "capabilities": [
+    "page.title.read",
+    "dom.wait",
+    "dom.text.read",
+    "log.sanitized"
+  ]
+}
