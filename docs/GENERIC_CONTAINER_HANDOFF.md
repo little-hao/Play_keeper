@@ -62,4 +62,4 @@ Candidate 必须使用历史保留 keystore 才能覆盖已安装版本：
 
 本轮验证结果：Android 全 build type 单元测试通过，Candidate lintVital/assemble 通过。
 
-本地 rc4 制品因历史 keystore 未在当前环境中，使用了本机 Android Debug 证书（证书 SHA-256：`0cd3ad11938904decf64b396d4b89d88a347e931bfa24ddff0b4e93c0f434c86`）。它不能覆盖由上述历史证书签名的 Candidate；正式共享制品必须取得历史 keystore 后重建，不得通过卸载应用规避签名问题，以免清除候选版本地数据。
+已从旧项目开发目录核验并使用历史 keystore 重建 rc4；keystore 和证书指纹均与上述记录一致。重签共享 APK 位于 `dist/PlayKeeper-Android10Plus-v2.0.8-rc4-generic-candidate.apk`，可覆盖同包名、同历史签名且 versionCode 更低的 Candidate。私钥仍不纳入 Git。

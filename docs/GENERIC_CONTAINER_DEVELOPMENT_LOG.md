@@ -158,3 +158,26 @@
 - 使用本地 DOM 夹具完成 Android WebView 设备级重放测试。
 - 取得历史 Candidate keystore 后重建可覆盖升级的共享测试包。
 - 继续禁止点击、输入、任意 JavaScript 和后台自动执行。
+
+## 2026-11-23 · 步骤 7 · 使用历史证书重签 rc4
+
+来源与核验：
+
+- 根据旧开发聊天 `Playkeep开发-old` 的 v2.0.8-rc2 发布记录，在旧项目本地目录找到未纳入 Git 的 `signing/debug.keystore`。
+- keystore SHA-256：`bc351381ba0cf1846cad1408373a7b55f6f757f400d941ba3f9edacb14799c9f`。
+- 证书 SHA-256：`11e8c49415512da2ce088b92b1c2161a960744bcb5829507bcd0021fb3cf512f`，与历史覆盖安装链及交接记录一致。
+
+构建与验证：
+
+- 使用临时本地签名目录执行 clean、全 build type 单元测试、Candidate lintVital 和 assemble；全部通过。
+- 重建包名：`com.local.sgplaykeeper.candidate`。
+- versionName：`2.0.8-rc4-candidate`；versionCode：`2000804`。
+- APK Signature Scheme v2 验证通过，签名者数量为 1。
+- APK 大小：`2649738` 字节。
+- APK SHA-256：`cf8d63c2c7a8fe2d4e4615c62f26a93d95093d2eeca4dd4d2535cc98ecebe024`。
+- 临时 keystore 副本在构建后删除，私钥未提交到 Git。
+
+安装边界：
+
+- 可覆盖同为 `com.local.sgplaykeeper.candidate`、证书指纹相同且 versionCode 更低的候选版。
+- 不能覆盖包名为 `com.local.sgplaykeeper.test.v190` 的正式/覆盖安装线；不同包名应并行安装。
