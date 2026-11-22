@@ -18,7 +18,7 @@ git switch codex/generic-container-mvp-v1
 ## 当前已实现
 
 - 每实例 AndroidX WebKit Profile；Cookie、DOM Storage、IndexedDB、Service Worker 数据与缓存按 Profile 分区。
-- 实例级 HTTPS 首页与精确 origin 导航限制。
+- 实例级 HTTP/HTTPS 首页与精确 origin 导航限制；HTTP 默认关闭，需逐实例明确允许。
 - 最小权限 WebView 默认值：拒绝相机、麦克风、MIDI、受保护媒体和地理位置，关闭第三方 Cookie、混合内容与文件访问。
 - 省电、均衡、高性能环境分别驻留 2、4、8 个 WebView，兼容旧高性能设置并支持 renderer 异常自动降级。
 - 顶部“账号/脚本”入口改为“实例/自动化”。

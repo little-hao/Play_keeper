@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false" />
+    <!-- WebView cleartext must be enabled at process level for user-approved legacy HTTP
+         instances. MainActivity still enforces an explicit per-instance opt-in and exact
+         origin navigation policy. -->
+    <base-config cleartextTrafficPermitted="true" />
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">sgplay.cc</domain>
     </domain-config>

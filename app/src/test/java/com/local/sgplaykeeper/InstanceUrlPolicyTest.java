@@ -27,4 +27,20 @@ public final class InstanceUrlPolicyTest {
         assertThrows(IllegalArgumentException.class,
                 () -> InstanceUrlPolicy.normalizeStartUrl("https://user@example.test", "fallback"));
     }
+
+    @Test public void httpRequiresExplicitOptInAndExactOrigin() {
+        String start = InstanceUrlPolicy.normalizeStartUrl(
+                "http://legacy.example.test:8080/app", "fallback", true);
+        assertEquals("http://legacy.example.test:8080/app", start);
+        assertTrue(InstanceUrlPolicy.isAllowed(
+                "http://legacy.example.test:8080/next", start, true));
+        assertFalse(InstanceUrlPolicy.isAllowed(
+                "http://legacy.example.test:8080/next", start, false));
+        assertFalse(InstanceUrlPolicy.isAllowed(
+                "https://legacy.example.test:8080/next", start, true));
+        assertFalse(InstanceUrlPolicy.isAllowed(
+                "http://legacy.example.test/next", start, true));
+        assertFalse(InstanceUrlPolicy.isAllowed(
+                "http://sub.legacy.example.test:8080/next", start, true));
+    }
 }

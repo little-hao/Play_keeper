@@ -3,7 +3,7 @@
 ## 已落地
 
 - 每个实例使用 AndroidX WebKit `MULTI_PROFILE`；Cookie、DOM Storage、IndexedDB、Service Worker 与 HTTP 缓存由 WebView Profile 分区。
-- 长按实例标签可设置独立 HTTPS 首页；导航只允许该首页的精确 origin（协议、主机、端口）及原有 `sgplay.cc` 兼容域。
+- 长按实例标签可设置独立 HTTP/HTTPS 首页；默认仅允许 HTTPS。旧站点 HTTP 需要用户对该实例明确勾选风险选项，导航只允许该首页的精确 origin（协议、主机、端口）及原有 `sgplay.cc` 兼容域。
 - 默认拒绝网页摄像头、麦克风、MIDI、受保护媒体等权限；关闭地理位置、第三方 Cookie、混合内容、文件与 Content URI 访问。
 - 标准模式最多驻留 4 个 WebView，高性能模式最多 8 个；按 LRU 回收非活跃且无任务的实例，连续渲染进程退出时自动降级。
 - URL 策略具有功能测试与 10 万次热路径性能守卫。

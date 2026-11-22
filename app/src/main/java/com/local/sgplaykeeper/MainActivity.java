@@ -80,6 +80,7 @@ public final class MainActivity extends Activity {
     private static final String PREF_DESKTOP_PREFIX = "desktop_mode_";
     private static final String PREF_LAST_URL_PREFIX = "last_url_";
     private static final String PREF_START_URL_PREFIX = "start_url_";
+    private static final String PREF_ALLOW_HTTP_PREFIX = "allow_insecure_http_";
     private static final String PREF_ACCOUNT_OPENED_PREFIX = "account_opened_";
     private static final String PREF_LANDSCAPE_PREFIX = "landscape_mode_";
     private static final String PREF_ACCOUNT_LABEL_PREFIX = "account_label_";
@@ -1052,21 +1053,28 @@ public final class MainActivity extends Activity {
         EditText startUrlInput = new EditText(this);
         startUrlInput.setSingleLine(true);
         startUrlInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        startUrlInput.setHint("HTTPS 自定义首页；留空使用 sgplay.cc");
+        startUrlInput.setHint("HTTP/HTTPS 自定义首页；留空使用 sgplay.cc");
         startUrlInput.setText(preferences.getString(startUrlKey(accountIndex), ""));
         fields.addView(startUrlInput, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        CheckBox allowHttpInput = new CheckBox(this);
+        allowHttpInput.setText("允许此实例使用不安全 HTTP（内容可能被窃听或篡改）");
+        allowHttpInput.setChecked(preferences.getBoolean(allowHttpKey(accountIndex), false));
+        fields.addView(allowHttpInput, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         new AlertDialog.Builder(this)
                 .setTitle("实例" + (accountIndex + 1) + "设置")
-                .setMessage("名称留空会恢复自动识别。自定义首页仅接受 HTTPS，并把该实例导航限制在同一来源。")
+                .setMessage("名称留空会恢复自动识别。默认只接受 HTTPS；如确需旧站点，可对本实例明确允许 HTTP。导航仍限制在相同协议、主机和端口。")
                 .setView(fields)
                 .setNegativeButton("取消", null)
                 .setPositiveButton("保存", (dialog, which) -> {
+                    String previousStart = instanceStartUrl(accountIndex);
                     String customStart;
                     try {
                         customStart = InstanceUrlPolicy.normalizeStartUrl(
-                                startUrlInput.getText().toString(), "");
+                                startUrlInput.getText().toString(), "",
+                                allowHttpInput.isChecked());
                     } catch (IllegalArgumentException error) {
                         showToast(error.getMessage());
                         return;
@@ -1082,14 +1090,15 @@ public final class MainActivity extends Activity {
                     }
                     if (customStart.isBlank()) editor.remove(startUrlKey(accountIndex));
                     else editor.putString(startUrlKey(accountIndex), customStart);
+                    editor.putBoolean(allowHttpKey(accountIndex), allowHttpInput.isChecked());
                     editor.apply();
                     updateToolbarState();
                     Session session = sessions[accountIndex];
                     if (label.isBlank() && session != null) {
                         detectAccountName(session);
                     }
-                    if (session != null
-                            && !isAllowedUrl(accountIndex, session.webView.getUrl())) {
+                    if (session != null && (!previousStart.equals(instanceStartUrl(accountIndex))
+                            || !isAllowedUrl(accountIndex, session.webView.getUrl()))) {
                         session.webView.loadUrl(instanceStartUrl(accountIndex));
                     }
                     pushTelemetry();
@@ -2820,12 +2829,18 @@ public final class MainActivity extends Activity {
 
     private boolean isAllowedUrl(int accountIndex, String url) {
         return InstanceUrlPolicy.isAllowed(url,
-                preferences.getString(startUrlKey(accountIndex), ""));
+                preferences.getString(startUrlKey(accountIndex), ""),
+                preferences.getBoolean(allowHttpKey(accountIndex), false));
     }
 
     private String instanceStartUrl(int accountIndex) {
         String configured = preferences.getString(startUrlKey(accountIndex), "");
-        return configured == null || configured.isBlank() ? START_URL : configured;
+        try {
+            return InstanceUrlPolicy.normalizeStartUrl(configured, START_URL,
+                    preferences.getBoolean(allowHttpKey(accountIndex), false));
+        } catch (IllegalArgumentException ignored) {
+            return START_URL;
+        }
     }
 
     private void registerNetworkRecovery() {
@@ -3046,6 +3061,10 @@ public final class MainActivity extends Activity {
 
     private String startUrlKey(int accountIndex) {
         return PREF_START_URL_PREFIX + accountIndex;
+    }
+
+    private String allowHttpKey(int accountIndex) {
+        return PREF_ALLOW_HTTP_PREFIX + accountIndex;
     }
 
     private String accountOpenedKey(int accountIndex) {
