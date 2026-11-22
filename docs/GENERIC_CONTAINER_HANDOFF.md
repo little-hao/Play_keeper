@@ -29,7 +29,7 @@ git switch codex/generic-container-mvp-v1
 
 ## 当前边界
 
-- 自定义脚本导入仍禁用；尚未开放任意 JavaScript。
+- 自定义清单可导入但始终未启用；只读 workflow 目前仅离线校验，尚未连接 WebView 或开放任意 JavaScript。
 - 通用只读示例目前只展示清单，没有执行引擎。
 - SGPlay 自动化仍由原 `AutomationCoordinator` 执行。
 - 没有伪造 Android ID、GPU、Canvas、传感器、TLS 或网络出口，也不绕过网站限制。

@@ -93,8 +93,36 @@
 - Android 全 build type 单元测试通过。
 - 本步骤按小步节奏不生成 APK。
 
+## 2026-11-23 · 步骤 5 · 只读 workflow 格式与离线校验
+
+实现提交：`87fa689f3502bca39d74816f3383b511736bce0d`（`feat: validate read-only automation workflows`）
+
+实现：
+
+- manifest 可选携带 `workflow.steps`；未携带 workflow 的旧清单保持兼容。
+- 定义 `readTitle`、`waitFor`、`readText`、`assertText`、`writeSanitizedLog` 五个只读动作。
+- 最多 50 步，步骤 ID 必须唯一；拒绝未知动作和未知字段。
+- 每个动作必须由 manifest 显式声明对应能力。
+- selector 最长 300 字符，等待超时限制为 100–30000ms；静态文本最长 500 字符。
+- 日志动作暂不接受变量模板或控制字符，避免在执行器完成脱敏设计前形成敏感数据插值通道。
+- 导入确认页展示 workflow 步骤数，并明确“仅校验，不执行”。
+- 示例清单补充完整五动作 workflow。
+
+安全边界：
+
+- 本步骤仅解析、规范化并保存 JSON，不访问 WebView DOM，也不执行 workflow。
+- 未增加点击、输入、任意 JavaScript、Cookie、网络或 Android 文件访问能力。
+- `assertText` 仅定义格式；失败处理、结果保存和可重放日志尚未实现。
+
+动作与验证：
+
+- 新增正常解析、默认超时、未知动作、权限缺失、重复 ID、超限步骤、非法超时、缺失字段和不安全日志模板测试。
+- 首次编译发现 Android 内置 `JSONObject` 不支持 `keySet()`；改用兼容的 `keys()` 迭代后重跑。
+- Android Candidate、Debug、MacParallel、Release 全 build type 单元测试通过。
+- 本步骤按小步节奏不生成 APK。
+
 ## 下一步候选
 
-- 定义只读 workflow JSON schema。
-- 实现 `page.title.read`、`dom.wait`、`dom.text.read` 和脱敏日志的受控执行器。
-- 在 DOM 夹具重放测试通过前，不开放点击、输入或任意 JavaScript。
+- 先实现完全离线的 DOM 夹具重放器和结构化结果模型。
+- 夹具测试稳定后，再评审 WebView 只读桥接层、用户逐次授权和页面生命周期边界。
+- 在上述测试通过前，不开放点击、输入或任意 JavaScript。
