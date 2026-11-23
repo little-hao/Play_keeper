@@ -343,6 +343,11 @@ public final class MainActivity extends Activity {
                 bottom = windowInsets.getSystemWindowInsetBottom();
             }
             pageColumn.setPadding(left, top, right, bottom);
+            FrameLayout.LayoutParams expandLayout =
+                    (FrameLayout.LayoutParams) expandToolbarButton.getLayoutParams();
+            expandLayout.topMargin = top + dp(4);
+            expandLayout.rightMargin = right + dp(4);
+            expandToolbarButton.setLayoutParams(expandLayout);
             return windowInsets;
         });
 

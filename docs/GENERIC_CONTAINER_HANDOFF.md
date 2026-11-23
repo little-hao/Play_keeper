@@ -4,9 +4,9 @@
 
 - 分支：`codex/generic-container-mvp-v1`
 - 基线：`codex/v2.0.8-rc2`，提交 `4e4e16e592e4db5e854c844c189d1d92026da39c`
-- Android 测试版本：`2.0.8-rc5-candidate`
+- Android 测试版本：`2.0.8-rc6-candidate`
 - applicationId：`com.local.sgplaykeeper.candidate`
-- versionCode：`2000805`
+- versionCode：`2000806`
 - 逐步实现记录：`docs/GENERIC_CONTAINER_DEVELOPMENT_LOG.md`
 
 Windows 或其他 Codex 环境继续开发时：
@@ -65,3 +65,5 @@ Candidate 必须使用历史保留 keystore 才能覆盖已安装版本：
 
 历史 keystore 和证书指纹均与上述记录一致。rc5 继续使用同一 Candidate 包名与证书，可覆盖 versionCode 更低的 Candidate；私钥仍不纳入 Git。
 共享 APK：`dist/PlayKeeper-Android10Plus-v2.0.8-rc5-generic-candidate.apk`；SHA-256：`82e539e999c704562c5cbc40f456f27cb434ea333d8f4408eb7ff51afd29c81a`。
+
+rc6 安全区热修复 APK：`dist/PlayKeeper-Android10Plus-v2.0.8-rc6-generic-candidate.apk`；SHA-256：`a81c61479c64f1dc81c55b1fdac9e5a33dc14223c6a51ab93bf691bf311731b9`。

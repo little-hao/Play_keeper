@@ -191,3 +191,11 @@
 
 - 可覆盖同为 `com.local.sgplaykeeper.candidate`、证书指纹相同且 versionCode 更低的候选版。
 - 不能覆盖包名为 `com.local.sgplaykeeper.test.v190` 的正式/覆盖安装线；不同包名应并行安装。
+
+## 2026-11-24 · 步骤 9 · rc6 展开按钮安全区热修复
+
+- 根据真机截图确认，收起工具栏后的“展开工具”按钮未使用系统顶部 inset，会与电量、网络等状态图标重叠。
+- 按钮现在动态应用顶部与右侧系统安全边距，横竖屏或状态栏尺寸变化时会跟随重新定位。
+- 版本升为 `2.0.8-rc6-candidate`，versionCode `2000806`。
+- APK 大小：`2651550` 字节；SHA-256：`a81c61479c64f1dc81c55b1fdac9e5a33dc14223c6a51ab93bf691bf311731b9`。
+- 共享测试包：`dist/PlayKeeper-Android10Plus-v2.0.8-rc6-generic-candidate.apk`。
