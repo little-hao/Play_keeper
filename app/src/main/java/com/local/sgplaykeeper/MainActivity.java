@@ -87,6 +87,7 @@ public final class MainActivity extends Activity {
     private static final String PREF_DESKTOP_PREFIX = "desktop_mode_";
     private static final String PREF_LAST_URL_PREFIX = "last_url_";
     private static final String PREF_START_URL_PREFIX = "start_url_";
+    private static final String PREF_TOOLBAR_COLLAPSED = "toolbar_collapsed";
     private static final String PREF_ALLOW_HTTP_PREFIX = "allow_insecure_http_";
     private static final String PREF_ACCOUNT_OPENED_PREFIX = "account_opened_";
     private static final String PREF_LANDSCAPE_PREFIX = "landscape_mode_";
@@ -170,6 +171,9 @@ public final class MainActivity extends Activity {
     private Button remoteButton;
     private Button automationButton;
     private Button accountsButton;
+    private Button urlButton;
+    private Button collapseToolbarButton;
+    private Button expandToolbarButton;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private SharedPreferences preferences;
@@ -178,7 +182,9 @@ public final class MainActivity extends Activity {
     private RemoteConfigStore remoteConfigStore;
     private RemoteConnectionManager remoteConnectionManager;
     private AutomationCoordinator automationCoordinator;
-    private boolean readOnlyWorkflowRunning;
+    private ReadOnlyWorkflowRunner activeReadOnlyWorkflow;
+    private Session activeReadOnlyWorkflowSession;
+    private AlertDialog readOnlyWorkflowDialog;
     private RemoteConnectionManager.State remoteState = RemoteConnectionManager.State.DISABLED;
     private String remoteStateMessage = "远程连接未启用";
 
@@ -280,6 +286,9 @@ public final class MainActivity extends Activity {
         remoteButton = makeButton("远程", view -> showRemoteSettings());
         automationButton = makeButton("自动化", view -> showAutomationHub(activeAccount));
         accountsButton = makeButton("实例", view -> showAccountManagement());
+        urlButton = makeButton("网址", view -> showAccountNameDialog(activeAccount));
+        collapseToolbarButton = makeButton("收起", view -> setToolbarCollapsed(true));
+        expandToolbarButton = makeButton("展开工具", view -> setToolbarCollapsed(false));
         rebuildToolbar();
 
         progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -308,6 +317,12 @@ public final class MainActivity extends Activity {
         root.addView(blackOverlay, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
+
+        FrameLayout.LayoutParams expandParams = new FrameLayout.LayoutParams(
+                dp(88), dp(36), Gravity.TOP | Gravity.END);
+        expandParams.setMargins(0, dp(4), dp(4), 0);
+        root.addView(expandToolbarButton, expandParams);
+        applyToolbarVisibility();
 
         root.setOnApplyWindowInsetsListener((view, windowInsets) -> {
             int left;
@@ -358,6 +373,8 @@ public final class MainActivity extends Activity {
         detachFromParent(remoteButton);
         detachFromParent(automationButton);
         detachFromParent(accountsButton);
+        detachFromParent(urlButton);
+        detachFromParent(collapseToolbarButton);
         toolbarHost.removeAllViews();
 
         HorizontalScrollView accountScroller = new HorizontalScrollView(this);
@@ -377,13 +394,29 @@ public final class MainActivity extends Activity {
         actionRow.addView(batteryButton, weightedButtonParams(1.15f));
         actionRow.addView(remoteButton, weightedButtonParams(1f));
         actionRow.addView(automationButton, weightedButtonParams(1f));
+        actionRow.addView(urlButton, weightedButtonParams(1f));
         actionRow.addView(accountsButton, weightedButtonParams(1f));
+        actionRow.addView(collapseToolbarButton, weightedButtonParams(1f));
         toolbarHost.addView(accountScroller, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(38)));
         toolbarHost.addView(actionRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(38)));
         toolbarHost.getLayoutParams().height = dp(76);
         toolbarHost.requestLayout();
+        applyToolbarVisibility();
+    }
+
+    private void setToolbarCollapsed(boolean collapsed) {
+        preferences.edit().putBoolean(PREF_TOOLBAR_COLLAPSED, collapsed).apply();
+        applyToolbarVisibility();
+    }
+
+    private void applyToolbarVisibility() {
+        if (toolbarHost == null || expandToolbarButton == null || preferences == null) return;
+        boolean collapsed = preferences.getBoolean(PREF_TOOLBAR_COLLAPSED, false);
+        toolbarHost.setVisibility(collapsed ? View.GONE : View.VISIBLE);
+        expandToolbarButton.setVisibility(collapsed ? View.VISIBLE : View.GONE);
+        expandToolbarButton.bringToFront();
     }
 
     private LinearLayout makeToolbarRow() {
@@ -747,12 +780,13 @@ public final class MainActivity extends Activity {
     }
 
     private void runReadOnlyWorkflow(Session session, AutomationManifest manifest) {
-        if (readOnlyWorkflowRunning) {
+        if (activeReadOnlyWorkflow != null) {
             showToast("已有只读流程正在运行");
             return;
         }
-        readOnlyWorkflowRunning = true;
-        new ReadOnlyWorkflowRunner(manifest, new ReadOnlyWorkflowRunner.Bridge() {
+        final ReadOnlyWorkflowRunner[] holder = new ReadOnlyWorkflowRunner[1];
+        ReadOnlyWorkflowRunner runner = new ReadOnlyWorkflowRunner(manifest,
+                new ReadOnlyWorkflowRunner.Bridge() {
             @Override public String currentUrl() {
                 String url = session.webView.getUrl();
                 return url == null ? "" : url;
@@ -766,10 +800,39 @@ public final class MainActivity extends Activity {
             @Override public void postDelayed(Runnable action, long delayMs) {
                 mainHandler.postDelayed(action, delayMs);
             }
+
+            @Override public void removeCallbacks(Runnable action) {
+                mainHandler.removeCallbacks(action);
+            }
         }, result -> {
-            readOnlyWorkflowRunning = false;
-            showReadOnlyWorkflowResult(manifest, result);
-        }).start();
+            if (activeReadOnlyWorkflow != holder[0]) return;
+            activeReadOnlyWorkflow = null;
+            activeReadOnlyWorkflowSession = null;
+            if (readOnlyWorkflowDialog != null) {
+                readOnlyWorkflowDialog.dismiss();
+                readOnlyWorkflowDialog = null;
+            }
+            if (!activityDestroyed) showReadOnlyWorkflowResult(manifest, result);
+        });
+        holder[0] = runner;
+        activeReadOnlyWorkflow = runner;
+        activeReadOnlyWorkflowSession = session;
+        runner.start();
+        if (activeReadOnlyWorkflow == runner) {
+            readOnlyWorkflowDialog = new AlertDialog.Builder(this)
+                    .setTitle(manifest.name + " · 正在运行")
+                    .setMessage("只读流程最长运行 2 分钟。可随时取消，不会继续处理迟到的网页回调。")
+                    .setNegativeButton("取消运行", (dialog, which) ->
+                            cancelReadOnlyWorkflow("用户已取消只读流程"))
+                    .create();
+            readOnlyWorkflowDialog.setCanceledOnTouchOutside(false);
+            readOnlyWorkflowDialog.show();
+        }
+    }
+
+    private void cancelReadOnlyWorkflow(String reason) {
+        ReadOnlyWorkflowRunner runner = activeReadOnlyWorkflow;
+        if (runner != null) runner.cancel(reason);
     }
 
     private void showReadOnlyWorkflowResult(AutomationManifest manifest,
@@ -2847,6 +2910,9 @@ public final class MainActivity extends Activity {
 
         @Override
         public void onPageStarted(WebView view, String url, Bitmap favicon) {
+            if (activeReadOnlyWorkflowSession == session) {
+                cancelReadOnlyWorkflow("执行期间页面开始跳转，已停止");
+            }
             session.loading = true;
             session.failedForCurrentLoad = false;
             session.loadToken++;
@@ -2983,6 +3049,9 @@ public final class MainActivity extends Activity {
     }
 
     private void removeAndDestroySession(Session session) {
+        if (activeReadOnlyWorkflowSession == session) {
+            cancelReadOnlyWorkflow("网页实例已重建，只读流程已停止");
+        }
         if (sessions[session.index] == session) {
             sessions[session.index] = null;
         }
@@ -3266,6 +3335,11 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         activityDestroyed = true;
+        cancelReadOnlyWorkflow("页面已关闭，只读流程已停止");
+        if (readOnlyWorkflowDialog != null) {
+            readOnlyWorkflowDialog.dismiss();
+            readOnlyWorkflowDialog = null;
+        }
         stopPreview();
         if (batteryMonitor != null) {
             batteryMonitor.stop();

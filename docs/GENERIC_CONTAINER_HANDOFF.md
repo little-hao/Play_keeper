@@ -4,9 +4,9 @@
 
 - 分支：`codex/generic-container-mvp-v1`
 - 基线：`codex/v2.0.8-rc2`，提交 `4e4e16e592e4db5e854c844c189d1d92026da39c`
-- Android 测试版本：`2.0.8-rc4-candidate`
+- Android 测试版本：`2.0.8-rc5-candidate`
 - applicationId：`com.local.sgplaykeeper.candidate`
-- versionCode：`2000804`
+- versionCode：`2000805`
 - 逐步实现记录：`docs/GENERIC_CONTAINER_DEVELOPMENT_LOG.md`
 
 Windows 或其他 Codex 环境继续开发时：
@@ -27,20 +27,21 @@ git switch codex/generic-container-mvp-v1
 - URL 策略、环境迁移、自动化清单和热路径性能测试。
 - `nodemailer` 安全更新。
 - 导入的 workflow 可由用户逐次授权，在当前 WebView 页面运行固定只读动作并显示结构化结果。
+- 只读 workflow 支持用户取消、2 分钟整轮超时、页面跳转与 WebView/Activity 销毁清理，迟到回调不会再推进。
+- 当前实例可通过“网址”直接配置自定义首页；顶部两行工具可收起并记住状态。
 
 ## 当前边界
 
 - 自定义清单没有持久化自动启用状态；每次只读运行都需要用户确认。
-- 只读执行器只生成内置固定代码，不接受 manifest 提供的任意 JavaScript；尚无暂停/取消和持久化运行历史。
+- 只读执行器只生成内置固定代码，不接受 manifest 提供的任意 JavaScript；尚无持久化运行历史。
 - SGPlay 自动化仍由原 `AutomationCoordinator` 执行。
 - 没有伪造 Android ID、GPU、Canvas、传感器、TLS 或网络出口，也不绕过网站限制。
 
 ## 下一步
 
-1. 增加显式取消、页面销毁清理和单步总超时。
-2. 增加本地 DOM 夹具页面的设备/真机重放测试。
-3. 评审是否需要实例级启用状态；继续保留逐次运行确认。
-4. 在独立权限和审计设计完成前，不加入点击和输入动作。
+1. 增加本地 DOM 夹具页面的设备/真机重放测试。
+2. 评审是否需要实例级启用状态；继续保留逐次运行确认。
+3. 在独立权限和审计设计完成前，不加入点击和输入动作。
 
 ## 构建与测试
 
@@ -60,6 +61,7 @@ Candidate 必须使用历史保留 keystore 才能覆盖已安装版本：
 
 私钥不在 Git 中。通过加密渠道获取后放到 `signing/debug.keystore`，构建前核对哈希，构建完成后按本地密钥管理要求处理。不要生成同名新密钥代替。
 
-本轮验证结果：Android 全 build type 单元测试通过，Candidate lintVital/assemble 通过。
+本轮验证结果：Android Candidate 单元测试、lint 和 assemble 通过；VPS 72 项测试全部通过。
 
-已从旧项目开发目录核验并使用历史 keystore 重建 rc4；keystore 和证书指纹均与上述记录一致。重签共享 APK 位于 `dist/PlayKeeper-Android10Plus-v2.0.8-rc4-generic-candidate.apk`，可覆盖同包名、同历史签名且 versionCode 更低的 Candidate。私钥仍不纳入 Git。
+历史 keystore 和证书指纹均与上述记录一致。rc5 继续使用同一 Candidate 包名与证书，可覆盖 versionCode 更低的 Candidate；私钥仍不纳入 Git。
+共享 APK：`dist/PlayKeeper-Android10Plus-v2.0.8-rc5-generic-candidate.apk`；SHA-256：`82e539e999c704562c5cbc40f456f27cb434ea333d8f4408eb7ff51afd29c81a`。

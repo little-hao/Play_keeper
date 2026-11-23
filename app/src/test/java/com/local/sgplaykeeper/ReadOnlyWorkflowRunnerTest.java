@@ -69,6 +69,48 @@ public final class ReadOnlyWorkflowRunnerTest {
         assertEquals(1, stopped.get().steps.size());
     }
 
+    @Test public void cancelIgnoresLateJavascriptResultAndCompletesOnce() {
+        AutomationManifest manifest = manifest(
+                "{\"id\":\"title\",\"action\":\"readTitle\"},"
+                + "{\"id\":\"read\",\"action\":\"readText\",\"selector\":\"h1\"}");
+        FakeBridge bridge = new FakeBridge();
+        bridge.deferEvaluation = true;
+        bridge.responses.add(ok("Page"));
+        List<ReadOnlyWorkflowRunner.Result> completions = new ArrayList<>();
+        ReadOnlyWorkflowRunner runner = new ReadOnlyWorkflowRunner(
+                manifest, bridge, completions::add);
+
+        runner.start();
+        runner.cancel("用户已取消");
+        bridge.completePendingEvaluation();
+
+        assertEquals(1, completions.size());
+        assertFalse(completions.get(0).passed);
+        assertEquals("用户已取消", completions.get(0).message);
+        assertTrue(completions.get(0).steps.isEmpty());
+        assertEquals(1, bridge.scripts.size());
+    }
+
+    @Test public void totalTimeoutStopsPendingWorkflow() {
+        AutomationManifest manifest = manifest(
+                "{\"id\":\"title\",\"action\":\"readTitle\"}");
+        FakeBridge bridge = new FakeBridge();
+        bridge.deferEvaluation = true;
+        bridge.responses.add(ok("Page"));
+        AtomicReference<ReadOnlyWorkflowRunner.Result> completed = new AtomicReference<>();
+        ReadOnlyWorkflowRunner runner = new ReadOnlyWorkflowRunner(
+                manifest, bridge, completed::set, 25);
+
+        runner.start();
+        bridge.runDelayed();
+
+        assertNotNull(completed.get());
+        assertFalse(completed.get().passed);
+        assertTrue(completed.get().message.contains("总时限"));
+        bridge.completePendingEvaluation();
+        assertTrue(completed.get().steps.isEmpty());
+    }
+
     private static AutomationManifest manifest(String steps) {
         return AutomationManifest.parse("{\"id\":\"io.example.readonly\","
                 + "\"name\":\"test\",\"version\":\"1.0.0\","
@@ -89,8 +131,11 @@ public final class ReadOnlyWorkflowRunnerTest {
     private static final class FakeBridge implements ReadOnlyWorkflowRunner.Bridge {
         String url = "https://example.test/page";
         boolean navigateAfterEvaluation;
+        boolean deferEvaluation;
+        ReadOnlyWorkflowRunner.EvaluationCallback pendingEvaluation;
         final List<String> scripts = new ArrayList<>();
         final List<String> responses = new ArrayList<>();
+        final List<Runnable> delayed = new ArrayList<>();
 
         @Override public String currentUrl() { return url; }
 
@@ -99,9 +144,27 @@ public final class ReadOnlyWorkflowRunnerTest {
             scripts.add(script);
             String response = responses.remove(0);
             if (navigateAfterEvaluation) url = "https://example.test/next";
-            callback.onResult(response);
+            if (deferEvaluation) {
+                pendingEvaluation = raw -> callback.onResult(response);
+            } else {
+                callback.onResult(response);
+            }
         }
 
-        @Override public void postDelayed(Runnable action, long delayMs) { action.run(); }
+        @Override public void postDelayed(Runnable action, long delayMs) { delayed.add(action); }
+
+        @Override public void removeCallbacks(Runnable action) { delayed.remove(action); }
+
+        void runDelayed() {
+            List<Runnable> copy = new ArrayList<>(delayed);
+            delayed.clear();
+            for (Runnable runnable : copy) runnable.run();
+        }
+
+        void completePendingEvaluation() {
+            ReadOnlyWorkflowRunner.EvaluationCallback callback = pendingEvaluation;
+            pendingEvaluation = null;
+            if (callback != null) callback.onResult("ignored");
+        }
     }
 }

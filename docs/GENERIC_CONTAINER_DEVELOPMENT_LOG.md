@@ -172,9 +172,19 @@
 - 使用临时本地签名目录执行 clean、全 build type 单元测试、Candidate lintVital 和 assemble；全部通过。
 - 重建包名：`com.local.sgplaykeeper.candidate`。
 - versionName：`2.0.8-rc4-candidate`；versionCode：`2000804`。
+
+## 2026-11-24 · 步骤 8 · rc5 运行可控与紧凑界面
+
+- 只读 workflow 新增显式取消和 2 分钟整轮超时；取消或超时后忽略迟到的 WebView 回调，保证只产生一次终态。
+- Activity 销毁、页面开始跳转、WebView 实例重建时会先停止当前只读 workflow。
+- 工具栏新增“网址”入口，可直接为当前实例设置 HTTP/HTTPS 自定义首页；HTTP 仍需用户明确允许。
+- 账号行与操作行可整体收起，折叠状态持久化；收起后仅保留右上角小型“展开工具”按钮。
+- 新增取消、迟到回调、整轮超时单元测试；`testCandidateUnitTest`/`lintCandidate`/`assembleCandidate` 通过。
+- 版本升为 `2.0.8-rc5-candidate`，versionCode `2000805`。仍保持只读能力边界，未开放点击、输入、任意 JavaScript 或后台无人值守。
 - APK Signature Scheme v2 验证通过，签名者数量为 1。
-- APK 大小：`2649738` 字节。
-- APK SHA-256：`cf8d63c2c7a8fe2d4e4615c62f26a93d95093d2eeca4dd4d2535cc98ecebe024`。
+- APK 大小：`2651322` 字节。
+- APK SHA-256：`82e539e999c704562c5cbc40f456f27cb434ea333d8f4408eb7ff51afd29c81a`。
+- 共享测试包：`dist/PlayKeeper-Android10Plus-v2.0.8-rc5-generic-candidate.apk`。
 - 临时 keystore 副本在构建后删除，私钥未提交到 Git。
 
 安装边界：

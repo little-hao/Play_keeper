@@ -12,6 +12,7 @@ final class ReadOnlyWorkflowRunner {
         String currentUrl();
         void evaluateJavascript(String script, EvaluationCallback callback);
         void postDelayed(Runnable action, long delayMs);
+        void removeCallbacks(Runnable action);
     }
 
     interface EvaluationCallback { void onResult(String rawResult); }
@@ -44,29 +45,46 @@ final class ReadOnlyWorkflowRunner {
     }
 
     private static final long POLL_INTERVAL_MS = 250;
+    static final long DEFAULT_TOTAL_TIMEOUT_MS = 120_000;
     private final AutomationManifest manifest;
     private final Bridge bridge;
     private final CompletionCallback completion;
     private final List<StepResult> results = new ArrayList<>();
     private final String initialUrl;
+    private final long totalTimeoutMs;
+    private final Runnable totalTimeoutAction;
     private boolean finished;
 
     ReadOnlyWorkflowRunner(AutomationManifest manifest, Bridge bridge,
                            CompletionCallback completion) {
+        this(manifest, bridge, completion, DEFAULT_TOTAL_TIMEOUT_MS);
+    }
+
+    ReadOnlyWorkflowRunner(AutomationManifest manifest, Bridge bridge,
+                           CompletionCallback completion, long totalTimeoutMs) {
         this.manifest = manifest;
         this.bridge = bridge;
         this.completion = completion;
         this.initialUrl = bridge.currentUrl();
+        this.totalTimeoutMs = totalTimeoutMs;
+        this.totalTimeoutAction = () -> finish(false, "只读流程超过总时限，已停止");
     }
 
     void start() {
+        if (finished) return;
         if (manifest.workflow == null) {
             finish(false, "脚本没有 workflow");
         } else if (!manifest.supportsUrl(initialUrl)) {
             finish(false, "当前页面来源不在脚本授权范围内");
         } else {
+            bridge.postDelayed(totalTimeoutAction, totalTimeoutMs);
             runStep(0);
         }
+    }
+
+    void cancel(String reason) {
+        finish(false, reason == null || reason.trim().isEmpty()
+                ? "用户已取消只读流程" : reason.trim());
     }
 
     private void runStep(int index) {
@@ -97,6 +115,7 @@ final class ReadOnlyWorkflowRunner {
             return;
         }
         bridge.evaluateJavascript(queryScript(step.canonicalJson.optString("selector")), raw -> {
+            if (finished) return;
             Evaluation value = decode(raw);
             if (value.ok) {
                 addAndContinue(index, step, true, "已找到元素");
@@ -113,6 +132,7 @@ final class ReadOnlyWorkflowRunner {
 
     private void evaluate(int index, AutomationWorkflow.Step step, String script) {
         bridge.evaluateJavascript(script, raw -> {
+            if (finished) return;
             Evaluation value = decode(raw);
             if (!value.ok) {
                 failStep(step, value.detail);
@@ -124,11 +144,13 @@ final class ReadOnlyWorkflowRunner {
 
     private void addAndContinue(int index, AutomationWorkflow.Step step,
                                 boolean passed, String detail) {
+        if (finished) return;
         results.add(new StepResult(step.id, step.action, passed, limit(detail)));
         runStep(index + 1);
     }
 
     private void failStep(AutomationWorkflow.Step step, String detail) {
+        if (finished) return;
         results.add(new StepResult(step.id, step.action, false, limit(detail)));
         finish(false, "步骤 " + step.id + " 失败");
     }
@@ -136,6 +158,7 @@ final class ReadOnlyWorkflowRunner {
     private void finish(boolean passed, String message) {
         if (finished) return;
         finished = true;
+        bridge.removeCallbacks(totalTimeoutAction);
         completion.onComplete(new Result(passed, message, results));
     }
 

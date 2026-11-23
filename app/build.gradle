@@ -16,9 +16,9 @@ android {
         minSdk 26
         targetSdk 35
         // Semantic version codes avoid collisions with formal APKs built outside
-        // the short-lived CI sequence. Read-only WebView candidate => 2,000,804.
-        versionCode 2000804
-        versionName '2.0.8-rc4'
+        // the short-lived CI sequence. Controlled read-only runner => 2,000,805.
+        versionCode 2000805
+        versionName '2.0.8-rc5'
         buildConfigField 'String', 'REMOTE_PRESET_NAME', '""'
         buildConfigField 'String', 'REMOTE_PRESET_ENDPOINT', '""'
     }
@@ -91,7 +91,7 @@ android {
 androidComponents {
     onVariants(selector().withBuildType('candidate')) { variant ->
         variant.outputs.each { output ->
-            output.versionCode.set(2000804)
+            output.versionCode.set(2000805)
         }
     }
 }
