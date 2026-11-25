@@ -199,3 +199,15 @@
 - 版本升为 `2.0.8-rc6-candidate`，versionCode `2000806`。
 - APK 大小：`2651550` 字节；SHA-256：`a81c61479c64f1dc81c55b1fdac9e5a33dc14223c6a51ab93bf691bf311731b9`。
 - 共享测试包：`dist/PlayKeeper-Android10Plus-v2.0.8-rc6-generic-candidate.apk`。
+
+## 2026-11-26 · 步骤 10 · rc7 自动化包 v1
+
+- 自定义首页支持缺省协议补全：`sgplay.cc/...` 补为 HTTP，其他域名补为 HTTPS；HTTP 仍需用户逐实例明确允许。
+- 新增 `.pkauto` v1 导入与导出，同时保留旧 JSON 清单导入。
+- 自动化包使用固定 ZIP 文件结构，校验 schemaVersion、脚本 ID/版本、manifest SHA-256、路径、条目数、压缩包大小及解压大小。
+- 新增开发者打包工具 `tools/pack_automation.py`、v1 格式文档和 SGPlay 只读示例清单。
+- v1 仍仅允许受控只读动作，不允许点击、输入、Cookie、任意 JavaScript 或后台无人值守。
+- 版本升为 `2.0.8-rc7-candidate`，versionCode `2000807`。
+- Android Candidate 单元测试、lint 和 assemble 通过；VPS 72 项测试通过，npm audit 无漏洞。
+- APK 大小：`2652290` 字节；SHA-256：`de428d8194192d9713cac4a9916957eef55d394ebe4284496a88ddc39b95cf84`。
+- 共享测试包：`dist/PlayKeeper-Android10Plus-v2.0.8-rc7-generic-candidate.apk`。

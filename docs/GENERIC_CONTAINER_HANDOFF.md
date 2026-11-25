@@ -4,9 +4,9 @@
 
 - 分支：`codex/generic-container-mvp-v1`
 - 基线：`codex/v2.0.8-rc2`，提交 `4e4e16e592e4db5e854c844c189d1d92026da39c`
-- Android 测试版本：`2.0.8-rc6-candidate`
+- Android 测试版本：`2.0.8-rc7-candidate`
 - applicationId：`com.local.sgplaykeeper.candidate`
-- versionCode：`2000806`
+- versionCode：`2000807`
 - 逐步实现记录：`docs/GENERIC_CONTAINER_DEVELOPMENT_LOG.md`
 
 Windows 或其他 Codex 环境继续开发时：
@@ -67,3 +67,7 @@ Candidate 必须使用历史保留 keystore 才能覆盖已安装版本：
 共享 APK：`dist/PlayKeeper-Android10Plus-v2.0.8-rc5-generic-candidate.apk`；SHA-256：`82e539e999c704562c5cbc40f456f27cb434ea333d8f4408eb7ff51afd29c81a`。
 
 rc6 安全区热修复 APK：`dist/PlayKeeper-Android10Plus-v2.0.8-rc6-generic-candidate.apk`；SHA-256：`a81c61479c64f1dc81c55b1fdac9e5a33dc14223c6a51ab93bf691bf311731b9`。
+
+rc7 自动化包 v1 APK：`dist/PlayKeeper-Android10Plus-v2.0.8-rc7-generic-candidate.apk`；SHA-256：`de428d8194192d9713cac4a9916957eef55d394ebe4284496a88ddc39b95cf84`。
+
+`.pkauto` v1 格式、安全边界和打包方法见 `docs/AUTOMATION_PACKAGE_V1.md`；可导入示例为 `examples/readonly-example.pkauto`。

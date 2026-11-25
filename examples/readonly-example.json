@@ -1,0 +1,15 @@
+{
+  "id": "io.example.sgplay.status",
+  "name": "SGPlay 页面状态检查",
+  "version": "1.0.0",
+  "allowedOrigins": ["http://sgplay.cc"],
+  "capabilities": ["page.title.read", "dom.wait", "dom.text.read", "log.sanitized"],
+  "workflow": {
+    "steps": [
+      {"id": "title", "action": "readTitle"},
+      {"id": "wait_body", "action": "waitFor", "selector": "body", "timeoutMs": 10000},
+      {"id": "read_body", "action": "readText", "selector": "body"},
+      {"id": "done", "action": "writeSanitizedLog", "message": "SGPlay 页面状态检查完成"}
+    ]
+  }
+}

@@ -14,7 +14,7 @@ final class InstanceUrlPolicy {
     }
 
     static String normalizeStartUrl(String value, String fallback, boolean allowHttp) {
-        String candidate = value == null ? "" : value.trim();
+        String candidate = suggestedStartUrl(value);
         if (candidate.isEmpty()) return fallback;
         URI uri = parse(candidate);
         String scheme = uri == null ? "" : lower(uri.getScheme());
@@ -26,6 +26,21 @@ final class InstanceUrlPolicy {
                     : "自定义首页必须是有效的 HTTPS 地址；使用 HTTP 需先明确允许");
         }
         return uri.toString();
+    }
+
+    static String suggestedStartUrl(String value) {
+        String candidate = value == null ? "" : value.trim();
+        candidate = candidate.replace('：', ':');
+        if (candidate.isEmpty() || candidate.contains("://")) return candidate;
+        String hostPart = candidate;
+        int separator = hostPart.indexOf('/');
+        if (separator >= 0) hostPart = hostPart.substring(0, separator);
+        int port = hostPart.indexOf(':');
+        if (port >= 0) hostPart = hostPart.substring(0, port);
+        String normalizedHost = lower(hostPart);
+        String scheme = LEGACY_HOST.equals(normalizedHost)
+                || normalizedHost.endsWith("." + LEGACY_HOST) ? "http://" : "https://";
+        return scheme + candidate;
     }
 
     static boolean isAllowed(String candidate, String configuredStartUrl) {

@@ -43,4 +43,17 @@ public final class InstanceUrlPolicyTest {
         assertFalse(InstanceUrlPolicy.isAllowed(
                 "http://sub.legacy.example.test:8080/next", start, true));
     }
+
+    @Test public void completesMissingSchemeForLegacyAndHttpsSites() {
+        assertEquals("http://sgplay.cc/AFK.html#/hang",
+                InstanceUrlPolicy.suggestedStartUrl("sgplay.cc/AFK.html#/hang"));
+        assertEquals("https://example.test/path",
+                InstanceUrlPolicy.suggestedStartUrl("example.test/path"));
+        assertEquals("https://example.test/path",
+                InstanceUrlPolicy.suggestedStartUrl("https：//example.test/path"));
+        assertEquals("http://sgplay.cc/home.html#/",
+                InstanceUrlPolicy.normalizeStartUrl("sgplay.cc/home.html#/", "fallback", true));
+        assertThrows(IllegalArgumentException.class, () ->
+                InstanceUrlPolicy.normalizeStartUrl("sgplay.cc/home.html#/", "fallback", false));
+    }
 }

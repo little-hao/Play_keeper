@@ -16,9 +16,9 @@ android {
         minSdk 26
         targetSdk 35
         // Semantic version codes avoid collisions with formal APKs built outside
-        // the short-lived CI sequence. Toolbar safe-inset hotfix => 2,000,806.
-        versionCode 2000806
-        versionName '2.0.8-rc6'
+        // the short-lived CI sequence. Portable automation package v1 => 2,000,807.
+        versionCode 2000807
+        versionName '2.0.8-rc7'
         buildConfigField 'String', 'REMOTE_PRESET_NAME', '""'
         buildConfigField 'String', 'REMOTE_PRESET_ENDPOINT', '""'
     }
@@ -91,7 +91,7 @@ android {
 androidComponents {
     onVariants(selector().withBuildType('candidate')) { variant ->
         variant.outputs.each { output ->
-            output.versionCode.set(2000806)
+            output.versionCode.set(2000807)
         }
     }
 }

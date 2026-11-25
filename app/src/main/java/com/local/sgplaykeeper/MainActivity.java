@@ -72,6 +72,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -102,6 +103,7 @@ public final class MainActivity extends Activity {
     private static final String PREF_ENVIRONMENT_PRESET = "environment_preset";
     private static final String PREF_IMPORTED_AUTOMATION = "imported_automation_manifests";
     private static final int REQUEST_IMPORT_AUTOMATION = 701;
+    private static final int REQUEST_EXPORT_AUTOMATION = 702;
     private static final int MAX_MANIFEST_BYTES = 64 * 1024;
     private static final int LEGACY_ACCOUNT_COUNT = 4;
     private static final int MAX_ACCOUNTS = 8;
@@ -201,6 +203,7 @@ public final class MainActivity extends Activity {
     private float brightnessBeforeBlack = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
     private long lastBackPressedAt;
     private int automationImportAccount = -1;
+    private AutomationManifest automationExportManifest;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -727,7 +730,7 @@ public final class MainActivity extends Activity {
             content.addView(card, cardParams);
         }
 
-        Button importButton = makeButton("导入只读脚本清单",
+        Button importButton = makeButton("导入自动化包 / JSON 清单",
                 view -> launchAutomationManifestPicker(accountIndex));
         content.addView(importButton, automationActionParams());
 
@@ -750,7 +753,11 @@ public final class MainActivity extends Activity {
                         ? "\n\n带有 workflow 的导入清单可在逐次授权后运行固定只读动作；"
                         + "不接受任意 JavaScript。"
                         : "\n\n内置自动化沿用其独立配置与权限边界。"))
-                .setPositiveButton("确定", null);
+                .setPositiveButton(descriptor.removable ? "导出 .pkauto" : "确定",
+                        descriptor.removable ? (dialog, which) -> {
+                            AutomationManifest manifest = findImportedAutomation(descriptor.id);
+                            if (manifest != null) launchAutomationPackageExporter(manifest);
+                        } : null);
         AutomationManifest imported = descriptor.removable
                 ? findImportedAutomation(descriptor.id) : null;
         if (imported != null && imported.workflow != null) {
@@ -860,14 +867,38 @@ public final class MainActivity extends Activity {
         automationImportAccount = accountIndex;
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("application/json");
-        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/json", "text/json"});
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                "application/json", "text/json", "application/zip", "application/octet-stream"});
         startActivityForResult(intent, REQUEST_IMPORT_AUTOMATION);
+    }
+
+    private void launchAutomationPackageExporter(AutomationManifest manifest) {
+        automationExportManifest = manifest;
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/zip");
+        intent.putExtra(Intent.EXTRA_TITLE, manifest.id + "-" + manifest.version + ".pkauto");
+        startActivityForResult(intent, REQUEST_EXPORT_AUTOMATION);
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_EXPORT_AUTOMATION) {
+            AutomationManifest manifest = automationExportManifest;
+            automationExportManifest = null;
+            if (resultCode != RESULT_OK || data == null || data.getData() == null
+                    || manifest == null) return;
+            try (OutputStream output = getContentResolver().openOutputStream(data.getData())) {
+                if (output == null) throw new IOException("无法创建导出文件");
+                output.write(AutomationPackageFile.create(manifest));
+                showToast("自动化包已导出");
+            } catch (IOException | RuntimeException error) {
+                showAutomationImportError(error);
+            }
+            return;
+        }
         if (requestCode != REQUEST_IMPORT_AUTOMATION || resultCode != RESULT_OK
                 || data == null || data.getData() == null) return;
         int accountIndex = automationImportAccount;
@@ -878,12 +909,16 @@ public final class MainActivity extends Activity {
         }
         try (InputStream input = getContentResolver().openInputStream(data.getData())) {
             if (input == null) throw new IllegalArgumentException("无法读取脚本清单");
-            byte[] bytes = readManifestBytes(input);
-            if (bytes.length > MAX_MANIFEST_BYTES) {
-                throw new IllegalArgumentException("脚本清单不能超过 64KB");
+            byte[] bytes = readAutomationBytes(input);
+            AutomationManifest manifest;
+            if (AutomationPackageFile.looksLikePackage(bytes)) {
+                manifest = AutomationPackageFile.parse(bytes);
+            } else {
+                if (bytes.length > MAX_MANIFEST_BYTES) {
+                    throw new IllegalArgumentException("脚本清单不能超过 64KB");
+                }
+                manifest = AutomationManifest.parse(new String(bytes, StandardCharsets.UTF_8));
             }
-            AutomationManifest manifest = AutomationManifest.parse(
-                    new String(bytes, StandardCharsets.UTF_8));
             if (!manifest.supportsUrl(instanceStartUrl(accountIndex))) {
                 throw new IllegalArgumentException("脚本允许来源与当前实例首页不匹配");
             }
@@ -1016,13 +1051,15 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private byte[] readManifestBytes(InputStream input) throws IOException {
+    private byte[] readAutomationBytes(InputStream input) throws IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         byte[] buffer = new byte[4096];
         int read;
         while ((read = input.read(buffer)) != -1) {
             output.write(buffer, 0, read);
-            if (output.size() > MAX_MANIFEST_BYTES) break;
+            if (output.size() > AutomationPackageFile.MAX_PACKAGE_BYTES) {
+                throw new IllegalArgumentException("自动化文件不能超过 256KB");
+            }
         }
         return output.toByteArray();
     }
@@ -1381,7 +1418,7 @@ public final class MainActivity extends Activity {
         EditText startUrlInput = new EditText(this);
         startUrlInput.setSingleLine(true);
         startUrlInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        startUrlInput.setHint("HTTP/HTTPS 自定义首页；留空使用 sgplay.cc");
+        startUrlInput.setHint("例：sgplay.cc/AFK.html#/hang 或 https://example.com/");
         startUrlInput.setText(preferences.getString(startUrlKey(accountIndex), ""));
         fields.addView(startUrlInput, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -1393,7 +1430,9 @@ public final class MainActivity extends Activity {
 
         new AlertDialog.Builder(this)
                 .setTitle("实例" + (accountIndex + 1) + "设置")
-                .setMessage("名称留空会恢复自动识别。默认只接受 HTTPS；如确需旧站点，可对本实例明确允许 HTTP。导航仍限制在相同协议、主机和端口。")
+                .setMessage("名称留空会恢复自动识别。未填协议时，SGPlay 地址自动补 http://，其他网站自动补 https://。"
+                        + "\nSGPlay HTTP 示例：sgplay.cc/AFK.html#/hang（需勾选允许 HTTP）。"
+                        + "\n导航仍限制在相同协议、主机和端口。")
                 .setView(fields)
                 .setNegativeButton("取消", null)
                 .setPositiveButton("保存", (dialog, which) -> {
