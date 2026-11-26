@@ -3,6 +3,9 @@ package com.local.sgplaykeeper;
 import org.junit.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.spec.ECGenParameterSpec;
 
 import static org.junit.Assert.*;
 
@@ -34,5 +37,35 @@ public final class AutomationPackageFileTest {
     @Test public void enforcesPackageSizeLimit() {
         assertThrows(IllegalArgumentException.class, () -> AutomationPackageFile.parse(
                 new byte[AutomationPackageFile.MAX_PACKAGE_BYTES + 1]));
+    }
+
+    @Test public void verifiesP256PublisherSignature() throws Exception {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
+        generator.initialize(new ECGenParameterSpec("secp256r1"));
+        KeyPair keyPair = generator.generateKeyPair();
+        AutomationManifest manifest = AutomationManifest.parse(MANIFEST);
+
+        byte[] signed = AutomationPackageFile.createSigned(
+                manifest, "Example Publisher", keyPair.getPublic(), keyPair.getPrivate());
+        AutomationPackageFile.Inspection inspection = AutomationPackageFile.inspect(signed);
+
+        assertTrue(inspection.signatureVerified);
+        assertEquals("Example Publisher", inspection.publisherName);
+        assertEquals(64, inspection.publisherFingerprint.length());
+        assertEquals(manifest.id, inspection.manifest.id);
+    }
+
+    @Test public void rejectsPublisherSignatureFromDifferentPrivateKey() throws Exception {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
+        generator.initialize(new ECGenParameterSpec("secp256r1"));
+        KeyPair declared = generator.generateKeyPair();
+        KeyPair signer = generator.generateKeyPair();
+        AutomationManifest manifest = AutomationManifest.parse(MANIFEST);
+
+        byte[] mismatched = AutomationPackageFile.createSigned(
+                manifest, "Example Publisher", declared.getPublic(), signer.getPrivate());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> AutomationPackageFile.inspect(mismatched));
     }
 }

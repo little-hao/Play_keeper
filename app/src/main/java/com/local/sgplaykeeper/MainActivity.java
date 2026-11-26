@@ -70,6 +70,7 @@ import org.json.JSONTokener;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -892,7 +893,9 @@ public final class MainActivity extends Activity {
                     || manifest == null) return;
             try (OutputStream output = getContentResolver().openOutputStream(data.getData())) {
                 if (output == null) throw new IOException("无法创建导出文件");
-                output.write(AutomationPackageFile.create(manifest));
+                byte[] originalPackage = loadStoredAutomationPackage(manifest);
+                output.write(originalPackage == null
+                        ? AutomationPackageFile.create(manifest) : originalPackage);
                 showToast("自动化包已导出");
             } catch (IOException | RuntimeException error) {
                 showAutomationImportError(error);
@@ -911,24 +914,32 @@ public final class MainActivity extends Activity {
             if (input == null) throw new IllegalArgumentException("无法读取脚本清单");
             byte[] bytes = readAutomationBytes(input);
             AutomationManifest manifest;
+            AutomationPackageFile.Inspection inspection;
+            byte[] originalPackage = null;
             if (AutomationPackageFile.looksLikePackage(bytes)) {
-                manifest = AutomationPackageFile.parse(bytes);
+                inspection = AutomationPackageFile.inspect(bytes);
+                manifest = inspection.manifest;
+                originalPackage = bytes;
             } else {
                 if (bytes.length > MAX_MANIFEST_BYTES) {
                     throw new IllegalArgumentException("脚本清单不能超过 64KB");
                 }
                 manifest = AutomationManifest.parse(new String(bytes, StandardCharsets.UTF_8));
+                inspection = new AutomationPackageFile.Inspection(
+                        manifest, false, "旧 JSON 清单（未签名）", "");
             }
             if (!manifest.supportsUrl(instanceStartUrl(accountIndex))) {
                 throw new IllegalArgumentException("脚本允许来源与当前实例首页不匹配");
             }
-            confirmAutomationImport(manifest);
+            confirmAutomationImport(manifest, inspection, originalPackage);
         } catch (IOException | RuntimeException error) {
             showAutomationImportError(error);
         }
     }
 
-    private void confirmAutomationImport(AutomationManifest imported) {
+    private void confirmAutomationImport(AutomationManifest imported,
+                                         AutomationPackageFile.Inspection inspection,
+                                         byte[] originalPackage) {
         AutomationManifest existing = findImportedAutomation(imported.id);
         boolean downgrade = existing != null && imported.compareVersion(existing) < 0;
         String title = existing == null ? "确认导入脚本清单"
@@ -941,6 +952,10 @@ public final class MainActivity extends Activity {
                 + "\n来源：" + String.join(", ", imported.allowedOrigins)
                 + "\n权限 ID：" + String.join(", ", imported.capabilities)
                 + "\n权限说明：" + imported.toDescriptor().capabilitySummary()
+                + "\n发布者：" + inspection.publisherName
+                + "\n签名：" + (inspection.signatureVerified
+                ? "已验证（" + inspection.publisherFingerprint.substring(0, 16) + "…）"
+                : "未签名，仅允许只读能力")
                 + "\n只读流程：" + (imported.workflow == null ? "未提供"
                 : imported.workflow.steps.size() + " 个步骤（仅校验，不执行）")
                 + (downgrade ? "\n\n警告：这是版本降级，旧版本可能缺少修复。" : "")
@@ -950,7 +965,7 @@ public final class MainActivity extends Activity {
                 .setMessage(message)
                 .setNegativeButton("取消", null)
                 .setPositiveButton(downgrade ? "仍然降级" : "确认保存", (dialog, which) -> {
-                    saveImportedAutomation(imported);
+                    saveImportedAutomation(imported, originalPackage);
                     showToast("脚本清单已保存（未启用）");
                 })
                 .show();
@@ -977,6 +992,7 @@ public final class MainActivity extends Activity {
                 .setNegativeButton("取消", null)
                 .setPositiveButton("删除", (dialog, which) -> {
                     removeImportedAutomation(descriptor.id);
+                    deleteStoredAutomationPackage(descriptor.id);
                     showToast("脚本清单已删除");
                 })
                 .show();
@@ -1028,7 +1044,7 @@ public final class MainActivity extends Activity {
         return result;
     }
 
-    private void saveImportedAutomation(AutomationManifest imported) {
+    private void saveImportedAutomation(AutomationManifest imported, byte[] originalPackage) {
         JSONArray current = importedAutomationJson();
         JSONArray updated = new JSONArray();
         for (int i = 0; i < current.length(); i++) {
@@ -1041,6 +1057,54 @@ public final class MainActivity extends Activity {
         }
         updated.put(imported.canonicalJson);
         preferences.edit().putString(PREF_IMPORTED_AUTOMATION, updated.toString()).apply();
+        saveStoredAutomationPackage(imported.id, originalPackage);
+    }
+
+    private File storedAutomationPackageFile(String id) {
+        File directory = new File(getFilesDir(), "automation-packages");
+        return new File(directory, id + ".pkauto");
+    }
+
+    private void saveStoredAutomationPackage(String id, byte[] packageBytes) {
+        File target = storedAutomationPackageFile(id);
+        if (packageBytes == null) {
+            if (target.exists()) target.delete();
+            return;
+        }
+        File directory = target.getParentFile();
+        if (directory == null || (!directory.exists() && !directory.mkdirs())) {
+            throw new IllegalArgumentException("无法创建自动化包存储目录");
+        }
+        File temporary = new File(directory, id + ".tmp");
+        try (FileOutputStream output = new FileOutputStream(temporary)) {
+            output.write(packageBytes);
+        } catch (IOException error) {
+            temporary.delete();
+            throw new IllegalArgumentException("无法保存自动化包", error);
+        }
+        if (target.exists() && !target.delete()) temporary.delete();
+        if (!temporary.renameTo(target)) {
+            temporary.delete();
+            throw new IllegalArgumentException("无法替换自动化包");
+        }
+    }
+
+    private byte[] loadStoredAutomationPackage(AutomationManifest expected) {
+        File file = storedAutomationPackageFile(expected.id);
+        if (!file.isFile()) return null;
+        try (InputStream input = new FileInputStream(file)) {
+            byte[] bytes = readAutomationBytes(input);
+            AutomationManifest stored = AutomationPackageFile.parse(bytes);
+            return stored.id.equals(expected.id) && stored.version.equals(expected.version)
+                    ? bytes : null;
+        } catch (IOException | RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private void deleteStoredAutomationPackage(String id) {
+        File file = storedAutomationPackageFile(id);
+        if (file.exists()) file.delete();
     }
 
     private JSONArray importedAutomationJson() {

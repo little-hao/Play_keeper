@@ -4,9 +4,9 @@
 
 - 分支：`codex/generic-container-mvp-v1`
 - 基线：`codex/v2.0.8-rc2`，提交 `4e4e16e592e4db5e854c844c189d1d92026da39c`
-- Android 测试版本：`2.0.8-rc7-candidate`
+- Android 测试版本：`2.0.8-rc8-candidate`
 - applicationId：`com.local.sgplaykeeper.candidate`
-- versionCode：`2000807`
+- versionCode：`2000808`
 - 逐步实现记录：`docs/GENERIC_CONTAINER_DEVELOPMENT_LOG.md`
 
 Windows 或其他 Codex 环境继续开发时：
@@ -71,3 +71,5 @@ rc6 安全区热修复 APK：`dist/PlayKeeper-Android10Plus-v2.0.8-rc6-generic-c
 rc7 自动化包 v1 APK：`dist/PlayKeeper-Android10Plus-v2.0.8-rc7-generic-candidate.apk`；SHA-256：`de428d8194192d9713cac4a9916957eef55d394ebe4284496a88ddc39b95cf84`。
 
 `.pkauto` v1 格式、安全边界和打包方法见 `docs/AUTOMATION_PACKAGE_V1.md`；可导入示例为 `examples/readonly-example.pkauto`。
+
+rc8 发布者签名基础 APK：`dist/PlayKeeper-Android10Plus-v2.0.8-rc8-generic-candidate.apk`；SHA-256：`0a025d38ecb0e39e3d30654c03a58ca303984c742cba5700afe7f0db1e94d1bc`。

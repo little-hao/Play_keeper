@@ -211,3 +211,15 @@
 - Android Candidate 单元测试、lint 和 assemble 通过；VPS 72 项测试通过，npm audit 无漏洞。
 - APK 大小：`2652290` 字节；SHA-256：`de428d8194192d9713cac4a9916957eef55d394ebe4284496a88ddc39b95cf84`。
 - 共享测试包：`dist/PlayKeeper-Android10Plus-v2.0.8-rc7-generic-candidate.apk`。
+
+## 2026-11-26 · 步骤 11 · rc8 发布者签名基础
+
+- `.pkauto` schemaVersion 2 新增 EC P-256 / SHA-256 发布者签名，导入时验证公钥指纹、清单哈希和签名。
+- 导入确认页显示发布者、签名状态和指纹摘要；未签名包仍只能使用只读能力。
+- APP 保存导入的原始 `.pkauto`，跨设备导出时保留发布者签名；JSON 清单导出为未签名 v2 包。
+- 开发者打包工具新增 `--sign` 和 `--publisher`，私钥不进入包或 Git。
+- Java 单元测试覆盖 P-256 生成、签名和导入验证。开发机未安装 OpenSSL，因此本机命令行签名未伪报成功。
+- 版本升为 `2.0.8-rc8-candidate`，versionCode `2000808`。
+- Android Candidate 单元测试、lint 和 assemble 通过；VPS 72 项测试通过，npm audit 无漏洞。
+- APK 大小：`2653670` 字节；SHA-256：`0a025d38ecb0e39e3d30654c03a58ca303984c742cba5700afe7f0db1e94d1bc`。
+- 共享测试包：`dist/PlayKeeper-Android10Plus-v2.0.8-rc8-generic-candidate.apk`。
