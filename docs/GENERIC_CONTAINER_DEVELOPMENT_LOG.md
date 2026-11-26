@@ -223,3 +223,16 @@
 - Android Candidate 单元测试、lint 和 assemble 通过；VPS 72 项测试通过，npm audit 无漏洞。
 - APK 大小：`2653670` 字节；SHA-256：`0a025d38ecb0e39e3d30654c03a58ca303984c742cba5700afe7f0db1e94d1bc`。
 - 共享测试包：`dist/PlayKeeper-Android10Plus-v2.0.8-rc8-generic-candidate.apk`。
+
+## 2026-11-26 · 步骤 12 · rc9 受控交互引擎
+
+- 新增 `dom.click` / `click`：固定 CSS selector、可见性与 disabled 检查、有限等待和单次点击，不接受 manifest 提供的 JavaScript。
+- 新增 `same_origin.navigate` / `navigate`：目标必须位于 manifest `allowedOrigins`，页面就绪后才继续，跨来源立即失败。
+- 交互能力只允许已验证发布者签名的 `.pkauto`；未签名包和旧 JSON 保持只读。
+- APP 导入和每次运行都复核签名原包，并对点击/导航显示明确权限警告。
+- 运行器允许授权 origin 内的同源页面变化，但一旦离开授权来源就停止。
+- 新增受控点击、同源导航、后置文本证据、跨源拒绝和未签名权限拒绝测试。
+- 版本升为 `2.0.8-rc9-candidate`，versionCode `2000809`。
+- Android Candidate 单元测试、lint 和 assemble 通过；VPS 72 项测试通过，npm audit 无漏洞。
+- APK 大小：`2655266` 字节；SHA-256：`b160d310b808b59b3a0e4951e90b529e4efa6761fcc7e2fe0c8f9e9969caf26f`。
+- 共享测试包：`dist/PlayKeeper-Android10Plus-v2.0.8-rc9-generic-candidate.apk`。

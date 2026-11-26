@@ -690,7 +690,8 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         TextView intro = formLabel("当前实例：" + accountDisplayName(accountIndex)
-                + "\n脚本只在声明的网页来源和能力范围内运行。启用自定义脚本前会显示权限变化。");
+                + "\n脚本只在声明的网页来源和能力范围内运行。"
+                + "点击或导航能力仅允许已验证发布者签名的包，且每次运行都要确认。");
         intro.setTextColor(Color.rgb(70, 74, 82));
         content.addView(intro);
 
@@ -751,7 +752,7 @@ public final class MainActivity extends Activity {
                         + "\n适用来源：" + descriptor.origin
                         + "\n所需能力：" + descriptor.capabilitySummary()
                         + (descriptor.removable
-                        ? "\n\n带有 workflow 的导入清单可在逐次授权后运行固定只读动作；"
+                        ? "\n\n带有 workflow 的导入清单可在逐次授权后运行固定动作；"
                         + "不接受任意 JavaScript。"
                         : "\n\n内置自动化沿用其独立配置与权限边界。"))
                 .setPositiveButton(descriptor.removable ? "导出 .pkauto" : "确定",
@@ -762,7 +763,7 @@ public final class MainActivity extends Activity {
         AutomationManifest imported = descriptor.removable
                 ? findImportedAutomation(descriptor.id) : null;
         if (imported != null && imported.workflow != null) {
-            builder.setNeutralButton("运行只读流程", (dialog, which) ->
+            builder.setNeutralButton("运行自动化流程", (dialog, which) ->
                     confirmReadOnlyWorkflow(accountIndex, imported));
         }
         if (descriptor.removable) {
@@ -779,13 +780,22 @@ public final class MainActivity extends Activity {
             showToast("请先在该实例打开脚本授权来源内的页面");
             return;
         }
+        if (manifest.hasInteractionCapabilities() && !hasVerifiedStoredPackage(manifest)) {
+            showToast("交互脚本必须来自已验证发布者签名包");
+            return;
+        }
+        String interactionWarning = manifest.hasInteractionCapabilities()
+                ? "\n\n警告：本次包含受控点击或同源导航。"
+                + "请核对发布者和步骤后再运行。"
+                : "\n\n本次只读取标题和指定元素文本。";
         new AlertDialog.Builder(this)
-                .setTitle("授权本次只读运行")
+                .setTitle("授权本次自动化运行")
                 .setMessage("脚本：" + manifest.name
                         + "\n当前页面：" + currentUrl
                         + "\n步骤数：" + manifest.workflow.steps.size()
-                        + "\n\n本次只读取标题和指定元素文本，不点击、不输入、不读取 Cookie。"
-                        + "页面跳转时会立即停止。")
+                        + "\n能力：" + manifest.toDescriptor().capabilitySummary()
+                        + interactionWarning
+                        + "\n始终不读取 Cookie，离开授权来源时会立即停止。")
                 .setNegativeButton("取消", null)
                 .setPositiveButton("运行一次", (dialog, which) ->
                         runReadOnlyWorkflow(session, manifest))
@@ -794,7 +804,7 @@ public final class MainActivity extends Activity {
 
     private void runReadOnlyWorkflow(Session session, AutomationManifest manifest) {
         if (activeReadOnlyWorkflow != null) {
-            showToast("已有只读流程正在运行");
+            showToast("已有自动化流程正在运行");
             return;
         }
         final ReadOnlyWorkflowRunner[] holder = new ReadOnlyWorkflowRunner[1];
@@ -808,6 +818,10 @@ public final class MainActivity extends Activity {
             @Override public void evaluateJavascript(String script,
                                                      ReadOnlyWorkflowRunner.EvaluationCallback callback) {
                 session.webView.evaluateJavascript(script, callback::onResult);
+            }
+
+            @Override public void loadUrl(String url) {
+                session.webView.loadUrl(url);
             }
 
             @Override public void postDelayed(Runnable action, long delayMs) {
@@ -834,9 +848,9 @@ public final class MainActivity extends Activity {
         if (activeReadOnlyWorkflow == runner) {
             readOnlyWorkflowDialog = new AlertDialog.Builder(this)
                     .setTitle(manifest.name + " · 正在运行")
-                    .setMessage("只读流程最长运行 2 分钟。可随时取消，不会继续处理迟到的网页回调。")
+                    .setMessage("自动化流程最长运行 2 分钟。可随时取消，不会继续处理迟到的网页回调。")
                     .setNegativeButton("取消运行", (dialog, which) ->
-                            cancelReadOnlyWorkflow("用户已取消只读流程"))
+                            cancelReadOnlyWorkflow("用户已取消自动化流程"))
                     .create();
             readOnlyWorkflowDialog.setCanceledOnTouchOutside(false);
             readOnlyWorkflowDialog.show();
@@ -940,6 +954,10 @@ public final class MainActivity extends Activity {
     private void confirmAutomationImport(AutomationManifest imported,
                                          AutomationPackageFile.Inspection inspection,
                                          byte[] originalPackage) {
+        if (!inspection.permitsDeclaredCapabilities()) {
+            throw new IllegalArgumentException(
+                    "包含点击或同源导航能力，必须使用已验证发布者签名的 .pkauto");
+        }
         AutomationManifest existing = findImportedAutomation(imported.id);
         boolean downgrade = existing != null && imported.compareVersion(existing) < 0;
         String title = existing == null ? "确认导入脚本清单"
@@ -956,7 +974,7 @@ public final class MainActivity extends Activity {
                 + "\n签名：" + (inspection.signatureVerified
                 ? "已验证（" + inspection.publisherFingerprint.substring(0, 16) + "…）"
                 : "未签名，仅允许只读能力")
-                + "\n只读流程：" + (imported.workflow == null ? "未提供"
+                + "\n自动化流程：" + (imported.workflow == null ? "未提供"
                 : imported.workflow.steps.size() + " 个步骤（仅校验，不执行）")
                 + (downgrade ? "\n\n警告：这是版本降级，旧版本可能缺少修复。" : "")
                 + "\n\n导入后保持未启用，不会执行脚本。";
@@ -1099,6 +1117,19 @@ public final class MainActivity extends Activity {
                     ? bytes : null;
         } catch (IOException | RuntimeException ignored) {
             return null;
+        }
+    }
+
+    private boolean hasVerifiedStoredPackage(AutomationManifest expected) {
+        byte[] bytes = loadStoredAutomationPackage(expected);
+        if (bytes == null) return false;
+        try {
+            AutomationPackageFile.Inspection inspection = AutomationPackageFile.inspect(bytes);
+            return inspection.signatureVerified
+                    && inspection.manifest.id.equals(expected.id)
+                    && inspection.manifest.version.equals(expected.version);
+        } catch (RuntimeException ignored) {
+            return false;
         }
     }
 
@@ -3019,7 +3050,9 @@ public final class MainActivity extends Activity {
         @Override
         public void onPageStarted(WebView view, String url, Bitmap favicon) {
             if (activeReadOnlyWorkflowSession == session) {
-                cancelReadOnlyWorkflow("执行期间页面开始跳转，已停止");
+                if (activeReadOnlyWorkflow == null || !activeReadOnlyWorkflow.allowsUrl(url)) {
+                    cancelReadOnlyWorkflow("执行期间页面离开授权来源，已停止");
+                }
             }
             session.loading = true;
             session.failedForCurrentLoad = false;

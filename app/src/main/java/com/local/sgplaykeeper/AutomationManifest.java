@@ -11,8 +11,9 @@ import java.util.List;
 import java.util.Set;
 
 final class AutomationManifest {
-    private static final Set<String> READ_ONLY_CAPABILITIES = Set.of(
-            "page.title.read", "dom.wait", "dom.text.read", "log.sanitized");
+    private static final Set<String> ALLOWED_CAPABILITIES = Set.of(
+            "page.title.read", "dom.wait", "dom.text.read", "log.sanitized",
+            "dom.click", "same_origin.navigate");
 
     final String id;
     final String name;
@@ -55,7 +56,7 @@ final class AutomationManifest {
             List<String> capabilities = stringArray(json, "capabilities", 8);
             if (capabilities.isEmpty()) throw new IllegalArgumentException("脚本必须声明至少一项能力");
             for (String capability : capabilities) {
-                if (!READ_ONLY_CAPABILITIES.contains(capability)) {
+                if (!ALLOWED_CAPABILITIES.contains(capability)) {
                     throw new IllegalArgumentException("当前阶段不允许的脚本能力：" + capability);
                 }
             }
@@ -81,6 +82,11 @@ final class AutomationManifest {
         try { origin = normalizeOrigin(url); }
         catch (IllegalArgumentException ignored) { return false; }
         return allowedOrigins.contains(origin);
+    }
+
+    boolean hasInteractionCapabilities() {
+        return capabilities.contains("dom.click")
+                || capabilities.contains("same_origin.navigate");
     }
 
     AutomationPackageDescriptor toDescriptor() {
@@ -109,6 +115,8 @@ final class AutomationManifest {
                 case "dom.wait": labels.add("等待元素"); break;
                 case "dom.text.read": labels.add("读取文本"); break;
                 case "log.sanitized": labels.add("脱敏日志"); break;
+                case "dom.click": labels.add("受控点击"); break;
+                case "same_origin.navigate": labels.add("同源导航"); break;
                 default: labels.add(capability);
             }
         }

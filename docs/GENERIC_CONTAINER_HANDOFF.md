@@ -4,9 +4,9 @@
 
 - 分支：`codex/generic-container-mvp-v1`
 - 基线：`codex/v2.0.8-rc2`，提交 `4e4e16e592e4db5e854c844c189d1d92026da39c`
-- Android 测试版本：`2.0.8-rc8-candidate`
+- Android 测试版本：`2.0.8-rc9-candidate`
 - applicationId：`com.local.sgplaykeeper.candidate`
-- versionCode：`2000808`
+- versionCode：`2000809`
 - 逐步实现记录：`docs/GENERIC_CONTAINER_DEVELOPMENT_LOG.md`
 
 Windows 或其他 Codex 环境继续开发时：
@@ -26,22 +26,22 @@ git switch codex/generic-container-mvp-v1
 - 自动化中心展示 SGPlay 内置适配器与通用只读示例的来源和能力；原 SGPlay 配置与执行流程保持可用。
 - URL 策略、环境迁移、自动化清单和热路径性能测试。
 - `nodemailer` 安全更新。
-- 导入的 workflow 可由用户逐次授权，在当前 WebView 页面运行固定只读动作并显示结构化结果。
-- 只读 workflow 支持用户取消、2 分钟整轮超时、页面跳转与 WebView/Activity 销毁清理，迟到回调不会再推进。
+- 导入的 workflow 可由用户逐次授权，在当前 WebView 页面运行固定受控动作并显示结构化结果。只有已验证发布者签名的包可声明点击或同源导航。
+- workflow 支持用户取消、2 分钟整轮超时、授权来源检查与 WebView/Activity 销毁清理，迟到回调不会再推进。
 - 当前实例可通过“网址”直接配置自定义首页；顶部两行工具可收起并记住状态。
 
 ## 当前边界
 
-- 自定义清单没有持久化自动启用状态；每次只读运行都需要用户确认。
-- 只读执行器只生成内置固定代码，不接受 manifest 提供的任意 JavaScript；尚无持久化运行历史。
+- 自定义清单没有持久化自动启用状态；每次运行都需要用户确认。
+- 执行器只生成内置固定代码，不接受 manifest 提供的任意 JavaScript；尚无持久化运行历史，也不支持文本输入。
 - SGPlay 自动化仍由原 `AutomationCoordinator` 执行。
 - 没有伪造 Android ID、GPU、Canvas、传感器、TLS 或网络出口，也不绕过网站限制。
 
 ## 下一步
 
-1. 增加本地 DOM 夹具页面的设备/真机重放测试。
-2. 评审是否需要实例级启用状态；继续保留逐次运行确认。
-3. 在独立权限和审计设计完成前，不加入点击和输入动作。
+1. 用本地 DOM 夹具和真机页面标定 SGPlay 签到/领取任务的选择器、等待和后置证据。
+2. 使用独立官方发布者密钥生成低风险 SGPlay `.pkauto`，私钥不进入 Git。
+3. 评审是否需要实例级启用状态；继续保留逐次运行确认。暂不增加文本输入、交易或后台无人值守。
 
 ## 构建与测试
 
@@ -73,3 +73,5 @@ rc7 自动化包 v1 APK：`dist/PlayKeeper-Android10Plus-v2.0.8-rc7-generic-cand
 `.pkauto` v1 格式、安全边界和打包方法见 `docs/AUTOMATION_PACKAGE_V1.md`；可导入示例为 `examples/readonly-example.pkauto`。
 
 rc8 发布者签名基础 APK：`dist/PlayKeeper-Android10Plus-v2.0.8-rc8-generic-candidate.apk`；SHA-256：`0a025d38ecb0e39e3d30654c03a58ca303984c742cba5700afe7f0db1e94d1bc`。
+
+rc9 受控交互引擎 APK：`dist/PlayKeeper-Android10Plus-v2.0.8-rc9-generic-candidate.apk`；SHA-256：`b160d310b808b59b3a0e4951e90b529e4efa6761fcc7e2fe0c8f9e9969caf26f`。

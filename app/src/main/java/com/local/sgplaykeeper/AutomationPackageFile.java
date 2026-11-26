@@ -50,6 +50,10 @@ final class AutomationPackageFile {
             this.publisherName = publisherName;
             this.publisherFingerprint = publisherFingerprint;
         }
+
+        boolean permitsDeclaredCapabilities() {
+            return !manifest.hasInteractionCapabilities() || signatureVerified;
+        }
     }
 
     static byte[] create(AutomationManifest manifest) {

@@ -12,7 +12,7 @@ example.pkauto
 
 `package.json` 固定使用 `playkeeper.automation` 格式，记录清单路径、脚本 ID、版本及清单 SHA-256。APP 导入时限制文件数量、路径、压缩包大小和解压后大小，并复核哈希、ID 与版本。schemaVersion 2 可用 EC P-256 / SHA-256 签名发布者身份。
 
-`manifest.json` 沿用现有只读清单格式。v1 支持：
+`manifest.json` 沿用现有清单格式。所有包都支持：
 
 - `page.title.read`
 - `dom.wait`
@@ -20,7 +20,13 @@ example.pkauto
 - `log.sanitized`
 - `readTitle`、`waitFor`、`readText`、`assertText`、`writeSanitizedLog`
 
-不支持点击、输入、Cookie、localStorage、任意 JavaScript、后台无人值守或跨来源导航。旧版单文件 JSON 清单仍可导入。
+已验证 EC P-256 发布者签名的 schemaVersion 2 包还可声明：
+
+- `dom.click` / `click`：按固定 CSS selector 等待可见、未禁用的元素并点击一次。
+- `same_origin.navigate` / `navigate`：仅打开 manifest `allowedOrigins` 内的完整 HTTP/HTTPS 地址。
+- 点击后可用 `waitFor` 和 `assertText` 提供后置证据。
+
+交互包在每次运行前显示权限警告并要求用户确认。仍不支持输入、Cookie、localStorage、任意 JavaScript、后台无人值守或跨来源导航。旧版单文件 JSON 清单仍可导入，但不能获得交互能力。
 
 ## 开发者打包
 

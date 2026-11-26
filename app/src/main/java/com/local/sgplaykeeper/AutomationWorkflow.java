@@ -14,6 +14,7 @@ final class AutomationWorkflow {
     static final int MAX_STEPS = 50;
     private static final int MAX_SELECTOR_LENGTH = 300;
     private static final int MAX_TEXT_LENGTH = 500;
+    private static final int MAX_URL_LENGTH = 2_000;
 
     final List<Step> steps;
     final JSONObject canonicalJson;
@@ -106,6 +107,27 @@ final class AutomationWorkflow {
                         throw new IllegalArgumentException("脱敏日志当前只允许不含模板或控制字符的静态文本");
                     }
                     canonical.put("message", message);
+                    break;
+                case "click":
+                    rejectUnknownKeys(json, Set.of("id", "action", "selector", "timeoutMs", "settleMs"), "步骤 " + id);
+                    requireCapability(capabilities, "dom.click", action);
+                    canonical.put("selector", requiredSelector(json));
+                    canonical.put("timeoutMs", timeout(json));
+                    int settleMs = json.has("settleMs") ? json.getInt("settleMs") : 500;
+                    if (settleMs < 0 || settleMs > 5_000) {
+                        throw new IllegalArgumentException("settleMs 必须在 0–5000 之间");
+                    }
+                    canonical.put("settleMs", settleMs);
+                    break;
+                case "navigate":
+                    rejectUnknownKeys(json, Set.of("id", "action", "url", "timeoutMs"), "步骤 " + id);
+                    requireCapability(capabilities, "same_origin.navigate", action);
+                    String url = requiredString(json, "url", MAX_URL_LENGTH);
+                    if (!(url.startsWith("http://") || url.startsWith("https://"))) {
+                        throw new IllegalArgumentException("navigate.url 必须是完整 HTTP/HTTPS 地址");
+                    }
+                    canonical.put("url", url);
+                    canonical.put("timeoutMs", timeout(json));
                     break;
                 default:
                     throw new IllegalArgumentException("不支持的 workflow 动作：" + action);

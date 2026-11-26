@@ -49,7 +49,7 @@ public final class ReadOnlyWorkflowRunnerTest {
         assertEquals("未找到元素", completed.get().steps.get(0).detail);
     }
 
-    @Test public void refusesUnauthorizedOriginAndStopsAfterNavigation() {
+    @Test public void refusesUnauthorizedOriginAndStopsAfterCrossOriginNavigation() {
         AutomationManifest manifest = manifest(
                 "{\"id\":\"title\",\"action\":\"readTitle\"},"
                 + "{\"id\":\"read\",\"action\":\"readText\",\"selector\":\"h1\"}");
@@ -63,10 +63,49 @@ public final class ReadOnlyWorkflowRunnerTest {
         FakeBridge navigated = new FakeBridge();
         navigated.responses.add(ok("Page"));
         navigated.navigateAfterEvaluation = true;
+        navigated.navigationUrl = "https://other.test/next";
         AtomicReference<ReadOnlyWorkflowRunner.Result> stopped = new AtomicReference<>();
         new ReadOnlyWorkflowRunner(manifest, navigated, stopped::set).start();
         assertFalse(stopped.get().passed);
         assertEquals(1, stopped.get().steps.size());
+    }
+
+    @Test public void executesControlledClickAndSameOriginNavigation() {
+        AutomationManifest manifest = interactiveManifest(
+                "{\"id\":\"click\",\"action\":\"click\",\"selector\":\"button.safe\","
+                        + "\"timeoutMs\":1000,\"settleMs\":0},"
+                        + "{\"id\":\"nav\",\"action\":\"navigate\","
+                        + "\"url\":\"https://example.test/next\",\"timeoutMs\":1000},"
+                        + "{\"id\":\"proof\",\"action\":\"assertText\","
+                        + "\"selector\":\"h1\",\"expectedText\":\"Done\"}");
+        FakeBridge bridge = new FakeBridge();
+        bridge.responses.add(ok("clicked"));
+        bridge.responses.add(ok("complete"));
+        bridge.responses.add(ok("Done"));
+        AtomicReference<ReadOnlyWorkflowRunner.Result> completed = new AtomicReference<>();
+
+        new ReadOnlyWorkflowRunner(manifest, bridge, completed::set).start();
+
+        assertNotNull(completed.get());
+        assertTrue(completed.get().passed);
+        assertEquals("https://example.test/next", bridge.url);
+        assertEquals(3, completed.get().steps.size());
+        assertTrue(bridge.scripts.get(0).contains("e.click()"));
+        assertFalse(bridge.scripts.get(0).contains("cookie"));
+    }
+
+    @Test public void rejectsCrossOriginNavigationTargetAtRuntime() {
+        AutomationManifest manifest = interactiveManifest(
+                "{\"id\":\"nav\",\"action\":\"navigate\","
+                        + "\"url\":\"https://other.test/next\"}");
+        FakeBridge bridge = new FakeBridge();
+        AtomicReference<ReadOnlyWorkflowRunner.Result> completed = new AtomicReference<>();
+
+        new ReadOnlyWorkflowRunner(manifest, bridge, completed::set).start();
+
+        assertFalse(completed.get().passed);
+        assertEquals(1, completed.get().steps.size());
+        assertEquals("https://example.test/page", bridge.url);
     }
 
     @Test public void cancelIgnoresLateJavascriptResultAndCompletesOnce() {
@@ -120,6 +159,14 @@ public final class ReadOnlyWorkflowRunnerTest {
                 + "\"workflow\":{\"steps\":[" + steps + "]}}");
     }
 
+    private static AutomationManifest interactiveManifest(String steps) {
+        return AutomationManifest.parse("{\"id\":\"io.example.interactive\","
+                + "\"name\":\"test\",\"version\":\"1.0.0\","
+                + "\"allowedOrigins\":[\"https://example.test\"],"
+                + "\"capabilities\":[\"dom.click\",\"same_origin.navigate\",\"dom.text.read\"],"
+                + "\"workflow\":{\"steps\":[" + steps + "]}}");
+    }
+
     private static String ok(String value) {
         return JSONObject.quote("{\"ok\":true,\"value\":" + JSONObject.quote(value) + "}");
     }
@@ -131,6 +178,7 @@ public final class ReadOnlyWorkflowRunnerTest {
     private static final class FakeBridge implements ReadOnlyWorkflowRunner.Bridge {
         String url = "https://example.test/page";
         boolean navigateAfterEvaluation;
+        String navigationUrl = "https://example.test/next";
         boolean deferEvaluation;
         ReadOnlyWorkflowRunner.EvaluationCallback pendingEvaluation;
         final List<String> scripts = new ArrayList<>();
@@ -143,13 +191,15 @@ public final class ReadOnlyWorkflowRunnerTest {
                                                  ReadOnlyWorkflowRunner.EvaluationCallback callback) {
             scripts.add(script);
             String response = responses.remove(0);
-            if (navigateAfterEvaluation) url = "https://example.test/next";
+            if (navigateAfterEvaluation) url = navigationUrl;
             if (deferEvaluation) {
                 pendingEvaluation = raw -> callback.onResult(response);
             } else {
                 callback.onResult(response);
             }
         }
+
+        @Override public void loadUrl(String target) { url = target; }
 
         @Override public void postDelayed(Runnable action, long delayMs) { delayed.add(action); }
 

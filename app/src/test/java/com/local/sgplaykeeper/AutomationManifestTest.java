@@ -18,9 +18,10 @@ public final class AutomationManifestTest {
         assertFalse(manifest.toDescriptor().enabled);
     }
 
-    @Test public void rejectsWriteCapabilityAndBuiltInNamespace() {
-        assertThrows(IllegalArgumentException.class, () -> AutomationManifest.parse(
-                VALID.replace("page.title.read", "dom.click")));
+    @Test public void acceptsControlledInteractionAndRejectsBuiltInNamespace() {
+        AutomationManifest interactive = AutomationManifest.parse(VALID
+                .replace("page.title.read", "dom.click"));
+        assertTrue(interactive.hasInteractionCapabilities());
         assertThrows(IllegalArgumentException.class, () -> AutomationManifest.parse(
                 VALID.replace("io.example.readonly", "com.playkeeper.custom")));
     }
@@ -47,7 +48,7 @@ public final class AutomationManifestTest {
     }
 
     @Test public void rejectsUnsupportedActionAndMissingCapability() {
-        assertWorkflowRejected("{\"id\":\"click\",\"action\":\"click\",\"selector\":\"button\"}");
+        assertWorkflowRejected("{\"id\":\"unknown\",\"action\":\"arbitraryScript\"}");
         String noTextCapability = VALID.replace(",\"dom.wait\"", "")
                 .substring(0, VALID.replace(",\"dom.wait\"", "").length() - 1)
                 + ",\"workflow\":{\"steps\":[{\"id\":\"wait\",\"action\":\"waitFor\",\"selector\":\"main\"}]}}";

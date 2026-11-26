@@ -68,4 +68,34 @@ public final class AutomationPackageFileTest {
         assertThrows(IllegalArgumentException.class,
                 () -> AutomationPackageFile.inspect(mismatched));
     }
+
+    @Test public void unsignedPackageCannotAuthorizeInteractionCapabilities() {
+        AutomationManifest interactive = interactiveManifest();
+
+        AutomationPackageFile.Inspection inspection = AutomationPackageFile.inspect(
+                AutomationPackageFile.create(interactive));
+
+        assertTrue(interactive.hasInteractionCapabilities());
+        assertFalse(inspection.permitsDeclaredCapabilities());
+    }
+
+    @Test public void validSignatureCanAuthorizeInteractionCapabilities() throws Exception {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
+        generator.initialize(new ECGenParameterSpec("secp256r1"));
+        KeyPair keyPair = generator.generateKeyPair();
+        AutomationManifest interactive = interactiveManifest();
+
+        AutomationPackageFile.Inspection inspection = AutomationPackageFile.inspect(
+                AutomationPackageFile.createSigned(interactive, "Interaction Publisher",
+                        keyPair.getPublic(), keyPair.getPrivate()));
+
+        assertTrue(inspection.permitsDeclaredCapabilities());
+    }
+
+    private static AutomationManifest interactiveManifest() {
+        return AutomationManifest.parse(MANIFEST
+                .replace("\"page.title.read\",\"dom.wait\"", "\"dom.click\"")
+                .replace("{\"id\":\"title\",\"action\":\"readTitle\"}",
+                        "{\"id\":\"click\",\"action\":\"click\",\"selector\":\"button\"}"));
+    }
 }
