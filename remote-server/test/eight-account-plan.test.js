@@ -791,3 +791,18 @@ test("brief device reconnect keeps the same relay leg pending for command replay
   // stepId. The plan must not create a second transaction on reconnect.
   assert.deepEqual(actions, []);
 });
+
+test("accepts a closed relay route with sixteen unique accounts", () => {
+  const actions = [];
+  const accounts = Array.from({ length: 16 }, (_, accountIndex) => ({
+    deviceId: "PK-SIXTEEN-ACCOUNTS",
+    accountIndex,
+    accountLabel: `account${accountIndex + 1}`
+  }));
+  const fullRoute = [...accounts, accounts[0]];
+  const plan = new EightAccountPlan({ emitAction: action => actions.push(action) });
+  const snapshot = plan.start(fullRoute);
+  assert.equal(snapshot.fullRoute.length, 17);
+  assert.equal(snapshot.status, "running");
+  assert.equal(actions[0].accountLabel, "account1");
+});

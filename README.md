@@ -2,7 +2,7 @@
 
 Play Keeper 是面向 Android 10 及以上设备的多账号网页挂机与远程自动化工具。它把多个相互隔离的游戏账号、Android 执行端、VPS 调度服务和浏览器控制台组合在一起，用于完成日常任务、副本、仓库整理、装备接力和道具拍卖等重复流程。
 
-当前正式版：**v2.0.7** · [下载 APK 与 VPS 包](https://github.com/little-hao/Play_keeper/releases/latest) · [更新记录](CHANGELOG.md)
+当前正式版：**v2.0.8** · [下载 APK 与 VPS 包](https://github.com/little-hao/Play_keeper/releases/latest) · [更新记录](CHANGELOG.md)
 
 > 本项目操作真实游戏账号与物品。首次使用请先用低价值道具、小范围账号路线验证设置；涉及交易时应核对卖方、买方、名称和价格。
 
@@ -19,7 +19,9 @@ Play Keeper 是面向 Android 10 及以上设备的多账号网页挂机与远�
 
 ## 主要能力
 
-- **多账号隔离**：每个 WebView 保存独立登录状态，可在同一设备管理多个游戏账号。
+- **多实例与账号隔离**：每个 WebView 保存独立登录状态、实例名称与首页环境，单台设备最多配置 16 个账号。
+- **配置环境**：可选省电、均衡、高性能或 16 实例环境，分别同时驻留 2、4、8 或 16 个网页；连续崩溃时自动退回均衡环境。
+- **可收起工具栏**：运行时可隐藏账号与操作工具栏，保留安全区域内的“展开工具”入口，适配异形屏与横竖屏。
 - **跨设备接力**：卖方和买方可位于同一设备或不同设备，VPS 根据账号名称协调装备交接。
 - **多用户与设备归属**：管理员管理全部设备，普通用户只查看和控制已分配设备。
 - **远程控制**：查看低帧率设备画面，执行点击、滑动、账号切换、横竖屏、黑屏和 KeepPlayer 进程操作。
@@ -160,6 +162,9 @@ npm test
 ## 文档索引
 
 - [CHANGELOG](CHANGELOG.md)
+- [v2.0.8 发布说明](docs/V2.0.8_RELEASE_NOTES.md)
+- [v2.0.8 验收清单](docs/V2.0.8_ACCEPTANCE.md)
+- [v2.0.8 制品与校验值](docs/V2.0.8_BUILD_MANIFEST.md)
 - [v2.0.4 发布说明](docs/V2.0.4_RELEASE_NOTES.md)
 - [v2.0.4 制品与校验值](docs/V2.0.4_BUILD_MANIFEST.md)
 - [开发环境](docs/DEVELOPMENT.md)

@@ -59,9 +59,12 @@ export function resolveAccountRoute(deviceSummaries, labels) {
   for (const device of deviceSummaries) {
     const reported = Array.isArray(device?.telemetry?.accounts) ? device.telemetry.accounts : [];
     for (const account of reported) {
-      if (!Number.isInteger(account?.index) || typeof account?.label !== "string") continue;
+      if (!Number.isInteger(account?.index) || typeof account?.label !== "string"
+          || account.opened === false) continue;
       accounts.push({ deviceId: device.deviceId, accountIndex: account.index,
-        accountLabel: account.label, online: true,
+        accountLabel: account.label, profileId: String(account.profileId || ""), online: true,
+        concurrencyLimit: Math.max(1, Math.min(16,
+          Number(device?.telemetry?.app?.maxConcurrentAccounts) || 4)),
         automation: account.automation && typeof account.automation === "object"
           ? { ...account.automation } : {} });
     }
@@ -247,7 +250,7 @@ export class EightAccountPlan {
 
   startResourceSweep(route, options = {}) {
     if (["running", "intervention"].includes(this.state.status)) throw new Error("已有多用户任务正在运行");
-    if (!Array.isArray(route) || route.length < 2 || route.length > 9) {
+    if (!Array.isArray(route) || route.length < 2 || route.length > 17) {
       throw new Error("资源归集至少需要一个卖方账号和一个主号");
     }
     const resourceLabels = route.map((entry) => entry?.accountLabel);
@@ -1018,7 +1021,7 @@ export class EightAccountPlan {
 
   #validateRoute(route) {
     const labels = Array.isArray(route) ? route.map((entry) => entry?.accountLabel) : [];
-    if (labels.length < 2 || labels.length > 9 || labels.at(-1) !== labels[0]
+    if (labels.length < 2 || labels.length > 17 || labels.at(-1) !== labels[0]
         || new Set(labels.slice(0, -1)).size !== labels.length - 1
         || labels.slice(0, -1).some((label) => typeof label !== "string"
           || !label.trim() || label.length > 30 || /[→,，\r\n\t]/.test(label))) {
@@ -1026,7 +1029,7 @@ export class EightAccountPlan {
     }
     route.forEach((entry, index) => {
       if (!entry || typeof entry.deviceId !== "string" || !Number.isInteger(entry.accountIndex)
-          || entry.accountIndex < 0 || entry.accountIndex > 3) {
+          || entry.accountIndex < 0 || entry.accountIndex > 15) {
         throw new Error(`路线第${index + 1}个账号无效`);
       }
     });

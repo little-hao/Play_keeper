@@ -62,6 +62,28 @@ test("marks an APP ok result unverified when task evidence is missing", () => {
   assert.equal(plan.snapshot().status, "error");
 });
 
+test("batches accounts by the concurrency limit reported by one device", () => {
+  let clock = 50_000;
+  const actions = [];
+  const accounts = Array.from({ length: 8 }, (_, accountIndex) => ({
+    deviceId: "PK-EIGHT", accountIndex, accountLabel: `hao${accountIndex || ""}`,
+    concurrencyLimit: 4
+  }));
+  const plan = new DailyRoutinePlan({ emitAction: (action) => actions.push(action),
+    now: () => clock });
+  const started = plan.start(accounts, { dungeonItems: ["圣诞小屋"] }, {});
+  assert.equal(actions.filter((action) => action.command === "run_daily_routine").length, 4);
+  assert.deepEqual(plan.snapshot().accounts.map((account) => account.status),
+    ["running", "running", "running", "running", "queued", "queued", "queued", "queued"]);
+  clock += 1_000;
+  completeVerifiedAccount(plan, started, accounts[0], clock);
+  assert.equal(actions.filter((action) => action.command === "run_daily_routine").length, 4);
+  for (const account of accounts.slice(1, 4)) completeVerifiedAccount(plan, started, account, ++clock);
+  assert.equal(actions.filter((action) => action.command === "run_daily_routine").length, 8);
+  assert.equal(actions.filter((action) => action.command === "run_daily_routine").at(-1)
+    .accountIndex, 7);
+});
+
 test("thirty-second task UI timeouts are warnings and allow the next stage", () => {
   const actions = [];
   const plan = new DailyRoutinePlan({ emitAction: (action) => actions.push(action) });
@@ -73,4 +95,16 @@ test("thirty-second task UI timeouts are warnings and allow the next stage", () 
     dailyRoutineFailureReason: "领取完成任务奖励30秒超时，已继续" } }] });
   assert.equal(plan.snapshot().accounts[0].status, "inventory_pending");
   assert.equal(actions.at(-1).command, "run_inventory_snapshot");
+});
+
+test("dispatches sixteen accounts in the maximum environment", () => {
+  const actions = [];
+  const accounts = Array.from({ length: 16 }, (_, accountIndex) => ({
+    deviceId: "PK-SIXTEEN", accountIndex, accountLabel: `account${accountIndex + 1}`,
+    concurrencyLimit: 16
+  }));
+  const plan = new DailyRoutinePlan({ emitAction: (action) => actions.push(action) });
+  plan.start(accounts, { dungeonItems: ["圣诞小屋"] }, {});
+  assert.equal(actions.filter((action) => action.command === "run_daily_routine").length, 16);
+  assert.ok(plan.snapshot().accounts.every((account) => account.status === "running"));
 });

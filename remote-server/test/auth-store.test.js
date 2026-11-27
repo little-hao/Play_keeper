@@ -96,3 +96,13 @@ test("reported device accounts replace stale user accounts and invalid routes", 
   assert.deepEqual(restored.authenticate("霜冻前夜", "20261016", "").settings.accountLabels,
     ["杂鱼小弟", "杂鱼小妹", "合宠糕手", "涅槃糕手"]);
 });
+
+test("stores at most sixteen account labels per user", (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "play-keeper-sixteen-"));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const store = new AuthStore(path.join(directory, "users.json"), "legacy-admin-token-123456");
+  const labels = Array.from({ length: 18 }, (_, index) => `account${index + 1}`);
+  const user = store.upsertUser("owner16", "correct-horse-123", "user", "", labels);
+  assert.equal(user.settings.accountLabels.length, 16);
+  assert.deepEqual(user.settings.accountLabels, labels.slice(0, 16));
+});

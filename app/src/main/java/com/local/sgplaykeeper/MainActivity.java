@@ -46,9 +46,11 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -75,6 +77,9 @@ public final class MainActivity extends Activity {
     private static final String PREF_ACTIVE_ACCOUNT = "active_account";
     private static final String PREF_DESKTOP_PREFIX = "desktop_mode_";
     private static final String PREF_LAST_URL_PREFIX = "last_url_";
+    private static final String PREF_START_URL_PREFIX = "start_url_";
+    private static final String PREF_ALLOW_HTTP_PREFIX = "allow_insecure_http_";
+    private static final String PREF_TOOLBAR_COLLAPSED = "toolbar_collapsed";
     private static final String PREF_ACCOUNT_OPENED_PREFIX = "account_opened_";
     private static final String PREF_LANDSCAPE_PREFIX = "landscape_mode_";
     private static final String PREF_ACCOUNT_LABEL_PREFIX = "account_label_";
@@ -83,7 +88,11 @@ public final class MainActivity extends Activity {
     private static final String PREF_FAILURE_TASK_PREFIX = "automation_failure_task_";
     private static final String PREF_FAILURE_MESSAGE_PREFIX = "automation_failure_message_";
     private static final String PREF_FAILURE_SCREENSHOT_PREFIX = "automation_failure_screenshot_";
-    private static final int MAX_ACCOUNTS = 4;
+    private static final String PREF_CONFIGURED_ACCOUNTS = "configured_accounts";
+    private static final String PREF_HIGH_PERFORMANCE = "high_performance_accounts";
+    private static final String PREF_ENVIRONMENT_PRESET = "environment_preset";
+    private static final int LEGACY_ACCOUNT_COUNT = 4;
+    private static final int MAX_ACCOUNTS = 16;
     private static final long PAGE_LOAD_TIMEOUT_MS = 60_000L;
     private static final long[] RETRY_DELAYS_MS = {3_000L, 10_000L, 30_000L, 60_000L};
     private static final String DESKTOP_USER_AGENT =
@@ -132,6 +141,8 @@ public final class MainActivity extends Activity {
     private final Session[] sessions = new Session[MAX_ACCOUNTS];
     private final Button[] accountButtons = new Button[MAX_ACCOUNTS];
     private final long[] dailyTaskConfirmationUntil = new long[MAX_ACCOUNTS];
+    private final int[] renderProcessGoneCounts = new int[MAX_ACCOUNTS];
+    private final long[] lastRenderProcessGoneAt = new long[MAX_ACCOUNTS];
 
     private FrameLayout root;
     private LinearLayout pageColumn;
@@ -147,6 +158,10 @@ public final class MainActivity extends Activity {
     private Button batteryButton;
     private Button remoteButton;
     private Button automationButton;
+    private Button accountsButton;
+    private Button urlButton;
+    private Button collapseToolbarButton;
+    private Button expandToolbarButton;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private SharedPreferences preferences;
@@ -182,6 +197,7 @@ public final class MainActivity extends Activity {
                 ? savedInstanceState.getInt(PREF_ACTIVE_ACCOUNT, 0)
                 : preferences.getInt(PREF_ACTIVE_ACCOUNT, 0);
         activeAccount = Math.max(0, Math.min(activeAccount, MAX_ACCOUNTS - 1));
+        activeAccount = Math.min(activeAccount, configuredAccountCount() - 1);
         applyPreferredOrientation(activeAccount);
 
         buildUi();
@@ -253,6 +269,10 @@ public final class MainActivity extends Activity {
         batteryButton = makeButton("电量 --", view -> showBatteryDetails());
         remoteButton = makeButton("远程", view -> showRemoteSettings());
         automationButton = makeButton("脚本", view -> showAutomationSettings(activeAccount));
+        accountsButton = makeButton("实例", view -> showAccountManagement());
+        urlButton = makeButton("网址", view -> showAccountNameDialog(activeAccount));
+        collapseToolbarButton = makeButton("收起", view -> setToolbarCollapsed(true));
+        expandToolbarButton = makeButton("展开工具", view -> setToolbarCollapsed(false));
         rebuildToolbar();
 
         progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -282,6 +302,12 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
 
+        FrameLayout.LayoutParams expandParams = new FrameLayout.LayoutParams(
+                dp(88), dp(36), Gravity.TOP | Gravity.END);
+        expandParams.setMargins(0, dp(4), dp(4), 0);
+        root.addView(expandToolbarButton, expandParams);
+        applyToolbarVisibility();
+
         root.setOnApplyWindowInsetsListener((view, windowInsets) -> {
             int left;
             int top;
@@ -301,6 +327,11 @@ public final class MainActivity extends Activity {
                 bottom = windowInsets.getSystemWindowInsetBottom();
             }
             pageColumn.setPadding(left, top, right, bottom);
+            FrameLayout.LayoutParams expandLayout =
+                    (FrameLayout.LayoutParams) expandToolbarButton.getLayoutParams();
+            expandLayout.topMargin = top + dp(4);
+            expandLayout.rightMargin = right + dp(4);
+            expandToolbarButton.setLayoutParams(expandLayout);
             return windowInsets;
         });
 
@@ -330,45 +361,51 @@ public final class MainActivity extends Activity {
         detachFromParent(batteryButton);
         detachFromParent(remoteButton);
         detachFromParent(automationButton);
+        detachFromParent(accountsButton);
+        detachFromParent(urlButton);
+        detachFromParent(collapseToolbarButton);
         toolbarHost.removeAllViews();
 
-        boolean landscape = getResources().getConfiguration().orientation
-                == Configuration.ORIENTATION_LANDSCAPE;
-        if (landscape) {
-            LinearLayout row = makeToolbarRow();
-            for (Button button : accountButtons) {
-                row.addView(button, weightedButtonParams(1.05f));
-            }
-            row.addView(blackButton, weightedButtonParams(0.78f));
-            row.addView(homeButton, weightedButtonParams(0.72f));
-            row.addView(refreshButton, weightedButtonParams(0.72f));
-            row.addView(orientationButton, weightedButtonParams(0.82f));
-            row.addView(batteryButton, weightedButtonParams(1.05f));
-            row.addView(remoteButton, weightedButtonParams(0.82f));
-            row.addView(automationButton, weightedButtonParams(0.82f));
-            toolbarHost.addView(row, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
-            toolbarHost.getLayoutParams().height = dp(44);
-        } else {
-            LinearLayout accountRow = makeToolbarRow();
-            for (Button button : accountButtons) {
-                accountRow.addView(button, weightedButtonParams(1f));
-            }
-            LinearLayout actionRow = makeToolbarRow();
-            actionRow.addView(blackButton, weightedButtonParams(1f));
-            actionRow.addView(homeButton, weightedButtonParams(1f));
-            actionRow.addView(refreshButton, weightedButtonParams(1f));
-            actionRow.addView(orientationButton, weightedButtonParams(1f));
-            actionRow.addView(batteryButton, weightedButtonParams(1.15f));
-            actionRow.addView(remoteButton, weightedButtonParams(1f));
-            actionRow.addView(automationButton, weightedButtonParams(1f));
-            toolbarHost.addView(accountRow, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(38)));
-            toolbarHost.addView(actionRow, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(38)));
-            toolbarHost.getLayoutParams().height = dp(76);
+        HorizontalScrollView accountScroller = new HorizontalScrollView(this);
+        accountScroller.setHorizontalScrollBarEnabled(false);
+        LinearLayout accountRow = makeToolbarRow();
+        int configured = configuredAccountCount();
+        for (int i = 0; i < configured; i++) {
+            accountRow.addView(accountButtons[i], new LinearLayout.LayoutParams(dp(92), dp(38)));
         }
+        accountScroller.addView(accountRow, new HorizontalScrollView.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
+        LinearLayout actionRow = makeToolbarRow();
+        actionRow.addView(blackButton, weightedButtonParams(1f));
+        actionRow.addView(homeButton, weightedButtonParams(1f));
+        actionRow.addView(refreshButton, weightedButtonParams(1f));
+        actionRow.addView(orientationButton, weightedButtonParams(1f));
+        actionRow.addView(batteryButton, weightedButtonParams(1.15f));
+        actionRow.addView(remoteButton, weightedButtonParams(1f));
+        actionRow.addView(automationButton, weightedButtonParams(1f));
+        actionRow.addView(urlButton, weightedButtonParams(1f));
+        actionRow.addView(accountsButton, weightedButtonParams(1f));
+        actionRow.addView(collapseToolbarButton, weightedButtonParams(1f));
+        toolbarHost.addView(accountScroller, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(38)));
+        toolbarHost.addView(actionRow, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(38)));
+        toolbarHost.getLayoutParams().height = dp(76);
         toolbarHost.requestLayout();
+        applyToolbarVisibility();
+    }
+
+    private void setToolbarCollapsed(boolean collapsed) {
+        preferences.edit().putBoolean(PREF_TOOLBAR_COLLAPSED, collapsed).apply();
+        applyToolbarVisibility();
+    }
+
+    private void applyToolbarVisibility() {
+        if (toolbarHost == null || expandToolbarButton == null || preferences == null) return;
+        boolean collapsed = preferences.getBoolean(PREF_TOOLBAR_COLLAPSED, false);
+        toolbarHost.setVisibility(collapsed ? View.GONE : View.VISIBLE);
+        expandToolbarButton.setVisibility(collapsed ? View.VISIBLE : View.GONE);
+        expandToolbarButton.bringToFront();
     }
 
     private LinearLayout makeToolbarRow() {
@@ -425,7 +462,8 @@ public final class MainActivity extends Activity {
 
                     @Override
                     public void openHome(int accountIndex) {
-                        getOrCreateSession(accountIndex).webView.loadUrl(START_URL);
+                        getOrCreateSession(accountIndex).webView.loadUrl(
+                                instanceStartUrl(accountIndex));
                     }
 
                     @Override
@@ -459,7 +497,7 @@ public final class MainActivity extends Activity {
                         // home page whenever the profile was still using the mobile user agent;
                         // otherwise the site keeps the portrait-only overlay in the current DOM.
                         if (landscape && modeChanged) {
-                            session.webView.loadUrl(START_URL);
+                            session.webView.loadUrl(instanceStartUrl(accountIndex));
                         }
                     }
 
@@ -964,24 +1002,48 @@ public final class MainActivity extends Activity {
     }
 
     private void showAccountNameDialog(int accountIndex) {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(20), 0, dp(20), 0);
+
         EditText input = new EditText(this);
         input.setSingleLine(true);
         input.setSelectAllOnFocus(true);
         input.setText(accountDisplayName(accountIndex));
         input.setHint("登录用户名或自定义名称");
-        int padding = dp(20);
-        FrameLayout holder = new FrameLayout(this);
-        holder.setPadding(padding, 0, padding, 0);
-        holder.addView(input, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        content.addView(formLabel("实例名称"));
+        content.addView(input, formFieldParams());
+
+        EditText startUrlInput = new EditText(this);
+        startUrlInput.setSingleLine(true);
+        startUrlInput.setText(preferences.getString(startUrlKey(accountIndex), ""));
+        startUrlInput.setHint("留空使用 sgplay.cc 默认首页");
+        content.addView(formLabel("该实例首页（HTTPS）"));
+        content.addView(startUrlInput, formFieldParams());
+
+        CheckBox allowHttpInput = new CheckBox(this);
+        allowHttpInput.setText("明确允许该实例使用 HTTP 首页");
+        allowHttpInput.setTextColor(Color.LTGRAY);
+        allowHttpInput.setChecked(preferences.getBoolean(allowHttpKey(accountIndex), false));
+        content.addView(allowHttpInput, formFieldParams());
 
         new AlertDialog.Builder(this)
-                .setTitle("账号" + (accountIndex + 1) + "名称")
-                .setMessage("网页会尝试自动识别登录用户名；识别不准时可在这里手动设置。留空会恢复自动识别。")
-                .setView(holder)
+                .setTitle("实例" + (accountIndex + 1) + "设置")
+                .setMessage("各实例独立保存登录会话、名称和首页环境。")
+                .setView(content)
                 .setNegativeButton("取消", null)
                 .setPositiveButton("保存", (dialog, which) -> {
                     String label = sanitizeAccountLabel(input.getText().toString());
+                    String customStart = startUrlInput.getText().toString().trim();
+                    String normalizedStart;
+                    try {
+                        normalizedStart = InstanceUrlPolicy.normalizeStartUrl(customStart,
+                                START_URL, allowHttpInput.isChecked());
+                    } catch (IllegalArgumentException error) {
+                        showToast(error.getMessage());
+                        return;
+                    }
+                    String previousStart = instanceStartUrl(accountIndex);
                     SharedPreferences.Editor editor = preferences.edit();
                     if (label.isBlank()) {
                         editor.remove(accountLabelKey(accountIndex));
@@ -990,15 +1052,129 @@ public final class MainActivity extends Activity {
                         editor.putString(accountLabelKey(accountIndex), label);
                         editor.putBoolean(accountLabelManualKey(accountIndex), true);
                     }
+                    if (customStart.isBlank()) editor.remove(startUrlKey(accountIndex));
+                    else editor.putString(startUrlKey(accountIndex), normalizedStart);
+                    editor.putBoolean(allowHttpKey(accountIndex), allowHttpInput.isChecked());
                     editor.apply();
                     updateToolbarState();
                     Session session = sessions[accountIndex];
                     if (label.isBlank() && session != null) {
                         detectAccountName(session);
                     }
+                    if (session != null && (!previousStart.equals(instanceStartUrl(accountIndex))
+                            || !isAllowedUrl(accountIndex, session.webView.getUrl()))) {
+                        session.webView.loadUrl(instanceStartUrl(accountIndex));
+                    }
                     pushTelemetry();
                 })
                 .show();
+    }
+
+    private void showAccountManagement() {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(20), dp(8), dp(20), 0);
+
+        TextView summary = new TextView(this);
+        summary.setTextColor(Color.LTGRAY);
+        summary.setTextSize(14);
+        summary.setText("当前配置 " + configuredAccountCount() + " 个实例；"
+                + environmentPreset().label + "环境同时驻留 " + residentSessionLimit()
+                + " 个网页。切换环境不会重建已有登录资料。");
+        content.addView(summary, formFieldParams());
+
+        EditText countInput = new EditText(this);
+        countInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+        countInput.setText(String.valueOf(configuredAccountCount()));
+        countInput.setHint("4–16");
+        content.addView(formLabel("已配置实例数量（4–16）"));
+        content.addView(countInput, formFieldParams());
+
+        content.addView(formLabel("配置环境"));
+        Spinner environmentInput = new Spinner(this);
+        android.widget.ArrayAdapter<String> environmentAdapter = new android.widget.ArrayAdapter<>(
+                this, android.R.layout.simple_spinner_item, EnvironmentPreset.labels());
+        environmentAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        environmentInput.setAdapter(environmentAdapter);
+        environmentInput.setSelection(environmentPreset().ordinal());
+        content.addView(environmentInput, formFieldParams());
+
+        TextView warning = new TextView(this);
+        warning.setTextColor(Color.rgb(255, 183, 77));
+        warning.setTextSize(13);
+        warning.setText("省电/均衡/高性能/16实例环境分别驻留2/4/8/16个网页。"
+                + "16实例环境会显著增加内存、耗电和温度；网页进程连续退出时会自动退回均衡环境。"
+                + "APP不伪造硬件身份，也不绕过网站的同IP或服务端限制。");
+        content.addView(warning, formFieldParams());
+
+        new AlertDialog.Builder(this)
+                .setTitle("实例与配置环境")
+                .setView(content)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("保存", (dialog, which) -> {
+                    int requested;
+                    try {
+                        requested = Integer.parseInt(countInput.getText().toString().trim());
+                    } catch (NumberFormatException error) {
+                        showToast("实例数量必须为4–16");
+                        return;
+                    }
+                    if (requested < LEGACY_ACCOUNT_COUNT || requested > MAX_ACCOUNTS) {
+                        showToast("实例数量必须为4–16");
+                        return;
+                    }
+                    for (int i = requested; i < configuredAccountCount(); i++) {
+                        if (automationCoordinator != null && automationCoordinator.isBusy(i)) {
+                            showToast("实例" + (i + 1) + "仍在运行，暂不能减少实例数量");
+                            return;
+                        }
+                    }
+                    EnvironmentPreset preset = EnvironmentPreset.values()[
+                            environmentInput.getSelectedItemPosition()];
+                    for (int i = requested; i < configuredAccountCount(); i++) {
+                        Session session = sessions[i];
+                        if (session != null) {
+                            saveLastUrl(session);
+                            removeAndDestroySession(session);
+                        }
+                    }
+                    preferences.edit()
+                            .putInt(PREF_CONFIGURED_ACCOUNTS, requested)
+                            .putString(PREF_ENVIRONMENT_PRESET, preset.id)
+                            .remove(PREF_HIGH_PERFORMANCE)
+                            .apply();
+                    if (activeAccount >= requested) {
+                        selectAccount(requested - 1, false);
+                    }
+                    trimResidentSessions();
+                    rebuildToolbar();
+                    updateToolbarState();
+                    pushTelemetry();
+                    showToast("已使用" + preset.label + "环境，同时驻留"
+                            + preset.residentLimit + "个网页");
+                })
+                .show();
+    }
+
+    private int configuredAccountCount() {
+        return Math.max(LEGACY_ACCOUNT_COUNT, Math.min(MAX_ACCOUNTS,
+                preferences.getInt(PREF_CONFIGURED_ACCOUNTS, LEGACY_ACCOUNT_COUNT)));
+    }
+
+    private boolean isHighPerformanceMode() {
+        EnvironmentPreset preset = environmentPreset();
+        return preset == EnvironmentPreset.HIGH_PERFORMANCE
+                || preset == EnvironmentPreset.MAXIMUM;
+    }
+
+    private int residentSessionLimit() {
+        return Math.min(configuredAccountCount(), environmentPreset().residentLimit);
+    }
+
+    private EnvironmentPreset environmentPreset() {
+        return EnvironmentPreset.fromId(
+                preferences.getString(PREF_ENVIRONMENT_PRESET, null),
+                preferences.getBoolean(PREF_HIGH_PERFORMANCE, false));
     }
 
     private void showRemoteSettings() {
@@ -1141,7 +1317,7 @@ public final class MainActivity extends Activity {
                 case "open_home": {
                     int index = requiredAccountIndex(parameters);
                     Session session = getOrCreateSession(index);
-                    session.webView.loadUrl(START_URL);
+                    session.webView.loadUrl(instanceStartUrl(index));
                     success = true;
                     resultMessage = "账号已返回首页";
                     break;
@@ -1601,7 +1777,7 @@ public final class MainActivity extends Activity {
 
     private int requiredAccountIndex(JSONObject parameters) {
         int index = parameters.optInt("accountIndex", -1);
-        if (index < 0 || index >= MAX_ACCOUNTS) {
+        if (index < 0 || index >= configuredAccountCount()) {
             throw new IllegalArgumentException("账号索引无效");
         }
         return index;
@@ -2038,6 +2214,9 @@ public final class MainActivity extends Activity {
     }
 
     private Session getOrCreateSession(int index) {
+        if (index < 0 || index >= configuredAccountCount()) {
+            throw new IllegalArgumentException("账号尚未配置");
+        }
         if (index > 0 && !multiProfileSupported) {
             throw new IllegalStateException("系统 WebView 不支持账号隔离");
         }
@@ -2071,13 +2250,24 @@ public final class MainActivity extends Activity {
             app.put("previewEnabled", previewEnabled);
             app.put("previewAccount", previewAccount);
             app.put("remoteState", remoteState.name().toLowerCase(Locale.ROOT));
+            app.put("configuredAccounts", configuredAccountCount());
+            app.put("maxConcurrentAccounts", residentSessionLimit());
+            app.put("environmentPreset", environmentPreset().id);
+            app.put("accountPerformanceMode", isHighPerformanceMode()
+                    ? "high_performance" : "standard");
+            ActivityManager activityManager = (ActivityManager) getSystemService(
+                    Context.ACTIVITY_SERVICE);
+            ActivityManager.MemoryInfo memoryInfo = new ActivityManager.MemoryInfo();
+            activityManager.getMemoryInfo(memoryInfo);
+            app.put("availableMemoryMb", memoryInfo.availMem / (1024L * 1024L));
+            app.put("lowMemory", memoryInfo.lowMemory);
             telemetry.put("app", app);
 
             telemetry.put("battery", latestBatterySnapshot == null
                     ? JSONObject.NULL : latestBatterySnapshot.toJson());
 
             JSONArray accounts = new JSONArray();
-            for (int i = 0; i < MAX_ACCOUNTS; i++) {
+            for (int i = 0; i < configuredAccountCount(); i++) {
                 Session session = sessions[i];
                 JSONObject account = new JSONObject();
                 account.put("index", i);
@@ -2087,6 +2277,9 @@ public final class MainActivity extends Activity {
                 account.put("opened", preferences.getBoolean(accountOpenedKey(i), i == 0));
                 account.put("loaded", session != null);
                 account.put("active", i == activeAccount);
+                account.put("profileId", profileName(i));
+                account.put("renderProcessGoneCount", renderProcessGoneCounts[i]);
+                account.put("lastRenderProcessGoneAt", lastRenderProcessGoneAt[i]);
                 account.put("desktopMode", session != null
                         ? session.desktopMode
                         : preferences.getBoolean(desktopModeKey(i), true));
@@ -2097,7 +2290,7 @@ public final class MainActivity extends Activity {
                     account.put("failed", session.failedForCurrentLoad);
                     account.put("retryAttempt", session.retryAttempt);
                     String url = session.webView.getUrl();
-                    account.put("url", isAllowedUrl(url) ? url : JSONObject.NULL);
+                    account.put("url", isAllowedUrl(i, url) ? url : JSONObject.NULL);
                 }
                 if (automationCoordinator != null) {
                     automationCoordinator.appendAccountTelemetry(account, i);
@@ -2135,6 +2328,10 @@ public final class MainActivity extends Activity {
     }
 
     private void selectAccount(int accountIndex, boolean userInitiated) {
+        if (accountIndex < 0 || accountIndex >= configuredAccountCount()) {
+            showToast("账号尚未配置");
+            return;
+        }
         if (accountIndex > 0 && !multiProfileSupported) {
             showToast("多账号需要更新 Android System WebView 后使用");
             return;
@@ -2144,6 +2341,7 @@ public final class MainActivity extends Activity {
         }
 
         activeAccount = accountIndex;
+        sessions[accountIndex].lastAccessAt = SystemClock.elapsedRealtime();
         preferences.edit().putInt(PREF_ACTIVE_ACCOUNT, accountIndex).apply();
         applyPreferredOrientation(accountIndex);
         Session session = sessions[accountIndex];
@@ -2162,19 +2360,26 @@ public final class MainActivity extends Activity {
     }
 
     private void restoreOpenedAccounts() {
-        for (int i = 0; i < MAX_ACCOUNTS; i++) {
+        int restored = sessions[activeAccount] == null ? 0 : 1;
+        for (int i = 0; i < configuredAccountCount() && restored < residentSessionLimit(); i++) {
             if (i == activeAccount || (i > 0 && !multiProfileSupported)) {
                 continue;
             }
             boolean wasOpened = preferences.getBoolean(accountOpenedKey(i), i == 0);
             if (wasOpened) {
-                createSession(i);
+                if (createSession(i)) restored++;
             }
         }
     }
 
     @SuppressLint({"SetJavaScriptEnabled", "RequiresFeature"})
     private boolean createSession(int accountIndex) {
+        if (accountIndex < 0 || accountIndex >= configuredAccountCount()) return false;
+        if (!ensureResidentCapacity(accountIndex)) {
+            showToast(environmentPreset().label + "环境已有" + residentSessionLimit()
+                    + "个实例驻留且无法回收；请等待任务结束或调整配置环境");
+            return false;
+        }
         WebView view;
         try {
             view = new WebView(this);
@@ -2192,6 +2397,7 @@ public final class MainActivity extends Activity {
         }
 
         Session session = new Session(accountIndex, view);
+        session.lastAccessAt = SystemClock.elapsedRealtime();
         sessions[accountIndex] = session;
         webContainer.addView(view, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -2265,10 +2471,60 @@ public final class MainActivity extends Activity {
         });
 
         view.setWebViewClient(new SessionWebViewClient(session));
-        String savedUrl = preferences.getString(lastUrlKey(accountIndex), START_URL);
-        view.loadUrl(isAllowedUrl(savedUrl) ? savedUrl : START_URL);
+        String startUrl = instanceStartUrl(accountIndex);
+        String savedUrl = preferences.getString(lastUrlKey(accountIndex), startUrl);
+        view.loadUrl(isAllowedUrl(accountIndex, savedUrl) ? savedUrl : startUrl);
         preferences.edit().putBoolean(accountOpenedKey(accountIndex), true).apply();
         return true;
+    }
+
+    private boolean ensureResidentCapacity(int requestedAccount) {
+        if (sessions[requestedAccount] != null) return true;
+        while (residentSessionCount() >= residentSessionLimit()) {
+            Session candidate = null;
+            for (Session session : sessions) {
+                if (session == null || session.index == requestedAccount
+                        || (automationCoordinator != null
+                        && automationCoordinator.isBusy(session.index))) continue;
+                if (candidate == null
+                        || (candidate.index == activeAccount && session.index != activeAccount)
+                        || ((candidate.index == activeAccount) == (session.index == activeAccount)
+                        && session.lastAccessAt < candidate.lastAccessAt)) {
+                    candidate = session;
+                }
+            }
+            if (candidate == null) return false;
+            if (candidate.index == activeAccount) {
+                activeAccount = requestedAccount;
+                preferences.edit().putInt(PREF_ACTIVE_ACCOUNT, activeAccount).apply();
+            }
+            saveLastUrl(candidate);
+            removeAndDestroySession(candidate);
+        }
+        return true;
+    }
+
+    private int residentSessionCount() {
+        int count = 0;
+        for (Session session : sessions) if (session != null) count++;
+        return count;
+    }
+
+    private void trimResidentSessions() {
+        while (residentSessionCount() > residentSessionLimit()) {
+            Session candidate = null;
+            for (Session session : sessions) {
+                if (session == null || session.index == activeAccount
+                        || (automationCoordinator != null
+                        && automationCoordinator.isBusy(session.index))) continue;
+                if (candidate == null || session.lastAccessAt < candidate.lastAccessAt) {
+                    candidate = session;
+                }
+            }
+            if (candidate == null) break;
+            saveLastUrl(candidate);
+            removeAndDestroySession(candidate);
+        }
     }
 
     private final class SessionWebViewClient extends WebViewClient {
@@ -2280,13 +2536,13 @@ public final class MainActivity extends Activity {
 
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-            return shouldBlockNavigation(request.getUrl());
+            return shouldBlockNavigation(session.index, request.getUrl());
         }
 
         @Override
         @SuppressWarnings("deprecation")
         public boolean shouldOverrideUrlLoading(WebView view, String url) {
-            return shouldBlockNavigation(Uri.parse(url));
+            return shouldBlockNavigation(session.index, Uri.parse(url));
         }
 
         @Override
@@ -2336,9 +2592,23 @@ public final class MainActivity extends Activity {
 
         @Override
         public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+            long now = System.currentTimeMillis();
+            if (now - lastRenderProcessGoneAt[session.index] > 10L * 60L * 1000L) {
+                renderProcessGoneCounts[session.index] = 0;
+            }
+            lastRenderProcessGoneAt[session.index] = now;
+            renderProcessGoneCounts[session.index]++;
+            if (isHighPerformanceMode() && renderProcessGoneCounts[session.index] >= 2) {
+                preferences.edit()
+                        .putString(PREF_ENVIRONMENT_PRESET, EnvironmentPreset.BALANCED.id)
+                        .remove(PREF_HIGH_PERFORMANCE)
+                        .apply();
+                showToast("检测到网页进程连续退出，已自动退回均衡环境");
+            }
             recoverSession(session, detail.didCrash()
                     ? "网页进程崩溃，正在恢复"
                     : "网页进程已被系统回收，正在恢复");
+            trimResidentSessions();
             return true;
         }
     }
@@ -2386,10 +2656,10 @@ public final class MainActivity extends Activity {
 
     private void reloadSession(Session session) {
         String currentUrl = session.webView.getUrl();
-        if (isAllowedUrl(currentUrl)) {
+        if (isAllowedUrl(session.index, currentUrl)) {
             session.webView.reload();
         } else {
-            session.webView.loadUrl(START_URL);
+            session.webView.loadUrl(instanceStartUrl(session.index));
         }
     }
 
@@ -2425,7 +2695,7 @@ public final class MainActivity extends Activity {
         if (session != null) {
             session.retryAttempt = 0;
             cancelRetry(session);
-            session.webView.loadUrl(START_URL);
+            session.webView.loadUrl(instanceStartUrl(session.index));
         }
     }
 
@@ -2482,9 +2752,11 @@ public final class MainActivity extends Activity {
     }
 
     private void updateToolbarState() {
-        for (int i = 0; i < MAX_ACCOUNTS; i++) {
+        for (int i = 0; i < configuredAccountCount(); i++) {
             boolean active = i == activeAccount;
-            accountButtons[i].setText(compactAccountDisplayName(i));
+            String state = automationCoordinator != null && automationCoordinator.isBusy(i)
+                    ? "▶ " : sessions[i] == null ? "○ " : "● ";
+            accountButtons[i].setText(state + compactAccountDisplayName(i));
             accountButtons[i].setBackground(buttonBackground(active));
             accountButtons[i].setTextColor(active ? Color.rgb(10, 30, 16) : Color.WHITE);
             accountButtons[i].setAlpha(i == 0 || multiProfileSupported ? 1f : 0.45f);
@@ -2500,36 +2772,35 @@ public final class MainActivity extends Activity {
         progressBar.setVisibility(progress > 0 && progress < 100 ? View.VISIBLE : View.INVISIBLE);
     }
 
-    private boolean shouldBlockNavigation(Uri uri) {
+    private boolean shouldBlockNavigation(int accountIndex, Uri uri) {
         if (uri == null) {
             return true;
         }
         String scheme = uri.getScheme();
-        String host = uri.getHost();
         if ("about".equalsIgnoreCase(scheme)) {
             return false;
         }
-        if (("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))
-                && host != null
-                && (host.equalsIgnoreCase("sgplay.cc")
-                || host.toLowerCase(Locale.ROOT).endsWith(".sgplay.cc"))) {
+        if (isAllowedUrl(accountIndex, uri.toString())) {
             return false;
         }
         showToast("已阻止跳转到外部网站");
         return true;
     }
 
-    private boolean isAllowedUrl(String url) {
-        if (url == null || url.isBlank()) {
-            return false;
+    private boolean isAllowedUrl(int accountIndex, String url) {
+        return InstanceUrlPolicy.isAllowed(url,
+                preferences.getString(startUrlKey(accountIndex), ""),
+                preferences.getBoolean(allowHttpKey(accountIndex), false));
+    }
+
+    private String instanceStartUrl(int accountIndex) {
+        String configured = preferences.getString(startUrlKey(accountIndex), "");
+        try {
+            return InstanceUrlPolicy.normalizeStartUrl(configured, START_URL,
+                    preferences.getBoolean(allowHttpKey(accountIndex), false));
+        } catch (IllegalArgumentException ignored) {
+            return START_URL;
         }
-        Uri uri = Uri.parse(url);
-        String scheme = uri.getScheme();
-        String host = uri.getHost();
-        return ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))
-                && host != null
-                && (host.equalsIgnoreCase("sgplay.cc")
-                || host.toLowerCase(Locale.ROOT).endsWith(".sgplay.cc"));
     }
 
     private void registerNetworkRecovery() {
@@ -2731,7 +3002,7 @@ public final class MainActivity extends Activity {
 
     private void saveLastUrl(Session session) {
         String url = session.webView.getUrl();
-        if (isAllowedUrl(url)) {
+        if (isAllowedUrl(session.index, url)) {
             preferences.edit().putString(lastUrlKey(session.index), url).apply();
         }
     }
@@ -2746,6 +3017,14 @@ public final class MainActivity extends Activity {
 
     private String lastUrlKey(int accountIndex) {
         return PREF_LAST_URL_PREFIX + accountIndex;
+    }
+
+    private String startUrlKey(int accountIndex) {
+        return PREF_START_URL_PREFIX + accountIndex;
+    }
+
+    private String allowHttpKey(int accountIndex) {
+        return PREF_ALLOW_HTTP_PREFIX + accountIndex;
     }
 
     private String accountOpenedKey(int accountIndex) {
@@ -2887,6 +3166,7 @@ public final class MainActivity extends Activity {
         int retryAttempt;
         int loadToken;
         int progress;
+        long lastAccessAt;
         Runnable retryRunnable;
 
         Session(int index, WebView webView) {
