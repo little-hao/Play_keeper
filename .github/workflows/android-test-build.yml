@@ -40,6 +40,6 @@ jobs:
           path: app/build/reports/
       - uses: actions/upload-artifact@v7
         with:
-          name: play-keeper-v2.0.8-formal-overwrite-test
+          name: play-keeper-v2.0.9-rc1-ui-overwrite-test
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error

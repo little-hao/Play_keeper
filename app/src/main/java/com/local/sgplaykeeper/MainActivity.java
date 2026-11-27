@@ -23,6 +23,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.util.Base64;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -80,6 +81,8 @@ public final class MainActivity extends Activity {
     private static final String PREF_START_URL_PREFIX = "start_url_";
     private static final String PREF_ALLOW_HTTP_PREFIX = "allow_insecure_http_";
     private static final String PREF_TOOLBAR_COLLAPSED = "toolbar_collapsed";
+    private static final String PREF_EXPAND_X_RATIO = "expand_button_x_ratio";
+    private static final String PREF_EXPAND_Y_RATIO = "expand_button_y_ratio";
     private static final String PREF_ACCOUNT_OPENED_PREFIX = "account_opened_";
     private static final String PREF_LANDSCAPE_PREFIX = "landscape_mode_";
     private static final String PREF_ACCOUNT_LABEL_PREFIX = "account_label_";
@@ -185,6 +188,10 @@ public final class MainActivity extends Activity {
     private Runnable previewRunnable;
     private float brightnessBeforeBlack = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
     private long lastBackPressedAt;
+    private int safeInsetLeft;
+    private int safeInsetTop;
+    private int safeInsetRight;
+    private int safeInsetBottom;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -247,13 +254,15 @@ public final class MainActivity extends Activity {
 
         toolbarHost = new LinearLayout(this);
         toolbarHost.setOrientation(LinearLayout.VERTICAL);
-        toolbarHost.setBackgroundColor(Color.rgb(18, 20, 23));
+        toolbarHost.setBackground(toolbarBackground());
+        toolbarHost.setPadding(dp(2), dp(2), dp(2), dp(2));
+        toolbarHost.setElevation(dp(3));
         pageColumn.addView(toolbarHost, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
 
         for (int i = 0; i < MAX_ACCOUNTS; i++) {
             final int accountIndex = i;
-            accountButtons[i] = makeButton("账号" + (i + 1),
+            accountButtons[i] = makeToolbarButton("账号" + (i + 1),
                     view -> selectAccount(accountIndex, true));
             accountButtons[i].setOnLongClickListener(view -> {
                 showAccountNameDialog(accountIndex);
@@ -261,18 +270,22 @@ public final class MainActivity extends Activity {
             });
         }
 
-        blackButton = makeButton("黑屏", view -> enterBlackMode());
-        homeButton = makeButton("首页", view -> loadHome());
-        refreshButton = makeButton("刷新", view -> manualReload());
-        desktopButton = makeButton("桌面", view -> toggleDesktopMode());
-        orientationButton = makeButton("横屏", view -> toggleOrientation());
-        batteryButton = makeButton("电量 --", view -> showBatteryDetails());
-        remoteButton = makeButton("远程", view -> showRemoteSettings());
-        automationButton = makeButton("脚本", view -> showAutomationSettings(activeAccount));
-        accountsButton = makeButton("实例", view -> showAccountManagement());
-        urlButton = makeButton("网址", view -> showAccountNameDialog(activeAccount));
-        collapseToolbarButton = makeButton("收起", view -> setToolbarCollapsed(true));
-        expandToolbarButton = makeButton("展开工具", view -> setToolbarCollapsed(false));
+        blackButton = makeToolbarButton("黑屏", view -> enterBlackMode());
+        homeButton = makeToolbarButton("首页", view -> loadHome());
+        refreshButton = makeToolbarButton("刷新", view -> manualReload());
+        desktopButton = makeToolbarButton("桌面", view -> toggleDesktopMode());
+        orientationButton = makeToolbarButton("横屏", view -> toggleOrientation());
+        batteryButton = makeToolbarButton("电量 --", view -> showBatteryDetails());
+        remoteButton = makeToolbarButton("远程", view -> showRemoteSettings());
+        automationButton = makeToolbarButton("脚本", view -> showAutomationSettings(activeAccount));
+        accountsButton = makeToolbarButton("实例", view -> showAccountManagement());
+        urlButton = makeToolbarButton("网址", view -> showAccountNameDialog(activeAccount));
+        collapseToolbarButton = makeToolbarButton("收起", view -> setToolbarCollapsed(true));
+        expandToolbarButton = makeToolbarButton("展开工具", view -> setToolbarCollapsed(false));
+        expandToolbarButton.setBackground(floatingButtonBackground());
+        expandToolbarButton.setContentDescription("展开工具；可拖动调整位置");
+        expandToolbarButton.setTooltipText("拖动调整位置，点击展开工具栏");
+        expandToolbarButton.setOnTouchListener(new DraggableExpandTouchListener());
         rebuildToolbar();
 
         progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -303,8 +316,7 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT));
 
         FrameLayout.LayoutParams expandParams = new FrameLayout.LayoutParams(
-                dp(88), dp(36), Gravity.TOP | Gravity.END);
-        expandParams.setMargins(0, dp(4), dp(4), 0);
+                dp(104), dp(44), Gravity.TOP | Gravity.START);
         root.addView(expandToolbarButton, expandParams);
         applyToolbarVisibility();
 
@@ -326,24 +338,17 @@ public final class MainActivity extends Activity {
                 right = windowInsets.getSystemWindowInsetRight();
                 bottom = windowInsets.getSystemWindowInsetBottom();
             }
+            safeInsetLeft = left;
+            safeInsetTop = top;
+            safeInsetRight = right;
+            safeInsetBottom = bottom;
             pageColumn.setPadding(left, top, right, bottom);
-            FrameLayout.LayoutParams expandLayout =
-                    (FrameLayout.LayoutParams) expandToolbarButton.getLayoutParams();
-            expandLayout.topMargin = top + dp(4);
-            expandLayout.rightMargin = right + dp(4);
-            expandToolbarButton.setLayoutParams(expandLayout);
+            root.post(this::restoreExpandButtonPosition);
             return windowInsets;
         });
 
         setContentView(root);
         root.requestApplyInsets();
-    }
-
-    private LinearLayout.LayoutParams weightedButtonParams(float weight) {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.MATCH_PARENT, weight);
-        params.setMargins(dp(1), dp(2), dp(1), dp(2));
-        return params;
     }
 
     private void rebuildToolbar() {
@@ -368,31 +373,50 @@ public final class MainActivity extends Activity {
 
         HorizontalScrollView accountScroller = new HorizontalScrollView(this);
         accountScroller.setHorizontalScrollBarEnabled(false);
+        accountScroller.setFillViewport(true);
+        accountScroller.setOverScrollMode(View.OVER_SCROLL_NEVER);
         LinearLayout accountRow = makeToolbarRow();
         int configured = configuredAccountCount();
         for (int i = 0; i < configured; i++) {
-            accountRow.addView(accountButtons[i], new LinearLayout.LayoutParams(dp(92), dp(38)));
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(100), dp(42));
+            params.setMargins(dp(2), dp(1), dp(2), dp(1));
+            accountRow.addView(accountButtons[i], params);
         }
         accountScroller.addView(accountRow, new HorizontalScrollView.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)));
+
+        HorizontalScrollView actionScroller = new HorizontalScrollView(this);
+        actionScroller.setHorizontalScrollBarEnabled(false);
+        actionScroller.setFillViewport(true);
+        actionScroller.setOverScrollMode(View.OVER_SCROLL_NEVER);
         LinearLayout actionRow = makeToolbarRow();
-        actionRow.addView(blackButton, weightedButtonParams(1f));
-        actionRow.addView(homeButton, weightedButtonParams(1f));
-        actionRow.addView(refreshButton, weightedButtonParams(1f));
-        actionRow.addView(orientationButton, weightedButtonParams(1f));
-        actionRow.addView(batteryButton, weightedButtonParams(1.15f));
-        actionRow.addView(remoteButton, weightedButtonParams(1f));
-        actionRow.addView(automationButton, weightedButtonParams(1f));
-        actionRow.addView(urlButton, weightedButtonParams(1f));
-        actionRow.addView(accountsButton, weightedButtonParams(1f));
-        actionRow.addView(collapseToolbarButton, weightedButtonParams(1f));
+        int screenWidthDp = getResources().getConfiguration().screenWidthDp;
+        int actionWidthDp = Math.max(72, Math.min(108, (screenWidthDp - 12) / 10));
+        addToolbarAction(actionRow, blackButton, actionWidthDp);
+        addToolbarAction(actionRow, homeButton, actionWidthDp);
+        addToolbarAction(actionRow, refreshButton, actionWidthDp);
+        addToolbarAction(actionRow, orientationButton, actionWidthDp);
+        addToolbarAction(actionRow, batteryButton, Math.max(82, actionWidthDp));
+        addToolbarAction(actionRow, remoteButton, Math.max(82, actionWidthDp));
+        addToolbarAction(actionRow, automationButton, actionWidthDp);
+        addToolbarAction(actionRow, urlButton, actionWidthDp);
+        addToolbarAction(actionRow, accountsButton, actionWidthDp);
+        addToolbarAction(actionRow, collapseToolbarButton, actionWidthDp);
+        actionScroller.addView(actionRow, new HorizontalScrollView.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)));
         toolbarHost.addView(accountScroller, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(38)));
-        toolbarHost.addView(actionRow, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(38)));
-        toolbarHost.getLayoutParams().height = dp(76);
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+        toolbarHost.addView(actionScroller, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+        toolbarHost.getLayoutParams().height = dp(92);
         toolbarHost.requestLayout();
         applyToolbarVisibility();
+    }
+
+    private void addToolbarAction(LinearLayout row, Button button, int widthDp) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(widthDp), dp(42));
+        params.setMargins(dp(2), dp(1), dp(2), dp(1));
+        row.addView(button, params);
     }
 
     private void setToolbarCollapsed(boolean collapsed) {
@@ -406,13 +430,66 @@ public final class MainActivity extends Activity {
         toolbarHost.setVisibility(collapsed ? View.GONE : View.VISIBLE);
         expandToolbarButton.setVisibility(collapsed ? View.VISIBLE : View.GONE);
         expandToolbarButton.bringToFront();
+        if (collapsed) root.post(this::restoreExpandButtonPosition);
+    }
+
+    private void restoreExpandButtonPosition() {
+        if (root == null || expandToolbarButton == null
+                || root.getWidth() <= 0 || root.getHeight() <= 0
+                || expandToolbarButton.getWidth() <= 0 || expandToolbarButton.getHeight() <= 0) {
+            return;
+        }
+        float minimumX = safeInsetLeft + dp(4);
+        float minimumY = safeInsetTop + dp(4);
+        float maximumX = Math.max(minimumX,
+                root.getWidth() - safeInsetRight - expandToolbarButton.getWidth() - dp(4));
+        float maximumY = Math.max(minimumY,
+                root.getHeight() - safeInsetBottom - expandToolbarButton.getHeight() - dp(4));
+        float xRatio = clampRatio(preferences.getFloat(PREF_EXPAND_X_RATIO, 1f));
+        float yRatio = clampRatio(preferences.getFloat(PREF_EXPAND_Y_RATIO, 0.5f));
+        expandToolbarButton.setX(minimumX + (maximumX - minimumX) * xRatio);
+        expandToolbarButton.setY(minimumY + (maximumY - minimumY) * yRatio);
+    }
+
+    private void moveExpandButton(float requestedX, float requestedY) {
+        float minimumX = safeInsetLeft + dp(4);
+        float minimumY = safeInsetTop + dp(4);
+        float maximumX = Math.max(minimumX,
+                root.getWidth() - safeInsetRight - expandToolbarButton.getWidth() - dp(4));
+        float maximumY = Math.max(minimumY,
+                root.getHeight() - safeInsetBottom - expandToolbarButton.getHeight() - dp(4));
+        expandToolbarButton.setX(Math.max(minimumX, Math.min(maximumX, requestedX)));
+        expandToolbarButton.setY(Math.max(minimumY, Math.min(maximumY, requestedY)));
+    }
+
+    private void persistExpandButtonPosition() {
+        float minimumX = safeInsetLeft + dp(4);
+        float minimumY = safeInsetTop + dp(4);
+        float maximumX = Math.max(minimumX,
+                root.getWidth() - safeInsetRight - expandToolbarButton.getWidth() - dp(4));
+        float maximumY = Math.max(minimumY,
+                root.getHeight() - safeInsetBottom - expandToolbarButton.getHeight() - dp(4));
+        float xRange = maximumX - minimumX;
+        float yRange = maximumY - minimumY;
+        float xRatio = xRange <= 0f ? 0f
+                : (expandToolbarButton.getX() - minimumX) / xRange;
+        float yRatio = yRange <= 0f ? 0f
+                : (expandToolbarButton.getY() - minimumY) / yRange;
+        preferences.edit()
+                .putFloat(PREF_EXPAND_X_RATIO, clampRatio(xRatio))
+                .putFloat(PREF_EXPAND_Y_RATIO, clampRatio(yRatio))
+                .apply();
+    }
+
+    private float clampRatio(float value) {
+        return Math.max(0f, Math.min(1f, value));
     }
 
     private LinearLayout makeToolbarRow() {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(3), 0, dp(3), 0);
+        row.setPadding(dp(4), 0, dp(4), 0);
         return row;
     }
 
@@ -438,17 +515,51 @@ public final class MainActivity extends Activity {
         return button;
     }
 
+    private Button makeToolbarButton(String text, View.OnClickListener listener) {
+        Button button = makeButton(text, listener);
+        button.setSingleLine(true);
+        button.setEllipsize(TextUtils.TruncateAt.END);
+        button.setTextSize(12);
+        button.setPadding(dp(8), 0, dp(8), 0);
+        button.setMinHeight(0);
+        button.setMinimumHeight(0);
+        button.setElevation(dp(1));
+        return button;
+    }
+
     private GradientDrawable buttonBackground(boolean active) {
         GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(active ? Color.rgb(82, 210, 115) : Color.rgb(43, 47, 53));
-        drawable.setCornerRadius(dp(5));
+        drawable.setOrientation(GradientDrawable.Orientation.TL_BR);
+        drawable.setColors(active
+                ? new int[]{Color.rgb(82, 214, 126), Color.rgb(57, 190, 105)}
+                : new int[]{Color.rgb(45, 51, 61), Color.rgb(34, 39, 48)});
+        drawable.setStroke(dp(1), active
+                ? Color.rgb(112, 232, 151) : Color.rgb(60, 69, 82));
+        drawable.setCornerRadius(dp(11));
+        return drawable;
+    }
+
+    private GradientDrawable floatingButtonBackground() {
+        GradientDrawable drawable = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{Color.rgb(48, 57, 69), Color.rgb(31, 37, 47)});
+        drawable.setStroke(dp(1), Color.rgb(105, 119, 138));
+        drawable.setCornerRadius(dp(14));
+        return drawable;
+    }
+
+    private GradientDrawable toolbarBackground() {
+        GradientDrawable drawable = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{Color.rgb(22, 27, 35), Color.rgb(12, 16, 22)});
+        drawable.setStroke(dp(1), Color.rgb(42, 49, 60));
         return drawable;
     }
 
     private GradientDrawable coloredButtonBackground(int color) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(color);
-        drawable.setCornerRadius(dp(5));
+        drawable.setCornerRadius(dp(11));
         return drawable;
     }
 
@@ -3116,6 +3227,48 @@ public final class MainActivity extends Activity {
 
     private void showToast(String message) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+    }
+
+    private final class DraggableExpandTouchListener implements View.OnTouchListener {
+        private float downRawX;
+        private float downRawY;
+        private float startX;
+        private float startY;
+        private boolean dragging;
+
+        @Override
+        public boolean onTouch(View view, MotionEvent event) {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    downRawX = event.getRawX();
+                    downRawY = event.getRawY();
+                    startX = view.getX();
+                    startY = view.getY();
+                    dragging = false;
+                    view.animate().scaleX(1.04f).scaleY(1.04f).alpha(0.92f)
+                            .setDuration(90L).start();
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    float deltaX = event.getRawX() - downRawX;
+                    float deltaY = event.getRawY() - downRawY;
+                    if (!dragging && Math.hypot(deltaX, deltaY) >= dp(6)) dragging = true;
+                    if (dragging) moveExpandButton(startX + deltaX, startY + deltaY);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    view.animate().scaleX(1f).scaleY(1f).alpha(1f)
+                            .setDuration(120L).start();
+                    if (dragging) persistExpandButtonPosition();
+                    else view.performClick();
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    view.animate().scaleX(1f).scaleY(1f).alpha(1f)
+                            .setDuration(120L).start();
+                    if (dragging) persistExpandButtonPosition();
+                    return true;
+                default:
+                    return false;
+            }
+        }
     }
 
     private final class FiveTapExitListener implements View.OnTouchListener {

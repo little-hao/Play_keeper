@@ -15,9 +15,9 @@ android {
         applicationId 'com.local.sgplaykeeper'
         minSdk 26
         targetSdk 35
-        // Formal 2.0.8 follows all rc builds and remains upgrade-compatible.
-        versionCode 2000810
-        versionName '2.0.8'
+        // UI candidate follows the formal 2.0.8 build and remains upgrade-compatible.
+        versionCode 2000901
+        versionName '2.0.9-rc1'
         buildConfigField 'String', 'REMOTE_PRESET_NAME', '""'
         buildConfigField 'String', 'REMOTE_PRESET_ENDPOINT', '""'
     }
@@ -90,7 +90,7 @@ android {
 androidComponents {
     onVariants(selector().withBuildType('candidate')) { variant ->
         variant.outputs.each { output ->
-            output.versionCode.set(2000810)
+            output.versionCode.set(2000901)
         }
     }
 }
