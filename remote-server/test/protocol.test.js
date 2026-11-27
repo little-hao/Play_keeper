@@ -122,11 +122,11 @@ test("device telemetry and browser command complete a round trip", async (contex
     type: "command.send",
     deviceId: "PK-ABCDEF123456",
     command: "switch_account",
-    parameters: { accountIndex: 2 }
+    parameters: { accountIndex: 15 }
   }));
   const request = await requestPromise;
   assert.equal(request.command, "switch_account");
-  assert.equal(request.parameters.accountIndex, 2);
+  assert.equal(request.parameters.accountIndex, 15);
 
   const resultPromise = nextJson(control, "command.result");
   device.send(JSON.stringify({
@@ -141,7 +141,7 @@ test("device telemetry and browser command complete a round trip", async (contex
     type: "command.send",
     deviceId: "PK-ABCDEF123456",
     command: "preview_start",
-    parameters: { accountIndex: 2, maxWidth: 720, fps: 1 }
+    parameters: { accountIndex: 15, maxWidth: 720, fps: 1 }
   }));
   const start = await startPromise;
   assert.equal(start.command, "preview_start");
@@ -151,7 +151,7 @@ test("device telemetry and browser command complete a round trip", async (contex
     type: "preview.frame",
     timestamp: Date.now(),
     payload: {
-      accountIndex: 2,
+      accountIndex: 15,
       accountLabel: "测试用户",
       sequence: 7,
       width: 720,
@@ -162,6 +162,7 @@ test("device telemetry and browser command complete a round trip", async (contex
     }
   }));
   const preview = await previewPromise;
+  assert.equal(preview.payload.accountIndex, 15);
   assert.equal(preview.payload.accountLabel, "测试用户");
   assert.equal(preview.payload.sequence, 7);
 
@@ -170,7 +171,7 @@ test("device telemetry and browser command complete a round trip", async (contex
     type: "interaction.select",
     timestamp: Date.now(),
     payload: {
-      accountIndex: 2,
+      accountIndex: 15,
       accountLabel: "测试用户",
       elementToken: "pk_test_123",
       title: "地图",
@@ -182,6 +183,7 @@ test("device telemetry and browser command complete a round trip", async (contex
     }
   }));
   const interaction = await interactionPromise;
+  assert.equal(interaction.payload.accountIndex, 15);
   assert.equal(interaction.payload.title, "地图");
   assert.equal(interaction.payload.options[1].label, "圣兽云殿");
 
@@ -190,7 +192,7 @@ test("device telemetry and browser command complete a round trip", async (contex
     type: "command.send",
     deviceId: "PK-ABCDEF123456",
     command: "select_option",
-    parameters: { accountIndex: 2, elementToken: "pk_test_123", optionIndex: 0 }
+    parameters: { accountIndex: 15, elementToken: "pk_test_123", optionIndex: 0 }
   }));
   const selection = await selectionPromise;
   assert.equal(selection.command, "select_option");
@@ -467,7 +469,7 @@ test("invalid tokens and invalid commands are rejected", async (context) => {
   const invalidRecoveryPromise = nextJson(control, "command.error");
   control.send(JSON.stringify({
     type: "command.send", deviceId: "missing", command: "run_equipment_buy",
-    parameters: { accountIndex: 1, sellerAccountIndex: 8, recovery: true }
+    parameters: { accountIndex: 1, sellerAccountIndex: 16, recovery: true }
   }));
   assert.match((await invalidRecoveryPromise).message, /无效/);
   for (const verificationToken of ["", "-".repeat(36), "stale"] ) {
@@ -495,7 +497,7 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), {
-    ok: true, service: "play-keeper-relay", version: "2.0.8-rc2"
+    ok: true, service: "play-keeper-relay", version: "2.0.8"
   });
 
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);
@@ -516,7 +518,7 @@ test("health endpoint and iPhone dashboard are served", async (context) => {
   assert.match(dashboardHtml, /该账号开始挂机/);
   assert.match(dashboardHtml, /今日执行与背包汇总/);
   assert.match(dashboardHtml, /多用户挂机/);
-  assert.match(dashboardHtml, /完整默认循环（8个账号）/);
+  assert.match(dashboardHtml, /已分配账号完整循环（最多16个）/);
   assert.match(dashboardHtml, /装备定向转移单价/);
   assert.match(dashboardHtml, /道具拍卖\/购买单价/);
   assert.match(dashboardHtml, /每个账号返回的挂机副本/);

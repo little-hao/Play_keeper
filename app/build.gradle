@@ -15,10 +15,9 @@ android {
         applicationId 'com.local.sgplaykeeper'
         minSdk 26
         targetSdk 35
-        // Semantic version codes avoid collisions with formal APKs built outside
-        // the short-lived CI sequence.  2.0.8-rc2 => 2,000,802.
-        versionCode 2000802
-        versionName '2.0.8-rc2'
+        // Formal 2.0.8 follows all rc builds and remains upgrade-compatible.
+        versionCode 2000810
+        versionName '2.0.8'
         buildConfigField 'String', 'REMOTE_PRESET_NAME', '""'
         buildConfigField 'String', 'REMOTE_PRESET_ENDPOINT', '""'
     }
@@ -91,7 +90,7 @@ android {
 androidComponents {
     onVariants(selector().withBuildType('candidate')) { variant ->
         variant.outputs.each { output ->
-            output.versionCode.set(2000802)
+            output.versionCode.set(2000810)
         }
     }
 }

@@ -4,6 +4,7 @@ import path from "node:path";
 
 const DEFAULT_PASSWORD = "20261016";
 const DEFAULT_ADMIN_USERNAME = "hao管理员";
+const MAX_ACCOUNT_LABELS = 16;
 const HAO_ACCOUNTS = Object.freeze(["hao", "hao1", "hao2", "hao3", "hao4", "hao5", "hao6", "hao7"]);
 const FROST_ACCOUNTS = Object.freeze(["杂鱼小弟", "杂鱼小妹", "合宠糕手", "涅槃糕手"]);
 
@@ -16,7 +17,7 @@ function cleanAccountLabels(values) {
   if (!Array.isArray(values)) return [];
   return [...new Set(values.map((value) => String(value ?? "").trim())
     .filter((value) => value.length >= 1 && value.length <= 30 && !/[\r\n\t→,，]/.test(value)))]
-    .slice(0, 8);
+    .slice(0, MAX_ACCOUNT_LABELS);
 }
 
 function passwordHash(password, salt) {

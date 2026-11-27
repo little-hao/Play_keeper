@@ -233,10 +233,12 @@ function finiteRange(value, minimum, maximum) {
     && value >= minimum && value <= maximum;
 }
 
+const MAX_ACCOUNT_INDEX = 15;
+
 function accountParameters(parameters) {
   return Number.isInteger(parameters?.accountIndex)
     && parameters.accountIndex >= 0
-    && parameters.accountIndex <= 7;
+    && parameters.accountIndex <= MAX_ACCOUNT_INDEX;
 }
 
 function equipmentBuyParameters(parameters) {
@@ -244,7 +246,7 @@ function equipmentBuyParameters(parameters) {
     && (parameters.sellerAccountIndex === undefined
       || (Number.isInteger(parameters.sellerAccountIndex)
         && parameters.sellerAccountIndex >= -1
-        && parameters.sellerAccountIndex <= 7))
+        && parameters.sellerAccountIndex <= MAX_ACCOUNT_INDEX))
     && (parameters.recovery === undefined || typeof parameters.recovery === "boolean");
 }
 
@@ -290,7 +292,7 @@ async function serveHttp(request, response) {
   securityHeaders(response);
   if (request.url === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.8-rc2" }));
+    response.end(JSON.stringify({ ok: true, service: "play-keeper-relay", version: "2.0.8" }));
     return;
   }
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -359,7 +361,7 @@ function normalizePlanOptions(value) {
     throw new Error("道具保留数量只能是0或1");
   }
   if (!validItemList(dungeonItems, 20)) throw new Error("副本组合无效");
-  if (routeLabels.length < 3 || routeLabels.length > 9
+  if (routeLabels.length < 3 || routeLabels.length > 17
       || routeLabels[0] !== routeLabels.at(-1)
       || new Set(routeLabels.slice(0, -1)).size !== routeLabels.length - 1
       || routeLabels.slice(0, -1).some((label) => !validAccountLabel(label))) {
@@ -406,7 +408,7 @@ function normalizeDailyRoutineOptions(value) {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const accountLabels = Array.isArray(source.accountLabels)
     ? [...new Set(source.accountLabels.map((item) => String(item).trim()).filter(Boolean))] : [];
-  if (accountLabels.length < 1 || accountLabels.length > 8
+  if (accountLabels.length < 1 || accountLabels.length > 16
       || accountLabels.some((label) => !validAccountLabel(label))) {
     throw new Error("每日任务账号列表无效");
   }
@@ -1495,7 +1497,7 @@ export function createRelayServer({ adminToken, deviceToken, logger = console,
 function validPreviewFrame(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   if (!Number.isInteger(payload.accountIndex)
-      || payload.accountIndex < 0 || payload.accountIndex > 7) return false;
+      || payload.accountIndex < 0 || payload.accountIndex > MAX_ACCOUNT_INDEX) return false;
   if (!Number.isSafeInteger(payload.sequence) || payload.sequence < 0) return false;
   if (!Number.isInteger(payload.width) || payload.width < 1 || payload.width > 2560) return false;
   if (!Number.isInteger(payload.height) || payload.height < 1 || payload.height > 3200) return false;
@@ -1507,7 +1509,7 @@ function validPreviewFrame(payload) {
 function sanitizeSelectInteraction(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
   if (!Number.isInteger(payload.accountIndex)
-      || payload.accountIndex < 0 || payload.accountIndex > 7) return null;
+      || payload.accountIndex < 0 || payload.accountIndex > MAX_ACCOUNT_INDEX) return null;
   if (typeof payload.elementToken !== "string"
       || !/^[A-Za-z0-9_-]{1,80}$/.test(payload.elementToken)) return null;
   if (!Array.isArray(payload.options) || payload.options.length < 1

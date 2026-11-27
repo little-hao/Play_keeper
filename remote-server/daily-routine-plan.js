@@ -207,7 +207,7 @@ export class DailyRoutinePlan {
     const devices = [...new Set(this.state.accounts.map((account) => account.deviceId))];
     for (const deviceId of devices) {
       const deviceAccounts = this.state.accounts.filter((account) => account.deviceId === deviceId);
-      const limit = Math.max(1, Math.min(8,
+      const limit = Math.max(1, Math.min(16,
         Number(deviceAccounts.find((account) => account.concurrencyLimit)?.concurrencyLimit) || 4));
       let occupied = deviceAccounts.filter((account) => account.dispatched
         && !TERMINAL.has(account.status)).length;

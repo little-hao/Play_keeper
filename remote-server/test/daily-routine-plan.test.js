@@ -96,3 +96,15 @@ test("thirty-second task UI timeouts are warnings and allow the next stage", () 
   assert.equal(plan.snapshot().accounts[0].status, "inventory_pending");
   assert.equal(actions.at(-1).command, "run_inventory_snapshot");
 });
+
+test("dispatches sixteen accounts in the maximum environment", () => {
+  const actions = [];
+  const accounts = Array.from({ length: 16 }, (_, accountIndex) => ({
+    deviceId: "PK-SIXTEEN", accountIndex, accountLabel: `account${accountIndex + 1}`,
+    concurrencyLimit: 16
+  }));
+  const plan = new DailyRoutinePlan({ emitAction: (action) => actions.push(action) });
+  plan.start(accounts, { dungeonItems: ["圣诞小屋"] }, {});
+  assert.equal(actions.filter((action) => action.command === "run_daily_routine").length, 16);
+  assert.ok(plan.snapshot().accounts.every((account) => account.status === "running"));
+});

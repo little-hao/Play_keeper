@@ -1202,7 +1202,7 @@ function renderGlobalDailyMonitor() {
     String(right.account.label), undefined, { numeric: true }));
   if (!entries.length) {
     const empty = document.createElement("p");
-    empty.textContent = "等待两台设备上报八个账号状态。";
+    empty.textContent = "等待已分配设备上报账号状态（最多16个）。";
     elements.globalDailyMonitor.append(empty);
     return;
   }
@@ -1320,9 +1320,11 @@ function renderDevices() {
     const runState = app.blackScreen
       ? "前台常亮 · 黑色遮罩已开启"
       : "前台常亮 · 页面可见";
-    const performance = app.accountPerformanceMode === "high_performance"
-      ? `高性能${app.maxConcurrentAccounts || 8}账号`
-      : `标准${app.maxConcurrentAccounts || 4}账号`;
+    const environmentLabels = {
+      power_saver: "省电", balanced: "均衡", high_performance: "高性能", maximum: "16实例"
+    };
+    const performance = `${environmentLabels[app.environmentPreset] || "兼容"}`
+      + `环境 · 同时驻留${app.maxConcurrentAccounts || 4}个实例`;
     const memory = Number.isFinite(Number(app.availableMemoryMb))
       ? `可用内存 ${Math.round(Number(app.availableMemoryMb))} MB${app.lowMemory ? " · 系统低内存" : ""}` : "";
     card.querySelector(".device-note").textContent = [runState,
@@ -1333,7 +1335,7 @@ function renderDevices() {
     for (const account of [...accounts].sort((left, right) =>
       Number(left?.index ?? 0) - Number(right?.index ?? 0))) {
       const index = Number(account?.index);
-      if (!Number.isInteger(index) || index < 0 || index > 7) continue;
+      if (!Number.isInteger(index) || index < 0 || index > 15) continue;
       const button = document.createElement("button");
       const monitor = account.automation ?? {};
       const isOffline = monitor.monitorStatus === "offline";
